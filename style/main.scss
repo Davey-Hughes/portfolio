@@ -249,16 +249,19 @@ img {
 .photo-detail-content {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 3rem;
   background-color: #fafafa;
+  gap: 3rem;
 }
 
 .photo-detail-image {
-  max-width: 1600px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  text-align: center;
 
   img {
     max-width: 100%;
@@ -272,7 +275,7 @@ img {
 
 .photo-detail-info {
   text-align: center;
-  margin-top: 3rem;
+  width: 100%;
 
   h1 {
     font-size: 2rem;
@@ -824,12 +827,8 @@ img {
     max-height: 50vh;
   }
 
-  .photo-detail-info {
-    margin-top: 2rem;
-
-    h1 {
-      font-size: 1.5rem;
-    }
+  .photo-detail-info h1 {
+    font-size: 1.5rem;
   }
 
   .photo-navigation {
