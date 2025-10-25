@@ -6,6 +6,7 @@ async fn main() {
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
+    use tower_http::services::ServeDir;
 
     let conf = get_configuration(None).unwrap();
     let addr = conf.leptos_options.site_addr;
@@ -13,11 +14,23 @@ async fn main() {
     // Generate the list of routes in your Leptos App
     let routes = generate_route_list(App);
 
+    // Get images directory path from environment or use default
+    let images_dir = std::env::var("IMAGES_DIR").unwrap_or_else(|_| {
+        if std::path::Path::new("public/images").exists() {
+            "public/images".to_string()
+        } else {
+            "./images".to_string()
+        }
+    });
+
+    log!("Serving images from: {}", images_dir);
+
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
             move || shell(leptos_options.clone())
         })
+        .nest_service("/images", ServeDir::new(&images_dir))
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
 

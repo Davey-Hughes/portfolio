@@ -683,16 +683,25 @@ pub struct PhotoInfo {
 // Server function to read gallery photos from the gallery directory
 #[server(GetGalleryPhotos, "/api")]
 pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
-    let gallery_path = "public/images/gallery";
+    // Read from a dedicated images directory that can be mounted/configured at runtime
+    // Default to ./images/gallery for production, public/images/gallery for development
+    let gallery_path = std::env::var("GALLERY_PATH").unwrap_or_else(|_| {
+        // Check if we're in development (public directory exists) or production
+        if Path::new("public/images/gallery").exists() {
+            "public/images/gallery".to_string()
+        } else {
+            "./images/gallery".to_string()
+        }
+    });
 
     // Create directory if it doesn't exist
-    if !Path::new(gallery_path).exists() {
-        fs::create_dir_all(gallery_path).ok();
+    if !Path::new(&gallery_path).exists() {
+        fs::create_dir_all(&gallery_path).ok();
     }
 
     let mut photos = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(gallery_path) {
+    if let Ok(entries) = fs::read_dir(&gallery_path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(extension) = path.extension() {
@@ -702,8 +711,7 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                         let filename_str = filename.to_string_lossy().to_string();
                         let title = filename_str
                             .trim_end_matches(&format!(".{}", ext))
-                            .replace('-', " ")
-                            .replace('_', " ");
+                            .replace(['-', '_'], " ");
 
                         photos.push(PhotoInfo {
                             url: format!("/images/gallery/{}", filename_str),
@@ -720,36 +728,6 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
     photos.sort_by(|a, b| a.filename.cmp(&b.filename));
 
     Ok(photos)
-}
-
-// Server function to read category hero images
-#[server(GetCategoryImages, "/api")]
-pub async fn get_category_images() -> Result<Vec<String>, ServerFnError> {
-    let categories_path = "public/images/categories";
-
-    // Create directory if it doesn't exist
-    if !Path::new(categories_path).exists() {
-        fs::create_dir_all(categories_path).ok();
-    }
-
-    let expected_categories = vec![
-        "portraits-hero.jpg",
-        "landscapes-hero.jpg",
-        "wildlife-hero.jpg",
-    ];
-    let mut found_images = Vec::new();
-
-    for category in expected_categories {
-        let path = format!("{}/{}", categories_path, category);
-        if Path::new(&path).exists() {
-            found_images.push(format!("/images/categories/{}", category));
-        } else {
-            // Use placeholder if not found
-            found_images.push(format!("/images/{}", category));
-        }
-    }
-
-    Ok(found_images)
 }
 
 // Server function to get site configuration from environment variables
