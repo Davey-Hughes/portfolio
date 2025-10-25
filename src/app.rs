@@ -1,11 +1,13 @@
 use crate::config::SiteConfig;
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos::wasm_bindgen::JsCast;
+use leptos::web_sys;
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::use_params,
     params::Params,
-    ParamSegment, StaticSegment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +71,7 @@ pub fn App() -> impl IntoView {
 
 #[component]
 fn Nav() -> impl IntoView {
-    let config = Resource::new(|| (), |_| async { get_site_config().await });
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
         <nav class="navbar">
@@ -129,7 +131,7 @@ fn Nav() -> impl IntoView {
 
 #[component]
 fn Footer() -> impl IntoView {
-    let config = Resource::new(|| (), |_| async { get_site_config().await });
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
         <footer class="footer">
@@ -154,8 +156,8 @@ fn Footer() -> impl IntoView {
 
 #[component]
 fn HomePage() -> impl IntoView {
-    let photos = Resource::new(|| (), |_| async { get_gallery_photos().await });
-    let config = Resource::new(|| (), |_| async { get_site_config().await });
+    let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
         <div class="home-page">
@@ -260,6 +262,99 @@ struct PhotoParams {
 fn PhotoDetailPage() -> impl IntoView {
     let params = use_params::<PhotoParams>();
     let photos = Resource::new(|| (), |_| async { get_gallery_photos().await });
+    let is_fullscreen = RwSignal::new(false);
+    let zoom_level = RwSignal::new(1.0);
+    let pan_x = RwSignal::new(0.0);
+    let pan_y = RwSignal::new(0.0);
+    let is_panning = RwSignal::new(false);
+    let start_x = RwSignal::new(0.0);
+    let start_y = RwSignal::new(0.0);
+
+    let toggle_fullscreen = move |_| {
+        is_fullscreen.update(|val| *val = !*val);
+        // Reset zoom and pan when closing
+        if !is_fullscreen.get() {
+            zoom_level.set(1.0);
+            pan_x.set(0.0);
+            pan_y.set(0.0);
+        }
+    };
+
+    let close_fullscreen = move |ev: leptos::ev::MouseEvent| {
+        // Only close if clicking the background, not the image
+        let target = ev.target();
+        if let Some(element) =
+            target.and_then(|t: web_sys::EventTarget| t.dyn_into::<web_sys::Element>().ok())
+        {
+            if element.class_name().contains("fullscreen-overlay") {
+                toggle_fullscreen(ev);
+            }
+        }
+    };
+
+    let on_zoom_change = move |ev: leptos::ev::Event| {
+        ev.stop_propagation();
+        let target = ev.target().unwrap();
+        let input = target.dyn_into::<web_sys::HtmlInputElement>().unwrap();
+        let new_zoom = input.value().parse::<f64>().unwrap_or(1.0);
+        zoom_level.set(new_zoom);
+        if (new_zoom - 1.0).abs() < 0.01 {
+            pan_x.set(0.0);
+            pan_y.set(0.0);
+        }
+    };
+
+    let on_image_click = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        // Clicking doesn't zoom when already zoomed (for panning)
+        // Use the zoom slider to zoom in/out
+    };
+
+    let on_image_dblclick = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        ev.prevent_default();
+        zoom_level.set(1.0);
+        pan_x.set(0.0);
+        pan_y.set(0.0);
+    };
+
+    let on_mouse_down = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        if zoom_level.get() > 1.0 {
+            ev.prevent_default();
+            is_panning.set(true);
+            start_x.set(f64::from(ev.client_x()) - pan_x.get());
+            start_y.set(f64::from(ev.client_y()) - pan_y.get());
+        }
+    };
+
+    let on_mouse_move = move |ev: leptos::ev::MouseEvent| {
+        if is_panning.get() && zoom_level.get() > 1.0 {
+            ev.prevent_default();
+            pan_x.set(f64::from(ev.client_x()) - start_x.get());
+            pan_y.set(f64::from(ev.client_y()) - start_y.get());
+        }
+    };
+
+    let on_mouse_up = move |_ev: leptos::ev::MouseEvent| {
+        is_panning.set(false);
+    };
+
+    let on_wheel = move |ev: leptos::ev::WheelEvent| {
+        ev.prevent_default();
+        let delta = ev.delta_y();
+        if delta < 0.0 {
+            zoom_level.update(|z| *z = (*z * 1.1_f64).min(5.0));
+        } else {
+            zoom_level.update(|z| {
+                *z = (*z / 1.1_f64).max(1.0);
+                if (*z - 1.0).abs() < 0.01 {
+                    pan_x.set(0.0);
+                    pan_y.set(0.0);
+                }
+            });
+        }
+    };
 
     view! {
         <div class="photo-detail-page">
@@ -280,6 +375,10 @@ fn PhotoDetailPage() -> impl IntoView {
                                         } else {
                                             None
                                         };
+                                        let photo_url = photo.url.clone();
+                                        let photo_url_fs = photo.url.clone();
+                                        let photo_title = photo.title.clone();
+                                        let photo_title_fs = photo.title.clone();
                                         view! {
                                             <div class="photo-detail-container">
                                                 <div class="photo-detail-header">
@@ -288,11 +387,15 @@ fn PhotoDetailPage() -> impl IntoView {
                                                     </A>
                                                 </div>
                                                 <div class="photo-detail-content">
-                                                    <div class="photo-detail-image">
-                                                        <img src=photo.url.clone() alt=photo.title.clone() />
+                                                    <div
+                                                        class="photo-detail-image"
+                                                        on:click=toggle_fullscreen
+                                                        style="cursor: pointer;"
+                                                    >
+                                                        <img src=photo_url alt=photo_title.clone() />
                                                     </div>
                                                     <div class="photo-detail-info">
-                                                        <h1>{photo.title.clone()}</h1>
+                                                        <h1>{photo_title}</h1>
                                                     </div>
                                                 </div>
                                                 <div class="photo-navigation">
@@ -319,6 +422,65 @@ fn PhotoDetailPage() -> impl IntoView {
                                                             }
                                                         })}
                                                 </div>
+
+                                                {move || {
+                                                    if is_fullscreen.get() {
+                                                        let transform_style = move || {
+                                                            format!(
+                                                                "transform: translate({}px, {}px) scale({}); cursor: {};",
+                                                                pan_x.get(),
+                                                                pan_y.get(),
+                                                                zoom_level.get(),
+                                                                if zoom_level.get() > 1.0 {
+                                                                    if is_panning.get() { "grabbing" } else { "grab" }
+                                                                } else {
+                                                                    "default"
+                                                                },
+                                                            )
+                                                        };
+                                                        view! {
+                                                            <div
+                                                                class="fullscreen-overlay"
+                                                                on:click=close_fullscreen
+                                                                on:wheel=on_wheel
+                                                            >
+                                                                <div class="fullscreen-close" on:click=toggle_fullscreen>
+                                                                    "✕"
+                                                                </div>
+                                                                <div class="fullscreen-controls">
+                                                                    <div class="zoom-slider-container">
+                                                                        <label class="zoom-label">"1×"</label>
+                                                                        <input
+                                                                            type="range"
+                                                                            class="zoom-slider"
+                                                                            min="1.0"
+                                                                            max="5.0"
+                                                                            step="0.1"
+                                                                            prop:value=move || zoom_level.get()
+                                                                            on:input=on_zoom_change
+                                                                        />
+                                                                        <label class="zoom-label">"5×"</label>
+                                                                    </div>
+                                                                </div>
+                                                                <img
+                                                                    src=photo_url_fs.clone()
+                                                                    alt=photo_title_fs.clone()
+                                                                    class="fullscreen-image"
+                                                                    style=transform_style
+                                                                    on:click=on_image_click
+                                                                    on:dblclick=on_image_dblclick
+                                                                    on:mousedown=on_mouse_down
+                                                                    on:mousemove=on_mouse_move
+                                                                    on:mouseup=on_mouse_up
+                                                                    on:mouseleave=on_mouse_up
+                                                                />
+                                                            </div>
+                                                        }
+                                                            .into_any()
+                                                    } else {
+                                                        view! { <div></div> }.into_any()
+                                                    }
+                                                }}
                                             </div>
                                         }
                                             .into_any()
@@ -394,7 +556,9 @@ fn ContactPage() -> impl IntoView {
             <h1>"Get In Touch"</h1>
 
             <div class="contact-container">
-                <Suspense fallback=move || view! { <div class="contact-info"></div> }>
+                <Suspense fallback=move || {
+                    view! { <div class="contact-info"></div> }
+                }>
                     {move || {
                         config
                             .get()
@@ -403,8 +567,8 @@ fn ContactPage() -> impl IntoView {
                                     let has_any_contact = cfg.contact_email.is_some()
                                         || cfg.contact_phone.is_some()
                                         || cfg.contact_location.is_some();
-
                                     if has_any_contact {
+
                                         view! {
                                             <div class="contact-info">
                                                 <h2>"Contact Information"</h2>
