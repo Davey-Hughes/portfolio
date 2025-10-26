@@ -21,6 +21,9 @@ web-sys = { version = "0.3", features = [
   "Touch",
   "TouchEvent",
   "TouchList",
+  "Element",
+  "DomRect",
+  "MouseEvent",
 ], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 dotenvy = { version = "0.15", optional = true }
