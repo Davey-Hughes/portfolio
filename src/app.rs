@@ -875,47 +875,70 @@ fn ContactPage() -> impl IntoView {
                             .get()
                             .map(|config_result| match config_result {
                                 Ok(cfg) => {
-                                    let has_any_contact = cfg.contact_email.is_some()
-                                        || cfg.contact_phone.is_some()
-                                        || cfg.contact_location.is_some();
-                                    if has_any_contact {
-
+                                    if !cfg.sections.is_empty() {
+                                        let mut sections_vec: Vec<_> = cfg
+                                            .sections
+                                            .clone()
+                                            .into_iter()
+                                            .collect();
+                                        sections_vec.sort_by(|a, b| a.0.cmp(&b.0));
                                         view! {
                                             <div class="contact-info">
                                                 <h2>"Contact Information"</h2>
-                                                {cfg
-                                                    .contact_email
-                                                    .as_ref()
-                                                    .map(|email| {
+                                                {sections_vec
+                                                    .into_iter()
+                                                    .map(|(key, value)| {
+                                                        let display_key = key
+                                                            .replace('_', " ")
+                                                            .split_whitespace()
+                                                            .map(|word| {
+                                                                let mut chars = word.chars();
+                                                                match chars.next() {
+                                                                    None => String::new(),
+                                                                    Some(first) => {
+                                                                        first.to_uppercase().collect::<String>() + chars.as_str()
+                                                                    }
+                                                                }
+                                                            })
+                                                            .collect::<Vec<_>>()
+                                                            .join(" ");
+                                                        let is_instagram = key.to_lowercase().contains("instagram");
+                                                        let instagram_url = if is_instagram
+                                                            && value.starts_with('@')
+                                                        {
+                                                            Some(format!("https://instagram.com/{}", &value[1..]))
+                                                        } else if is_instagram && !value.starts_with("http") {
+                                                            Some(
+                                                                format!(
+                                                                    "https://instagram.com/{}",
+                                                                    value.trim_start_matches('@'),
+                                                                ),
+                                                            )
+                                                        } else {
+                                                            None
+                                                        };
+
+                                                        // Check if this is an Instagram handle
+
                                                         view! {
                                                             <div class="contact-item">
-                                                                <strong>"Email:"</strong>
-                                                                <p>{email.clone()}</p>
+                                                                <strong>{display_key}":"</strong>
+                                                                {if let Some(url) = instagram_url {
+                                                                    view! {
+                                                                        <p>
+                                                                            <a href=url target="_blank" rel="noopener noreferrer">
+                                                                                {value}
+                                                                            </a>
+                                                                        </p>
+                                                                    }
+                                                                        .into_any()
+                                                                } else {
+                                                                    view! { <p>{value}</p> }.into_any()
+                                                                }}
                                                             </div>
                                                         }
-                                                    })}
-                                                {cfg
-                                                    .contact_phone
-                                                    .as_ref()
-                                                    .map(|phone| {
-                                                        view! {
-                                                            <div class="contact-item">
-                                                                <strong>"Phone:"</strong>
-                                                                <p>{phone.clone()}</p>
-                                                            </div>
-                                                        }
-                                                    })}
-                                                {cfg
-                                                    .contact_location
-                                                    .as_ref()
-                                                    .map(|location| {
-                                                        view! {
-                                                            <div class="contact-item">
-                                                                <strong>"Location:"</strong>
-                                                                <p>{location.clone()}</p>
-                                                            </div>
-                                                        }
-                                                    })}
+                                                    })
+                                                    .collect_view()}
                                             </div>
                                         }
                                             .into_any()

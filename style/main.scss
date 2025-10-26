@@ -761,6 +761,16 @@ img {
     font-size: 1.1rem;
     color: #1a1a1a;
     font-weight: 300;
+
+    a {
+      color: #1a1a1a;
+      text-decoration: underline;
+      transition: opacity 0.3s ease;
+
+      &:hover {
+        opacity: 0.6;
+      }
+    }
   }
 }
 
