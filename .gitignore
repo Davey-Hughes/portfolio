@@ -25,3 +25,4 @@ public/images/*
 # Other content
 public/content/*
 !public/content/README.md
+!public/content/config.toml.example

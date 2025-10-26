@@ -1,0 +1,27 @@
+# Site Configuration Example
+# Copy this file to config.toml and customize it for your portfolio
+# TOML format: https://toml.io/
+
+# Core site settings (required)
+site_name = "Your Name"
+site_tagline = "Photography"
+
+# Optional: Custom copyright text
+# If not specified, it will be auto-generated as: "© {current_year} {site_name}. All rights reserved."
+# Uncomment and customize if you want a custom copyright notice:
+# site_copyright = "© 2025 Your Name. All rights reserved."
+
+# Custom sections (optional)
+# Add any custom fields you need - they'll be accessible via the sections HashMap
+[sections]
+email = "your.email@example.com"
+location = "Your City, State"
+instagram = "@yourhandle"
+twitter = "@yourhandle"
+about_title = "About Me"
+contact_title = "Get In Touch"
+
+# You can add as many custom fields as you want:
+# phone = "555-1234"
+# website = "https://example.com"
+# linkedin = "https://linkedin.com/in/yourprofile"
