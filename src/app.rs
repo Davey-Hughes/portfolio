@@ -176,7 +176,7 @@ fn Footer() -> impl IntoView {
                     config
                         .get()
                         .map(|config_result| match config_result {
-                            Ok(cfg) => view! { <p>{cfg.site_copyright.clone()}</p> }.into_any(),
+                            Ok(cfg) => view! { <p>{cfg.copyright()}</p> }.into_any(),
                             Err(_) => {
                                 view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
                                     .into_any()
@@ -818,9 +818,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                 config
                                                                     .get()
                                                                     .map(|config_result| match config_result {
-                                                                        Ok(cfg) => {
-                                                                            view! { <p>{cfg.site_copyright.clone()}</p> }.into_any()
-                                                                        }
+                                                                        Ok(cfg) => view! { <p>{cfg.copyright()}</p> }.into_any(),
                                                                         Err(_) => {
                                                                             view! { <p>"© 2025 All rights reserved."</p> }.into_any()
                                                                         }

@@ -458,6 +458,7 @@ pub fn default_about_text() -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use serial_test::serial;
 
     #[test]
     fn test_default_about_text() {
@@ -539,6 +540,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_about_content_with_default() {
         // Create a fresh temp directory with no profile image
         let temp_path = std::env::temp_dir().join("test_about_default_only");
@@ -562,6 +564,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_about_content_with_custom_text() {
         let temp_dir = std::env::temp_dir().join("test_about_content");
         fs::create_dir_all(&temp_dir).unwrap();
@@ -581,6 +584,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_about_content_with_profile_image() {
         let temp_dir = std::env::temp_dir().join("test_about_profile");
         fs::create_dir_all(&temp_dir).unwrap();
@@ -600,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_about_content_prefers_jpg_over_png() {
         let temp_dir = std::env::temp_dir().join("test_about_multi_image");
         fs::create_dir_all(&temp_dir).unwrap();
@@ -620,6 +625,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_home_photos_creates_directory() {
         let temp_gallery = std::env::temp_dir().join("test_home_gallery_create");
         
