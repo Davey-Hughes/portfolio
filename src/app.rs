@@ -60,6 +60,7 @@ pub fn App() -> impl IntoView {
             <main class="main-content">
                 <Routes fallback=|| "Page not found.".into_view()>
                     <Route path=StaticSegment("") view=HomePage />
+                    <Route path=(StaticSegment("gallery"), ParamSegment("name")) view=GalleryPage />
                     <Route path=(StaticSegment("photo"), ParamSegment("id")) view=PhotoDetailPage />
                     <Route path=StaticSegment("about") view=AboutPage />
                     <Route path=StaticSegment("contact") view=ContactPage />
@@ -89,6 +90,7 @@ fn ConditionalFooter() -> impl IntoView {
 #[component]
 fn Nav() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let galleries = Resource::new(|| (), |()| async { get_galleries().await });
 
     view! {
         <nav class="navbar">
@@ -109,6 +111,28 @@ fn Nav() -> impl IntoView {
                                             <li>
                                                 <A href="/">"Home"</A>
                                             </li>
+                                            <Suspense fallback=|| ()>
+                                                {move || {
+                                                    galleries
+                                                        .get()
+                                                        .and_then(|galleries_result| { galleries_result.ok() })
+                                                        .map(|gallery_list| {
+                                                            gallery_list
+                                                                .into_iter()
+                                                                .map(|gallery| {
+                                                                    view! {
+                                                                        <li>
+                                                                            <A href=format!(
+                                                                                "/gallery/{}",
+                                                                                gallery.slug,
+                                                                            )>{gallery.name}</A>
+                                                                        </li>
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                        })
+                                                }}
+                                            </Suspense>
                                             <li>
                                                 <A href="/about">"About"</A>
                                             </li>
@@ -304,6 +328,145 @@ fn HomePage() -> impl IntoView {
 }
 
 #[derive(Params, PartialEq, Clone)]
+struct GalleryParams {
+    name: String,
+}
+
+#[component]
+fn GalleryPage() -> impl IntoView {
+    let params = use_params::<GalleryParams>();
+    let photos = Resource::new(
+        move || params.get().map(|p| p.name.clone()).ok(),
+        |gallery_name| async move {
+            if let Some(name) = gallery_name {
+                get_gallery_photos_by_name(name).await
+            } else {
+                Err(ServerFnError::new("No gallery name provided"))
+            }
+        },
+    );
+
+    view! {
+        <div class="home-page">
+            <div class="hero-simple">
+                <div class="hero-text">
+                    <Suspense fallback=move || {
+                        view! {
+                            <h1>"GALLERY"</h1>
+                            <p class="hero-tagline">"Loading..."</p>
+                        }
+                    }>
+                        {move || {
+                            params
+                                .get()
+                                .ok()
+                                .map(|p| {
+                                    let gallery_name = p
+                                        .name
+                                        .replace(['-', '_'], " ")
+                                        .split_whitespace()
+                                        .map(|word| {
+                                            let mut chars = word.chars();
+                                            match chars.next() {
+                                                None => String::new(),
+                                                Some(first) => {
+                                                    first.to_uppercase().collect::<String>() + chars.as_str()
+                                                }
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
+                                    view! {
+                                        <h1>{gallery_name.to_uppercase()}</h1>
+                                        <p class="hero-tagline">
+                                            <A href="/">"← Back to Home"</A>
+                                        </p>
+                                    }
+                                })
+                        }}
+                    </Suspense>
+                </div>
+            </div>
+
+            <div class="photo-grid-home">
+                <Suspense fallback=move || {
+                    view! { <div class="loading">"Loading photos..."</div> }
+                }>
+                    {move || {
+                        photos
+                            .get()
+                            .map(|photos_result| match photos_result {
+                                Ok(photo_list) => {
+                                    if photo_list.is_empty() {
+                                        view! {
+                                            <div class="empty-gallery">
+                                                <p>"No photos found in this gallery."</p>
+                                            </div>
+                                        }
+                                            .into_any()
+                                    } else {
+                                        photo_list
+                                            .into_iter()
+                                            .map(|photo| {
+                                                let photo_slug = photo.slug.clone();
+                                                let photo_url = photo.url.clone();
+                                                let photo_title = photo.title.clone();
+                                                let orientation_class = if let (Some(w), Some(h)) = (
+                                                    photo.width,
+                                                    photo.height,
+                                                ) {
+                                                    let ratio = f64::from(w) / f64::from(h);
+                                                    if ratio > 1.8 {
+                                                        "wide-landscape"
+                                                    } else if ratio > 1.3 {
+                                                        "landscape"
+                                                    } else if ratio > 1.05 {
+                                                        "landscape-square"
+                                                    } else if ratio > 0.95 {
+                                                        "square"
+                                                    } else if ratio > 0.75 {
+                                                        "portrait-square"
+                                                    } else if ratio > 0.55 {
+                                                        "portrait"
+                                                    } else {
+                                                        "tall-portrait"
+                                                    }
+                                                } else {
+                                                    "square"
+                                                };
+                                                view! {
+                                                    <a
+                                                        href=format!("/photo/{}", photo_slug)
+                                                        class=format!("photo-hero-link {}", orientation_class)
+                                                    >
+                                                        <div class="photo-hero-section">
+                                                            <div class="photo-hero-image">
+                                                                <img src=photo_url alt=photo_title.clone() />
+                                                            </div>
+                                                            <div class="photo-hero-caption">
+                                                                <h2>{photo_title}</h2>
+                                                            </div>
+                                                        </div>
+                                                    </a>
+                                                }
+                                            })
+                                            .collect_view()
+                                            .into_any()
+                                    }
+                                }
+                                Err(_) => {
+                                    view! { <div class="error">"Failed to load gallery"</div> }
+                                        .into_any()
+                                }
+                            })
+                    }}
+                </Suspense>
+            </div>
+        </div>
+    }
+}
+
+#[derive(Params, PartialEq, Clone)]
 struct PhotoParams {
     id: String,
 }
@@ -311,7 +474,7 @@ struct PhotoParams {
 #[component]
 fn PhotoDetailPage() -> impl IntoView {
     let params = use_params::<PhotoParams>();
-    let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
+    let photos = Resource::new(|| (), |()| async { get_all_gallery_photos().await });
     let config = Resource::new(|| (), |()| async { get_site_config().await });
     let is_fullscreen = RwSignal::new(false);
     let zoom_level = RwSignal::new(1.0);
@@ -1046,9 +1209,33 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
 
     let mut photos = Vec::new();
     let gallery_path_buf = Path::new(&gallery_path).to_path_buf();
+    let images_base = Path::new("public/images");
 
     // Recursively find all images
-    find_images_recursive(&gallery_path_buf, &gallery_path_buf, &mut photos);
+    find_images_recursive(&gallery_path_buf, images_base, &mut photos);
+
+    // Sort by filename for consistent ordering
+    photos.sort_by(|a, b| a.filename.cmp(&b.filename));
+
+    Ok(photos)
+}
+
+// Server function to get photos from ALL galleries (for photo detail page)
+#[server(GetAllGalleryPhotos, "/api")]
+pub async fn get_all_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
+    let mut photos = Vec::new();
+    let images_base = Path::new("public/images");
+
+    // Discover all gallery directories automatically
+    let gallery_roots = discover_gallery_directories();
+
+    // Load photos from all galleries
+    for gallery_path in gallery_roots {
+        let gallery_path_buf = Path::new(&gallery_path);
+        if gallery_path_buf.exists() {
+            find_images_recursive(gallery_path_buf, images_base, &mut photos);
+        }
+    }
 
     // Sort by filename for consistent ordering
     photos.sort_by(|a, b| a.filename.cmp(&b.filename));
@@ -1103,7 +1290,7 @@ fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<Photo
                         ) = extract_exif_data(&path);
 
                         photos.push(PhotoInfo {
-                            url: format!("/images/gallery/{}", relative_path),
+                            url: format!("/images/{}", relative_path),
                             title,
                             filename: filename_str,
                             slug,
@@ -1247,6 +1434,205 @@ fn extract_exif_data(path: &Path) -> ExifData {
 #[server(GetSiteConfig, "/api")]
 pub async fn get_site_config() -> Result<SiteConfig, ServerFnError> {
     Ok(crate::config::load_config())
+}
+
+// Helper function to discover all gallery directories in public/images/
+#[cfg(feature = "ssr")]
+fn discover_gallery_directories() -> Vec<String> {
+    let images_base = if Path::new("public/images").exists() {
+        "public/images"
+    } else {
+        "./images"
+    };
+
+    let mut gallery_dirs = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(images_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Only include directories that are not special directories
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name() {
+                    let name = dir_name.to_string_lossy().to_string();
+                    // Skip special directories like categories, content, etc.
+                    if name != "categories" {
+                        gallery_dirs.push(path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    gallery_dirs
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct GalleryInfo {
+    pub name: String,
+    pub slug: String,
+    pub photo_count: usize,
+}
+
+// Server function to get list of available galleries
+#[server(GetGalleries, "/api")]
+pub async fn get_galleries() -> Result<Vec<GalleryInfo>, ServerFnError> {
+    let mut galleries = Vec::new();
+
+    // Discover all gallery directories automatically
+    let gallery_roots = discover_gallery_directories();
+
+    // Each directory is treated as a gallery (images are found recursively within)
+    for base_path in gallery_roots {
+        let path = Path::new(&base_path);
+        if path.exists() {
+            if let Some(dir_name) = path.file_name() {
+                let name = dir_name.to_string_lossy().to_string();
+                let slug = name.to_lowercase().replace(' ', "-");
+
+                // Skip "gallery" since it's shown on the home page
+                if slug == "gallery" {
+                    continue;
+                }
+
+                // Count photos in this directory (recursively)
+                let mut photo_count = 0;
+                count_images_recursive(path, &mut photo_count);
+
+                if photo_count > 0 {
+                    galleries.push(GalleryInfo {
+                        name: name.replace(['-', '_'], " "),
+                        slug,
+                        photo_count,
+                    });
+                }
+            }
+        }
+    }
+
+    galleries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(galleries)
+}
+
+#[cfg(feature = "ssr")]
+fn count_images_recursive(dir: &Path, count: &mut usize) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                count_images_recursive(&path, count);
+            } else if let Some(extension) = path.extension() {
+                let ext = extension.to_string_lossy().to_lowercase();
+                if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
+                    *count += 1;
+                }
+            }
+        }
+    }
+}
+
+// Server function to get photos from a specific gallery
+#[server(GetGalleryPhotosByName, "/api")]
+pub async fn get_gallery_photos_by_name(
+    gallery_name: String,
+) -> Result<Vec<PhotoInfo>, ServerFnError> {
+    // Discover all gallery directories automatically
+    let gallery_roots = discover_gallery_directories();
+
+    let mut photos = Vec::new();
+    let mut gallery_found = false;
+    let images_base = Path::new("public/images");
+
+    // Search for the gallery by matching the directory name
+    for base_path in gallery_roots {
+        let base = Path::new(&base_path);
+        if let Some(dir_name) = base.file_name() {
+            let slug = dir_name.to_string_lossy().to_lowercase().replace(' ', "-");
+            if slug == gallery_name {
+                gallery_found = true;
+
+                // Find images in this gallery directory (recursively)
+                find_images_for_gallery(base, images_base, &mut photos);
+                break;
+            }
+        }
+    }
+
+    if !gallery_found {
+        return Err(ServerFnError::new("Gallery not found"));
+    }
+
+    // Sort by filename for consistent ordering
+    photos.sort_by(|a, b| a.filename.cmp(&b.filename));
+
+    Ok(photos)
+}
+
+#[cfg(feature = "ssr")]
+fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<PhotoInfo>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.is_dir() {
+                find_images_for_gallery(&path, base_root, photos);
+            } else if let Some(extension) = path.extension() {
+                let ext = extension.to_string_lossy().to_lowercase();
+                if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
+                    if let Some(filename) = path.file_name() {
+                        let filename_str = filename.to_string_lossy().to_string();
+
+                        // Calculate the relative path from base gallery root
+                        let relative_path = path
+                            .strip_prefix(base_root)
+                            .unwrap_or(&path)
+                            .to_string_lossy()
+                            .to_string();
+
+                        // Create slug from relative path (unique identifier)
+                        let slug = relative_path
+                            .trim_end_matches(&format!(".{}", ext))
+                            .to_lowercase()
+                            .replace(['/', '\\', ' '], "-");
+
+                        let title = filename_str
+                            .trim_end_matches(&format!(".{}", ext))
+                            .replace(['-', '_'], " ");
+
+                        // Extract EXIF data
+                        let (
+                            width,
+                            height,
+                            date_taken,
+                            camera_make,
+                            camera_model,
+                            lens_model,
+                            focal_length,
+                            aperture,
+                            shutter_speed,
+                            iso,
+                        ) = extract_exif_data(&path);
+
+                        photos.push(PhotoInfo {
+                            url: format!("/images/{}", relative_path),
+                            title,
+                            filename: filename_str,
+                            slug,
+                            width,
+                            height,
+                            date_taken,
+                            camera_make,
+                            camera_model,
+                            lens_model,
+                            focal_length,
+                            aperture,
+                            shutter_speed,
+                            iso,
+                        });
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
