@@ -5,7 +5,7 @@ use leptos::web_sys;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes, A},
-    hooks::use_params,
+    hooks::{use_location, use_params},
     params::Params,
     ParamSegment, StaticSegment,
 };
@@ -64,8 +64,24 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
             </main>
-            <Footer />
+            <ConditionalFooter />
         </Router>
+    }
+}
+
+#[component]
+fn ConditionalFooter() -> impl IntoView {
+    let location = use_location();
+
+    view! {
+        {move || {
+            let pathname = location.pathname.get();
+            if !pathname.starts_with("/photo/") {
+                view! { <Footer /> }.into_any()
+            } else {
+                view! { <div></div> }.into_any()
+            }
+        }}
     }
 }
 
@@ -262,6 +278,7 @@ struct PhotoParams {
 fn PhotoDetailPage() -> impl IntoView {
     let params = use_params::<PhotoParams>();
     let photos = Resource::new(|| (), |_| async { get_gallery_photos().await });
+    let config = Resource::new(|| (), |_| async { get_site_config().await });
     let is_fullscreen = RwSignal::new(false);
     let zoom_level = RwSignal::new(1.0);
     let pan_x = RwSignal::new(0.0);
@@ -561,6 +578,26 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                 </A>
                                                             }
                                                         })}
+                                                    <div class="photo-nav-copyright">
+                                                        <Suspense fallback=move || {
+                                                            view! { <p>"© 2025 All rights reserved."</p> }
+                                                        }>
+                                                            {move || {
+                                                                config
+                                                                    .get()
+                                                                    .map(|config_result| match config_result {
+                                                                        Ok(cfg) => {
+                                                                            view! { <p>{cfg.site_copyright.clone()}</p> }
+                                                                                .into_any()
+                                                                        }
+                                                                        Err(_) => {
+                                                                            view! { <p>"© 2025 All rights reserved."</p> }
+                                                                                .into_any()
+                                                                        }
+                                                                    })
+                                                            }}
+                                                        </Suspense>
+                                                    </div>
                                                     {next_id
                                                         .map(|next| {
                                                             view! {

@@ -220,10 +220,6 @@ img {
   max-width: 100%;
   height: calc(100vh - 70px);
   overflow: hidden;
-
-  & ~ .footer {
-    display: none;
-  }
 }
 
 .photo-detail-container {
@@ -360,8 +356,10 @@ img {
 
 .photo-navigation {
   flex-shrink: 0;
+  position: relative;
   display: flex;
   justify-content: space-between;
+  align-items: center;
   padding: 0.75rem 3rem;
   background-color: #fff;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
@@ -390,6 +388,21 @@ img {
 
   .nav-next {
     margin-left: auto;
+  }
+
+  .photo-nav-copyright {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+
+    p {
+      opacity: 0.6;
+      font-size: 0.75rem;
+      font-weight: 300;
+      letter-spacing: 0.5px;
+      color: #666;
+      margin: 0;
+    }
   }
 }
 
