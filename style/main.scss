@@ -257,10 +257,21 @@ img {
   justify-content: center;
   padding: 1rem 3rem;
   background-color: #fafafa;
-  gap: 4rem;
   overflow: hidden;
   min-height: 0;
   height: 0;
+
+  &::before {
+    content: "";
+    flex: 1;
+    max-width: calc((100% - 1800px) / 2);
+  }
+
+  &::after {
+    content: "";
+    flex: 1;
+    max-width: calc((100% - 1800px) / 2);
+  }
 }
 
 .photo-detail-image {
@@ -271,6 +282,7 @@ img {
   min-width: 0;
   min-height: 0;
   height: 100%;
+  margin-right: 2rem;
 
   img {
     max-width: 100%;
@@ -283,14 +295,14 @@ img {
 }
 
 .photo-detail-info {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
   text-align: left;
   min-width: 200px;
-  max-width: 400px;
+  max-width: 350px;
 
   h1 {
     font-size: 2rem;
