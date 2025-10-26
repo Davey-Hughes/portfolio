@@ -15,6 +15,7 @@ Cargo.lock
 
 # Environment variables
 .env
+.envrc
 
 # Gallery images
 public/images/gallery/*

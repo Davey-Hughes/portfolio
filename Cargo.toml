@@ -20,6 +20,7 @@ wasm-bindgen = { version = "=0.2.103", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 dotenvy = { version = "0.15", optional = true }
 chrono = "0.4"
+kamadak-exif = { version = "0.5", optional = true }
 
 [features]
 hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen"]
@@ -30,6 +31,7 @@ ssr = [
   "dep:tower-http",
   "dep:leptos_axum",
   "dep:dotenvy",
+  "dep:kamadak-exif",
   "leptos/ssr",
   "leptos_meta/ssr",
   "leptos_router/ssr",
