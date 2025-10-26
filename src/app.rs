@@ -330,12 +330,40 @@ fn PhotoDetailPage() -> impl IntoView {
         // Use the zoom slider to zoom in/out
     };
 
-    let on_image_dblclick = move |ev: leptos::ev::MouseEvent| {
-        ev.stop_propagation();
-        ev.prevent_default();
-        zoom_level.set(1.0);
-        pan_x.set(0.0);
-        pan_y.set(0.0);
+    let on_image_dblclick = move |_ev: leptos::ev::MouseEvent| {
+        _ev.stop_propagation();
+        _ev.prevent_default();
+        // Toggle between 1x and 2x zoom
+        if zoom_level.get() == 1.0 {
+            #[cfg(feature = "hydrate")]
+            {
+                // Get the click position relative to the viewport center
+                let mouse_event = _ev.unchecked_ref::<web_sys::MouseEvent>();
+                if let Some(target) = mouse_event.target() {
+                    if let Some(element) = target.dyn_ref::<web_sys::Element>() {
+                        let rect = element.get_bounding_client_rect();
+                        let img_center_x = rect.left() + rect.width() / 2.0;
+                        let img_center_y = rect.top() + rect.height() / 2.0;
+
+                        // Calculate offset from center to click point
+                        let click_x = f64::from(mouse_event.client_x());
+                        let click_y = f64::from(mouse_event.client_y());
+
+                        // Pan to center the clicked point (negated because we're moving the image)
+                        let offset_x = (img_center_x - click_x) * 2.0;
+                        let offset_y = (img_center_y - click_y) * 2.0;
+
+                        pan_x.set(offset_x);
+                        pan_y.set(offset_y);
+                    }
+                }
+            }
+            zoom_level.set(2.0);
+        } else {
+            zoom_level.set(1.0);
+            pan_x.set(0.0);
+            pan_y.set(0.0);
+        }
     };
 
     let on_mouse_down = move |ev: leptos::ev::MouseEvent| {
