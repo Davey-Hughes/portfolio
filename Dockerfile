@@ -25,17 +25,16 @@ COPY --from=builder /work/target/site /app/site
 COPY --from=builder /work/Cargo.toml /app/
 
 # Create images directory for runtime mounting
-RUN mkdir -p /app/images/gallery /app/images/categories
+RUN mkdir -p /app/public/images /app/public/content
 
 ENV RUST_LOG="info"
 ENV LEPTOS_SITE_ADDR="0.0.0.0:8080"
 ENV LEPTOS_SITE_ROOT=./site
-ENV IMAGES_DIR=/app/images
-ENV GALLERY_PATH=/app/images/gallery
-ENV CATEGORIES_PATH=/app/images/categories
+# ENV IMAGES_DIR=/app/images
+# ENV GALLERY_PATH=/app/public/home
 
 # Volume for mounting images at runtime
-VOLUME ["/app/images"]
+VOLUME ["/app/public"]
 
 EXPOSE 8080
 
