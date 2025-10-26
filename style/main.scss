@@ -14,6 +14,9 @@ body {
   background-color: #ffffff;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 a {
@@ -86,8 +89,10 @@ img {
 
 // Main content
 .main-content {
-  min-height: 100vh;
+  flex: 1;
   padding-top: 70px;
+  display: flex;
+  flex-direction: column;
 }
 
 // Home page - Minimalist hero
@@ -628,13 +633,17 @@ img {
 }
 
 .about-container {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr;
-  gap: 5rem;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 3rem;
+  align-items: center;
+  max-width: 900px;
+  margin: 0 auto;
 }
 
 .about-image {
+  width: 100%;
+
   img {
     width: 100%;
     filter: grayscale(20%);
@@ -642,6 +651,9 @@ img {
 }
 
 .about-content {
+  width: 100%;
+  text-align: center;
+
   h1 {
     font-size: 2.2rem;
     font-weight: 400;
@@ -667,6 +679,7 @@ img {
     margin-bottom: 1.8rem;
     color: #444;
     font-weight: 300;
+    text-align: left;
   }
 }
 

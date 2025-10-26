@@ -23,7 +23,17 @@ async fn main() {
         }
     });
 
+    // Get content directory path from environment or use default
+    let content_dir = std::env::var("ABOUT_CONTENT_PATH").unwrap_or_else(|_| {
+        if std::path::Path::new("public/content").exists() {
+            "public/content".to_string()
+        } else {
+            "./content".to_string()
+        }
+    });
+
     log!("Serving images from: {}", images_dir);
+    log!("Serving content from: {}", content_dir);
 
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
@@ -31,6 +41,7 @@ async fn main() {
             move || shell(leptos_options.clone())
         })
         .nest_service("/images", ServeDir::new(&images_dir))
+        .nest_service("/content", ServeDir::new(&content_dir))
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
 

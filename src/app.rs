@@ -780,24 +780,70 @@ fn PhotoDetailPage() -> impl IntoView {
 
 #[component]
 fn AboutPage() -> impl IntoView {
+    let about_content = Resource::new(|| (), |()| async { get_about_content().await });
+
     view! {
         <div class="about-page">
-            <div class="about-container">
-                <div class="about-image">
-                    <img src="/images/profile.jpg" alt="Photographer" />
-                </div>
-                <div class="about-content">
-                    <h1>"About Me"</h1>
-                    <p>
-                        "Hello! I'm a passionate photographer specializing in capturing the beauty of everyday moments.
-                        With over 10 years of experience, I've worked on various projects ranging from landscapes to portraits."
-                    </p>
-                    <p>
-                        "My photography style focuses on natural lighting and authentic emotions.
-                        I believe every photograph tells a unique story, and I'm here to help you tell yours."
-                    </p>
-                </div>
-            </div>
+            <Suspense fallback=move || {
+                view! {
+                    <div class="about-container">
+                        <div class="about-image">
+                            <img src="/images/profile.jpg" alt="Photographer" />
+                        </div>
+                        <div class="about-content">
+                            <h1>"About Me"</h1>
+                            <p>"Loading..."</p>
+                        </div>
+                    </div>
+                }
+            }>
+                {move || {
+                    about_content
+                        .get()
+                        .map(|content_result| match content_result {
+                            Ok(about) => {
+                                let paragraphs = about
+                                    .content
+                                    .split("\n\n")
+                                    .map(|p| p.trim())
+                                    .filter(|p| !p.is_empty())
+                                    .collect::<Vec<_>>();
+                                view! {
+                                    <div class="about-container">
+                                        {about
+                                            .image_url
+                                            .as_ref()
+                                            .map(|url| {
+                                                view! {
+                                                    <div class="about-image">
+                                                        <img src=url.clone() alt="Photographer" />
+                                                    </div>
+                                                }
+                                            })} <div class="about-content">
+                                            <h1>"About Me"</h1>
+                                            {paragraphs
+                                                .into_iter()
+                                                .map(|p| view! { <p>{p}</p> })
+                                                .collect_view()}
+                                        </div>
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                            Err(_) => {
+                                view! {
+                                    <div class="about-container">
+                                        <div class="about-content">
+                                            <h1>"About Me"</h1>
+                                            <p>"Failed to load about content"</p>
+                                        </div>
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                        })
+                }}
+            </Suspense>
         </div>
     }
 }
@@ -1178,4 +1224,63 @@ fn extract_exif_data(path: &Path) -> ExifData {
 #[server(GetSiteConfig, "/api")]
 pub async fn get_site_config() -> Result<SiteConfig, ServerFnError> {
     Ok(crate::config::load_config())
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AboutContent {
+    pub image_url: Option<String>,
+    pub content: String,
+}
+
+// Server function to load about page content
+#[server(GetAboutContent, "/api")]
+pub async fn get_about_content() -> Result<AboutContent, ServerFnError> {
+    let content_path = std::env::var("ABOUT_CONTENT_PATH").unwrap_or_else(|_| {
+        if Path::new("public/content").exists() {
+            "public/content".to_string()
+        } else {
+            "./content".to_string()
+        }
+    });
+
+    // Create directory if it doesn't exist
+    if !Path::new(&content_path).exists() {
+        fs::create_dir_all(&content_path).ok();
+    }
+
+    // Try to load the about text file
+    let text_path = Path::new(&content_path).join("about.txt");
+    let content = if text_path.exists() {
+        fs::read_to_string(&text_path).unwrap_or_else(|_| {
+            "Hello! I'm a passionate photographer specializing in capturing the beauty of everyday moments.\n\n\
+            With over 10 years of experience, I've worked on various projects ranging from landscapes to portraits.\n\n\
+            My photography style focuses on natural lighting and authentic emotions. \
+            I believe every photograph tells a unique story, and I'm here to help you tell yours.".to_string()
+        })
+    } else {
+        "Hello! I'm a passionate photographer specializing in capturing the beauty of everyday moments.\n\n\
+        With over 10 years of experience, I've worked on various projects ranging from landscapes to portraits.\n\n\
+        My photography style focuses on natural lighting and authentic emotions. \
+        I believe every photograph tells a unique story, and I'm here to help you tell yours.".to_string()
+    };
+
+    // Try to find an about image (profile.jpg, profile.png, etc.)
+    let image_extensions = ["jpg", "jpeg", "png", "webp"];
+    let mut image_url = None;
+
+    for ext in &image_extensions {
+        let img_path = Path::new(&content_path).join(format!("profile.{}", ext));
+        if img_path.exists() {
+            // Calculate relative path for the URL
+            image_url = Some(format!("/content/profile.{}", ext));
+            break;
+        }
+    }
+
+    // Fallback to /images/profile.jpg if it exists
+    if image_url.is_none() && Path::new("public/images/profile.jpg").exists() {
+        image_url = Some("/images/profile.jpg".to_string());
+    }
+
+    Ok(AboutContent { image_url, content })
 }
