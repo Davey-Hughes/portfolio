@@ -29,6 +29,10 @@ serde = { version = "1.0", features = ["derive"] }
 dotenvy = { version = "0.15", optional = true }
 chrono = "0.4"
 kamadak-exif = { version = "0.5", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = [
+  "jpeg",
+  "png",
+] }
 
 [features]
 hydrate = [
@@ -45,6 +49,7 @@ ssr = [
   "dep:leptos_axum",
   "dep:dotenvy",
   "dep:kamadak-exif",
+  "dep:image",
   "leptos/ssr",
   "leptos_meta/ssr",
   "leptos_router/ssr",
