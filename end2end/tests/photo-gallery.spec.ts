@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Photo Gallery", () => {
   test("should display photo grid on homepage", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photo grid to load
     await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
@@ -12,7 +12,7 @@ test.describe("Photo Gallery", () => {
   });
 
   test("should display photo thumbnails", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photos to load
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
@@ -32,7 +32,7 @@ test.describe("Photo Gallery", () => {
   });
 
   test("should open photo detail when clicking on thumbnail", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photos to load
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
@@ -53,7 +53,7 @@ test.describe("Photo Gallery", () => {
   });
 
   test("should prevent right-click on images", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photos to load
     await page.waitForSelector(".photo-hero-link img", { timeout: 10000 });
@@ -72,7 +72,7 @@ test.describe("Photo Gallery", () => {
   });
 
   test("should lazy load images", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photo grid
     await page.waitForSelector(".photo-grid-home", { timeout: 10000 });

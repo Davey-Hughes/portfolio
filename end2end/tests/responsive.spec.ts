@@ -11,7 +11,7 @@ test.describe("Responsive Design", () => {
     test(`should render correctly on ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       
-      await page.goto("/");
+      await page.goto("/", { waitUntil: "networkidle" });
 
       // Navigation should be visible
       await expect(page.locator("nav.navbar")).toBeVisible();
@@ -27,7 +27,7 @@ test.describe("Responsive Design", () => {
     test(`should navigate correctly on ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       
-      await page.goto("/");
+      await page.goto("/", { waitUntil: "networkidle" });
 
       // Try navigating to About
       await page.click('nav a[href="/about"]');
@@ -41,7 +41,7 @@ test.describe("Responsive Design", () => {
   test("should have mobile-friendly navigation on small screens", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Navigation should still be accessible
     const nav = page.locator("nav.navbar");
@@ -57,7 +57,7 @@ test.describe("Responsive Design", () => {
 
     for (const width of sizes) {
       await page.setViewportSize({ width, height: 1080 });
-      await page.goto("/");
+      await page.goto("/", { waitUntil: "networkidle" });
 
       await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
       
