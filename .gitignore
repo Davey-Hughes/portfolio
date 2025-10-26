@@ -18,11 +18,9 @@ Cargo.lock
 .envrc
 
 # Gallery images
-public/images/gallery/*
+public/images/*
+!public/images/README.md
 !public/images/gallery/README.md
-public/images/categories/*
-!public/images/categories/README.md
-public/images/profile.jpg
 
 # Other content
 public/content/*
