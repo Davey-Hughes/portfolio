@@ -344,7 +344,7 @@ fn PhotoDetailPage() -> impl IntoView {
         ev.prevent_default();
         let delta = ev.delta_y();
         if delta < 0.0 {
-            zoom_level.update(|z| *z = (*z * 1.1_f64).min(5.0));
+            zoom_level.update(|z| *z = (*z * 1.1_f64).min(10.0));
         } else {
             zoom_level.update(|z| {
                 *z = (*z / 1.1_f64).max(1.0);
@@ -537,12 +537,12 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                             type="range"
                                                                             class="zoom-slider"
                                                                             min="1.0"
-                                                                            max="5.0"
+                                                                            max="10.0"
                                                                             step="0.1"
                                                                             prop:value=move || zoom_level.get()
                                                                             on:input=on_zoom_change
                                                                         />
-                                                                        <label class="zoom-label">"5×"</label>
+                                                                        <label class="zoom-label">"10×"</label>
                                                                     </div>
                                                                 </div>
                                                                 <img
