@@ -1,5 +1,10 @@
 pub mod app;
 pub mod config;
+pub mod server;
+pub mod types;
+
+#[cfg(feature = "ssr")]
+pub mod gallery;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
