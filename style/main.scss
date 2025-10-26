@@ -866,6 +866,10 @@ img {
     padding-top: 100px;
   }
 
+  .photo-detail-page {
+    height: calc(100vh - 100px);
+  }
+
   .hero-simple {
     height: 20vh;
     min-height: 150px;
@@ -895,12 +899,17 @@ img {
   }
 
   .photo-detail-header {
-    padding: 1.5rem;
+    padding: 1rem 1.5rem;
   }
 
   .photo-detail-content {
-    padding: 1.5rem;
+    padding: 1rem 1.5rem;
     flex-direction: column;
+  }
+
+  .photo-detail-image {
+    margin-right: 0;
+    margin-bottom: 1rem;
   }
 
   .photo-detail-image img {
@@ -910,6 +919,7 @@ img {
   .photo-detail-info {
     text-align: center;
     max-width: 100%;
+    margin-left: 0;
   }
 
   .photo-detail-info h1 {
