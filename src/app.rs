@@ -2,12 +2,12 @@ use crate::config::SiteConfig;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{A, Route, Router, Routes},
+    components::{Route, Router, Routes, A},
     hooks::use_params,
     params::Params,
+    ParamSegment, StaticSegment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -396,6 +396,89 @@ fn PhotoDetailPage() -> impl IntoView {
                                                     </div>
                                                     <div class="photo-detail-info">
                                                         <h1>{photo_title}</h1>
+                                                        <div class="photo-exif">
+                                                            {photo
+                                                                .camera_make
+                                                                .as_ref()
+                                                                .or(photo.camera_model.as_ref())
+                                                                .map(|_| {
+                                                                    view! {
+                                                                        <div class="exif-section">
+                                                                            <h3 class="exif-heading">"Camera"</h3>
+                                                                            {photo
+                                                                                .camera_make
+                                                                                .as_ref()
+                                                                                .zip(photo.camera_model.as_ref())
+                                                                                .map(|(make, model)| {
+                                                                                    view! {
+                                                                                        <p class="exif-value">
+                                                                                            {format!("{} {}", make, model)}
+                                                                                        </p>
+                                                                                    }
+                                                                                })
+                                                                                .or_else(|| {
+                                                                                    photo
+                                                                                        .camera_model
+                                                                                        .as_ref()
+                                                                                        .map(|model| {
+                                                                                            view! { <p class="exif-value">{model.clone()}</p> }
+                                                                                        })
+                                                                                })}
+                                                                        </div>
+                                                                    }
+                                                                })}
+                                                            {photo
+                                                                .lens_model
+                                                                .as_ref()
+                                                                .map(|lens| {
+                                                                    view! {
+                                                                        <div class="exif-section">
+                                                                            <h3 class="exif-heading">"Lens"</h3>
+                                                                            <p class="exif-value">{lens.clone()}</p>
+                                                                        </div>
+                                                                    }
+                                                                })}
+                                                            {if photo.focal_length.is_some()
+                                                                || photo.aperture.is_some()
+                                                                || photo.shutter_speed.is_some()
+                                                                || photo.iso.is_some()
+                                                            {
+                                                                view! {
+                                                                    <div class="exif-section">
+                                                                        <h3 class="exif-heading">"Settings"</h3>
+                                                                        <div class="exif-settings">
+                                                                            {photo
+                                                                                .focal_length
+                                                                                .as_ref()
+                                                                                .map(|fl| {
+                                                                                    view! { <span class="exif-setting">{fl.clone()}</span> }
+                                                                                })}
+                                                                            {photo
+                                                                                .aperture
+                                                                                .as_ref()
+                                                                                .map(|ap| {
+                                                                                    view! { <span class="exif-setting">{ap.clone()}</span> }
+                                                                                })}
+                                                                            {photo
+                                                                                .shutter_speed
+                                                                                .as_ref()
+                                                                                .map(|ss| {
+                                                                                    view! { <span class="exif-setting">{ss.clone()}</span> }
+                                                                                })}
+                                                                            {photo
+                                                                                .iso
+                                                                                .as_ref()
+                                                                                .map(|iso| {
+                                                                                    view! { <span class="exif-setting">{iso.clone()}</span> }
+                                                                                })}
+                                                                        </div>
+                                                                    </div>
+                                                                }
+                                                                    .into_any()
+                                                            } else {
+                                                                view! { <div></div> }.into_any()
+                                                            }}
+                                                        </div>
                                                     </div>
                                                 </div>
                                                 <div class="photo-navigation">
@@ -678,6 +761,13 @@ pub struct PhotoInfo {
     pub url: String,
     pub title: String,
     pub filename: String,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub lens_model: Option<String>,
+    pub focal_length: Option<String>,
+    pub aperture: Option<String>,
+    pub shutter_speed: Option<String>,
+    pub iso: Option<String>,
 }
 
 // Server function to read gallery photos from the gallery directory
@@ -713,10 +803,28 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                             .trim_end_matches(&format!(".{}", ext))
                             .replace(['-', '_'], " ");
 
+                        // Extract EXIF data
+                        let (
+                            camera_make,
+                            camera_model,
+                            lens_model,
+                            focal_length,
+                            aperture,
+                            shutter_speed,
+                            iso,
+                        ) = extract_exif_data(&path);
+
                         photos.push(PhotoInfo {
                             url: format!("/images/gallery/{}", filename_str),
                             title,
                             filename: filename_str,
+                            camera_make,
+                            camera_model,
+                            lens_model,
+                            focal_length,
+                            aperture,
+                            shutter_speed,
+                            iso,
                         });
                     }
                 }
@@ -728,6 +836,85 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
     photos.sort_by(|a, b| a.filename.cmp(&b.filename));
 
     Ok(photos)
+}
+
+#[cfg(feature = "ssr")]
+fn extract_exif_data(
+    path: &Path,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (None, None, None, None, None, None, None),
+    };
+
+    let mut reader = BufReader::new(file);
+    let exif_reader = match exif::Reader::new().read_from_container(&mut reader) {
+        Ok(r) => r,
+        Err(_) => return (None, None, None, None, None, None, None),
+    };
+
+    let camera_make = exif_reader
+        .get_field(exif::Tag::Make, exif::In::PRIMARY)
+        .and_then(|f| f.display_value().to_string().into());
+
+    let camera_model = exif_reader
+        .get_field(exif::Tag::Model, exif::In::PRIMARY)
+        .and_then(|f| f.display_value().to_string().into());
+
+    let lens_model = exif_reader
+        .get_field(exif::Tag::LensModel, exif::In::PRIMARY)
+        .and_then(|f| f.display_value().to_string().into());
+
+    let focal_length = exif_reader
+        .get_field(exif::Tag::FocalLength, exif::In::PRIMARY)
+        .and_then(|f| {
+            let val = f.display_value().to_string();
+            if val.contains("mm") {
+                Some(val)
+            } else {
+                Some(format!("{} mm", val))
+            }
+        });
+
+    let aperture = exif_reader
+        .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
+        .and_then(|f| Some(format!("f/{}", f.display_value().to_string())));
+
+    let shutter_speed = exif_reader
+        .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
+        .and_then(|f| {
+            let val = f.display_value().to_string();
+            if val.contains("s") {
+                Some(val)
+            } else {
+                Some(format!("{} s", val))
+            }
+        });
+
+    let iso = exif_reader
+        .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
+        .and_then(|f| Some(format!("ISO {}", f.display_value().to_string())));
+
+    (
+        camera_make,
+        camera_model,
+        lens_model,
+        focal_length,
+        aperture,
+        shutter_speed,
+        iso,
+    )
 }
 
 // Server function to get site configuration from environment variables
