@@ -248,7 +248,7 @@ fn HomePage() -> impl IntoView {
                                             <div class="empty-gallery">
                                                 <p>"No photos found."</p>
                                                 <p class="hint">
-                                                    "Add photos to " <code>"public/images/gallery/"</code>
+                                                    "Add photos to " <code>"public/images/home/"</code>
                                                     " to see them here."
                                                 </p>
                                             </div>
@@ -1188,17 +1188,17 @@ pub struct PhotoInfo {
     pub iso: Option<String>,
 }
 
-// Server function to read gallery photos from the gallery directory
+// Server function to read gallery photos from the home directory
 #[server(GetGalleryPhotos, "/api")]
 pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
     // Read from a dedicated images directory that can be mounted/configured at runtime
-    // Default to ./images/gallery for production, public/images/gallery for development
+    // Default to ./images/home for production, public/images/home for development
     let gallery_path = std::env::var("GALLERY_PATH").unwrap_or_else(|_| {
         // Check if we're in development (public directory exists) or production
-        if Path::new("public/images/gallery").exists() {
-            "public/images/gallery".to_string()
+        if Path::new("public/images/home").exists() {
+            "public/images/home".to_string()
         } else {
-            "./images/gallery".to_string()
+            "./images/home".to_string()
         }
     });
 
@@ -1489,8 +1489,8 @@ pub async fn get_galleries() -> Result<Vec<GalleryInfo>, ServerFnError> {
                 let name = dir_name.to_string_lossy().to_string();
                 let slug = name.to_lowercase().replace(' ', "-");
 
-                // Skip "gallery" since it's shown on the home page
-                if slug == "gallery" {
+                // Skip "home" since it's shown on the home page
+                if slug == "home" {
                     continue;
                 }
 
