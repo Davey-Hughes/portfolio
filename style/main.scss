@@ -138,35 +138,81 @@ img {
   }
 }
 
-// Photo grid for homepage
+// Photo grid for homepage - Mosaic layout
 .photo-grid-home {
   max-width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: 300px;
+  grid-auto-flow: dense;
+  gap: 1rem;
+  padding: 2rem;
+  background-color: #fafafa;
 }
 
 .photo-hero-link {
   display: block;
   text-decoration: none;
   color: inherit;
-}
-
-.photo-hero-section {
   position: relative;
-  height: 85vh;
   overflow: hidden;
-  background-color: #fafafa;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background-color: #fff;
+
+  &.wide-landscape {
+    grid-column: span 2;
+    grid-row: span 1;
+  }
+
+  &.landscape {
+    grid-column: span 2;
+    grid-row: span 1;
+  }
+
+  &.landscape-square {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+
+  &.portrait {
+    grid-column: span 1;
+    grid-row: span 2;
+  }
+
+  &.tall-portrait {
+    grid-column: span 1;
+    grid-row: span 2;
+  }
+
+  &.portrait-square {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+
+  &.square {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
 
   &:hover {
     .photo-hero-image img {
-      transform: scale(1.03);
+      transform: scale(1.08);
     }
 
     .photo-hero-caption {
       opacity: 1;
     }
   }
+}
+
+.photo-hero-section {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #fafafa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .photo-hero-image {
@@ -181,7 +227,7 @@ img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
   }
 }
 
@@ -190,17 +236,17 @@ img {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 3rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+  padding: 2rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
   color: white;
   z-index: 10;
   opacity: 0;
   transition: opacity 0.4s ease;
 
   h2 {
-    font-size: 2.5rem;
+    font-size: 1.5rem;
     font-weight: 300;
-    letter-spacing: 3px;
+    letter-spacing: 2px;
     text-transform: uppercase;
     margin: 0;
   }
@@ -819,15 +865,19 @@ img {
     letter-spacing: 5px;
   }
 
-  .photo-hero-section {
-    height: 70vh;
+  .photo-grid-home {
+    grid-template-columns: repeat(3, 1fr);
+    grid-auto-rows: 250px;
+    grid-auto-flow: dense;
+    gap: 0.75rem;
+    padding: 1.5rem;
   }
 
   .photo-hero-caption {
-    padding: 2rem;
+    padding: 1.5rem;
 
     h2 {
-      font-size: 1.8rem;
+      font-size: 1.3rem;
     }
   }
 
@@ -885,16 +935,33 @@ img {
     letter-spacing: 2px;
   }
 
-  .photo-hero-section {
-    height: 60vh;
+  .photo-grid-home {
+    grid-template-columns: repeat(2, 1fr);
+    grid-auto-rows: 200px;
+    grid-auto-flow: dense;
+    gap: 0.5rem;
+    padding: 1rem;
+
+    // On mobile, make landscape images span both columns
+    .photo-hero-link.landscape,
+    .photo-hero-link.wide-landscape {
+      grid-column: span 2;
+      grid-row: span 1;
+    }
+
+    .photo-hero-link.portrait,
+    .photo-hero-link.tall-portrait {
+      grid-column: span 1;
+      grid-row: span 2;
+    }
   }
 
   .photo-hero-caption {
-    padding: 1.5rem;
+    padding: 1rem;
 
     h2 {
-      font-size: 1.3rem;
-      letter-spacing: 2px;
+      font-size: 1.1rem;
+      letter-spacing: 1px;
     }
   }
 

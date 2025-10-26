@@ -2,12 +2,12 @@ use crate::config::SiteConfig;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,7 @@ use std::fs;
 #[cfg(feature = "ssr")]
 use std::path::Path;
 
+#[must_use]
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
         <!DOCTYPE html>
@@ -76,10 +77,10 @@ fn ConditionalFooter() -> impl IntoView {
     view! {
         {move || {
             let pathname = location.pathname.get();
-            if !pathname.starts_with("/photo/") {
-                view! { <Footer /> }.into_any()
-            } else {
+            if pathname.starts_with("/photo/") {
                 view! { <div></div> }.into_any()
+            } else {
+                view! { <Footer /> }.into_any()
             }
         }}
     }
@@ -236,10 +237,44 @@ fn HomePage() -> impl IntoView {
                                                 let photo_slug = photo.slug.clone();
                                                 let photo_url = photo.url.clone();
                                                 let photo_title = photo.title.clone();
+                                                let orientation_class = if let (Some(w), Some(h)) = (
+                                                    photo.width,
+                                                    photo.height,
+                                                ) {
+                                                    let ratio = f64::from(w) / f64::from(h);
+                                                    if ratio > 1.8 {
+                                                        "wide-landscape"
+                                                    } else if ratio > 1.3 {
+                                                        "landscape"
+                                                    } else if ratio > 1.05 {
+                                                        "landscape-square"
+                                                    } else if ratio > 0.95 {
+                                                        "square"
+                                                    } else if ratio > 0.75 {
+                                                        "portrait-square"
+                                                    } else if ratio > 0.55 {
+                                                        "portrait"
+                                                    } else {
+                                                        "tall-portrait"
+                                                    }
+                                                } else {
+                                                    "square"
+                                                };
+
+                                                // Determine orientation based on width/height with more granular sizing
+                                                // Very wide: 2x1
+                                                // Moderately wide: 2x1
+                                                // Slightly wide: 1x1 (helps fill gaps)
+                                                // Nearly square: 1x1
+                                                // Slightly tall: 1x1 (helps fill gaps)
+                                                // Moderately tall: 1x2
+                                                // Very tall: 1x2
+                                                // default fallback
+
                                                 view! {
-                                                    <A
+                                                    <a
                                                         href=format!("/photo/{}", photo_slug)
-                                                        attr:class="photo-hero-link"
+                                                        class=format!("photo-hero-link {}", orientation_class)
                                                     >
                                                         <div class="photo-hero-section">
                                                             <div class="photo-hero-image">
@@ -249,7 +284,7 @@ fn HomePage() -> impl IntoView {
                                                                 <h2>{photo_title}</h2>
                                                             </div>
                                                         </div>
-                                                    </A>
+                                                    </a>
                                                 }
                                             })
                                             .collect_view()
@@ -276,8 +311,8 @@ struct PhotoParams {
 #[component]
 fn PhotoDetailPage() -> impl IntoView {
     let params = use_params::<PhotoParams>();
-    let photos = Resource::new(|| (), |_| async { get_gallery_photos().await });
-    let config = Resource::new(|| (), |_| async { get_site_config().await });
+    let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
     let is_fullscreen = RwSignal::new(false);
     let zoom_level = RwSignal::new(1.0);
     let pan_x = RwSignal::new(0.0);
@@ -330,15 +365,15 @@ fn PhotoDetailPage() -> impl IntoView {
         // Use the zoom slider to zoom in/out
     };
 
-    let on_image_dblclick = move |_ev: leptos::ev::MouseEvent| {
-        _ev.stop_propagation();
-        _ev.prevent_default();
+    let on_image_dblclick = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        ev.prevent_default();
         // Toggle between 1x and 2x zoom
-        if zoom_level.get() == 1.0 {
+        if (zoom_level.get() - 1.0).abs() < 0.1 {
             #[cfg(feature = "hydrate")]
             {
                 // Get the click position relative to the viewport center
-                let mouse_event = _ev.unchecked_ref::<web_sys::MouseEvent>();
+                let mouse_event = ev.unchecked_ref::<web_sys::MouseEvent>();
                 if let Some(target) = mouse_event.target() {
                     if let Some(element) = target.dyn_ref::<web_sys::Element>() {
                         let rect = element.get_bounding_client_rect();
@@ -404,11 +439,11 @@ fn PhotoDetailPage() -> impl IntoView {
         }
     };
 
-    let on_touch_start = move |_ev: leptos::ev::TouchEvent| {
+    let on_touch_start = move |ev: leptos::ev::TouchEvent| {
         #[cfg(feature = "hydrate")]
         {
             use leptos::wasm_bindgen::JsCast;
-            let touch_event = _ev.unchecked_ref::<web_sys::TouchEvent>();
+            let touch_event = ev.unchecked_ref::<web_sys::TouchEvent>();
             let touches = touch_event.touches();
             if touches.length() == 2 {
                 // Pinch zoom starting
@@ -431,11 +466,11 @@ fn PhotoDetailPage() -> impl IntoView {
         }
     };
 
-    let on_touch_move = move |_ev: leptos::ev::TouchEvent| {
+    let on_touch_move = move |ev: leptos::ev::TouchEvent| {
         #[cfg(feature = "hydrate")]
         {
             use leptos::wasm_bindgen::JsCast;
-            let touch_event = _ev.unchecked_ref::<web_sys::TouchEvent>();
+            let touch_event = ev.unchecked_ref::<web_sys::TouchEvent>();
             let touches = touch_event.touches();
             if touches.length() == 2 {
                 // Pinch zoom
@@ -447,7 +482,7 @@ fn PhotoDetailPage() -> impl IntoView {
                 let distance = (dx * dx + dy * dy).sqrt();
 
                 let scale = distance / initial_pinch_distance.get();
-                let new_zoom = (initial_zoom.get() * scale).max(1.0).min(10.0);
+                let new_zoom = (initial_zoom.get() * scale).clamp(1.0, 10.0);
                 zoom_level.set(new_zoom);
 
                 if (new_zoom - 1.0).abs() < 0.01 {
@@ -480,9 +515,21 @@ fn PhotoDetailPage() -> impl IntoView {
                         .map(move |photos_result| match photos_result {
                             Ok(photo_list) => {
                                 if let Some(slug_val) = slug.clone() {
-                                    if let Some((idx, photo)) = photo_list.iter().enumerate().find(|(_, p)| p.slug == slug_val) {
-                                        let prev_photo = if idx > 0 { photo_list.get(idx - 1) } else { None };
-                                        let next_photo = if idx < photo_list.len() - 1 { photo_list.get(idx + 1) } else { None };
+                                    if let Some((idx, photo)) = photo_list
+                                        .iter()
+                                        .enumerate()
+                                        .find(|(_, p)| p.slug == slug_val)
+                                    {
+                                        let prev_photo = if idx > 0 {
+                                            photo_list.get(idx - 1)
+                                        } else {
+                                            None
+                                        };
+                                        let next_photo = if idx < photo_list.len() - 1 {
+                                            photo_list.get(idx + 1)
+                                        } else {
+                                            None
+                                        };
                                         let photo_url = photo.url.clone();
                                         let photo_url_fs = photo.url.clone();
                                         let photo_title = photo.title.clone();
@@ -530,9 +577,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                                 .zip(photo.camera_model.as_ref())
                                                                                 .map(|(make, model)| {
                                                                                     view! {
-                                                                                        <p class="exif-value">
-                                                                                            {format!("{} {}", make, model)}
-                                                                                        </p>
+                                                                                        <p class="exif-value">{format!("{} {}", make, model)}</p>
                                                                                     }
                                                                                 })
                                                                                 .or_else(|| {
@@ -557,10 +602,8 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                         </div>
                                                                     }
                                                                 })}
-                                                            {if photo.focal_length.is_some()
-                                                                || photo.aperture.is_some()
-                                                                || photo.shutter_speed.is_some()
-                                                                || photo.iso.is_some()
+                                                            {if photo.focal_length.is_some() || photo.aperture.is_some()
+                                                                || photo.shutter_speed.is_some() || photo.iso.is_some()
                                                             {
                                                                 view! {
                                                                     <div class="exif-section">
@@ -611,8 +654,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                     "← Previous"
                                                                 </A>
                                                             }
-                                                        })}
-                                                    <div class="photo-nav-copyright">
+                                                        })} <div class="photo-nav-copyright">
                                                         <Suspense fallback=move || {
                                                             view! { <p>"© 2025 All rights reserved."</p> }
                                                         }>
@@ -621,12 +663,10 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                     .get()
                                                                     .map(|config_result| match config_result {
                                                                         Ok(cfg) => {
-                                                                            view! { <p>{cfg.site_copyright.clone()}</p> }
-                                                                                .into_any()
+                                                                            view! { <p>{cfg.site_copyright.clone()}</p> }.into_any()
                                                                         }
                                                                         Err(_) => {
-                                                                            view! { <p>"© 2025 All rights reserved."</p> }
-                                                                                .into_any()
+                                                                            view! { <p>"© 2025 All rights reserved."</p> }.into_any()
                                                                         }
                                                                     })
                                                             }}
@@ -768,7 +808,7 @@ fn ContactPage() -> impl IntoView {
     let email = RwSignal::new(String::new());
     let message = RwSignal::new(String::new());
     let submitted = RwSignal::new(false);
-    let config = Resource::new(|| (), |_| async { get_site_config().await });
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -904,6 +944,8 @@ pub struct PhotoInfo {
     pub title: String,
     pub filename: String,
     pub slug: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub date_taken: Option<String>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
@@ -953,6 +995,8 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
 
                         // Extract EXIF data
                         let (
+                            width,
+                            height,
                             date_taken,
                             camera_make,
                             camera_model,
@@ -968,6 +1012,8 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                             title,
                             filename: filename_str,
                             slug,
+                            width,
+                            height,
                             date_taken,
                             camera_make,
                             camera_model,
@@ -990,43 +1036,64 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
 }
 
 #[cfg(feature = "ssr")]
-fn extract_exif_data(
-    path: &Path,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+type ExifData = (
+    Option<u32>,    // width
+    Option<u32>,    // height
+    Option<String>, // date_taken
+    Option<String>, // camera_make
+    Option<String>, // camera_model
+    Option<String>, // lens_model
+    Option<String>, // focal_length
+    Option<String>, // aperture
+    Option<String>, // shutter_speed
+    Option<String>, // iso
+);
+
+#[cfg(feature = "ssr")]
+fn extract_exif_data(path: &Path) -> ExifData {
     use std::fs::File;
     use std::io::BufReader;
 
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (None, None, None, None, None, None, None, None),
+    let Ok(file) = File::open(path) else {
+        return (None, None, None, None, None, None, None, None, None, None);
     };
 
     let mut reader = BufReader::new(file);
-    let exif_reader = match exif::Reader::new().read_from_container(&mut reader) {
-        Ok(r) => r,
-        Err(_) => return (None, None, None, None, None, None, None, None),
+    let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut reader) else {
+        return (None, None, None, None, None, None, None, None, None, None);
     };
+
+    let mut width = exif_reader
+        .get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::ImageWidth, exif::In::PRIMARY))
+        .and_then(|f| f.value.get_uint(0));
+
+    let mut height = exif_reader
+        .get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::ImageLength, exif::In::PRIMARY))
+        .and_then(|f| f.value.get_uint(0));
+
+    // If EXIF didn't have dimensions, try reading image dimensions from file header
+    if width.is_none() || height.is_none() {
+        if let Ok(reader) = image::ImageReader::open(path) {
+            if let Ok(dimensions) = reader.into_dimensions() {
+                width = Some(dimensions.0);
+                height = Some(dimensions.1);
+            }
+        }
+    }
 
     let date_taken = exif_reader
         .get_field(exif::Tag::DateTime, exif::In::PRIMARY)
         .or_else(|| exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY))
-        .and_then(|f| {
+        .map(|f| {
             let datetime_str = f.display_value().to_string();
             // Remove seconds from format "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD HH:MM"
             // or from "YYYY:MM:DD HH:MM:SS" -> "YYYY:MM:DD HH:MM"
             if let Some(last_colon_idx) = datetime_str.rfind(':') {
-                Some(datetime_str[..last_colon_idx].to_string())
+                datetime_str[..last_colon_idx].to_string()
             } else {
-                Some(datetime_str)
+                datetime_str
             }
         });
 
@@ -1044,35 +1111,37 @@ fn extract_exif_data(
 
     let focal_length = exif_reader
         .get_field(exif::Tag::FocalLength, exif::In::PRIMARY)
-        .and_then(|f| {
+        .map(|f| {
             let val = f.display_value().to_string();
             if val.contains("mm") {
-                Some(val)
+                val
             } else {
-                Some(format!("{} mm", val))
+                format!("{} mm", val)
             }
         });
 
     let aperture = exif_reader
         .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
-        .and_then(|f| Some(format!("f/{}", f.display_value().to_string())));
+        .map(|f| format!("f/{}", f.display_value()));
 
     let shutter_speed = exif_reader
         .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
-        .and_then(|f| {
+        .map(|f| {
             let val = f.display_value().to_string();
             if val.contains("s") {
-                Some(val)
+                val
             } else {
-                Some(format!("{} s", val))
+                format!("{} s", val)
             }
         });
 
     let iso = exif_reader
         .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
-        .and_then(|f| Some(format!("ISO {}", f.display_value().to_string())));
+        .map(|f| format!("ISO {}", f.display_value().to_string()));
 
     (
+        width,
+        height,
         date_taken,
         camera_make,
         camera_model,
