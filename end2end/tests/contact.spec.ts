@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Contact Page", () => {
   test("should load and display contact page", async ({ page }) => {
-    await page.goto("/contact");
+    await page.goto("/contact", { waitUntil: "networkidle" });
 
     // Check page title
     await expect(page).toHaveTitle("Photography Portfolio");
@@ -12,7 +12,7 @@ test.describe("Contact Page", () => {
   });
 
   test("should display contact information", async ({ page }) => {
-    await page.goto("/contact");
+    await page.goto("/contact", { waitUntil: "networkidle" });
 
     // Contact info should be visible
     const contactInfo = page.locator(".contact-info");
@@ -20,7 +20,7 @@ test.describe("Contact Page", () => {
   });
 
   test("should have footer on contact page", async ({ page }) => {
-    await page.goto("/contact");
+    await page.goto("/contact", { waitUntil: "networkidle" });
 
     // Footer should be visible
     const footer = page.locator("footer");

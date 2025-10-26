@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("About Page", () => {
   test("should load and display about page", async ({ page }) => {
-    await page.goto("/about");
+    await page.goto("/about", { waitUntil: "networkidle" });
 
     // Check page title
     await expect(page).toHaveTitle("Photography Portfolio");
@@ -12,7 +12,7 @@ test.describe("About Page", () => {
   });
 
   test("should display about content text", async ({ page }) => {
-    await page.goto("/about");
+    await page.goto("/about", { waitUntil: "networkidle" });
 
     // Wait for content to load
     await page.waitForSelector(".about-content", { timeout: 5000 });
@@ -27,7 +27,7 @@ test.describe("About Page", () => {
   });
 
   test("should display profile image if available", async ({ page }) => {
-    await page.goto("/about");
+    await page.goto("/about", { waitUntil: "networkidle" });
 
     // Check if profile image exists
     const profileImage = page.locator(".profile-image");
@@ -43,7 +43,7 @@ test.describe("About Page", () => {
   });
 
   test("should have footer on about page", async ({ page }) => {
-    await page.goto("/about");
+    await page.goto("/about", { waitUntil: "networkidle" });
 
     // Footer should be visible
     const footer = page.locator("footer");

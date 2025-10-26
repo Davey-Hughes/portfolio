@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Navigation", () => {
   test("should navigate to About page", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Click on About link
     await page.click('nav a[href="/about"]');
@@ -15,7 +15,7 @@ test.describe("Navigation", () => {
   });
 
   test("should navigate to Contact page", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Click on Contact link
     await page.click('nav a[href="/contact"]');
@@ -28,7 +28,7 @@ test.describe("Navigation", () => {
   });
 
   test("should navigate back to home from About", async ({ page }) => {
-    await page.goto("/about");
+    await page.goto("/about", { waitUntil: "networkidle" });
 
     // Click on home/brand link
     await page.click('nav a[href="/"]');
@@ -38,7 +38,7 @@ test.describe("Navigation", () => {
   });
 
   test("should show dropdown menu for galleries if they exist", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Check if galleries dropdown exists
     const galleriesDropdown = page.locator(".galleries-dropdown");
@@ -54,7 +54,7 @@ test.describe("Navigation", () => {
     const pages = ["/", "/about", "/contact"];
 
     for (const pagePath of pages) {
-      await page.goto(pagePath);
+      await page.goto(pagePath, { waitUntil: "networkidle" });
       
       // Navigation should always be visible
       await expect(page.locator("nav.navbar")).toBeVisible();

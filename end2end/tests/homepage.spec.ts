@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Homepage", () => {
   test("should load and display the homepage", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Check that the page title is correct
     await expect(page).toHaveTitle("Photography Portfolio");
@@ -12,7 +12,7 @@ test.describe("Homepage", () => {
   });
 
   test("should display site name in navigation", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for navigation to load
     const navBrand = page.locator(".nav-brand");
@@ -23,7 +23,7 @@ test.describe("Homepage", () => {
   });
 
   test("should have working navigation links", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Check that About link exists and is clickable
     const aboutLink = page.locator('nav a[href="/about"]');
@@ -35,7 +35,7 @@ test.describe("Homepage", () => {
   });
 
   test("should display home gallery photos", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photos to load
     await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
@@ -46,7 +46,7 @@ test.describe("Homepage", () => {
   });
 
   test("should have footer on homepage", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Footer should be visible on homepage
     const footer = page.locator("footer");

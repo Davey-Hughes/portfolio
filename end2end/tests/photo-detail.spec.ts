@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Photo Detail Page", () => {
   test("should display photo detail page", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photos and click on first one
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
@@ -22,7 +22,7 @@ test.describe("Photo Detail Page", () => {
   });
 
   test("should display full-size image", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
     
@@ -40,7 +40,7 @@ test.describe("Photo Detail Page", () => {
   });
 
   test("should show EXIF data if available", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
     
@@ -62,7 +62,7 @@ test.describe("Photo Detail Page", () => {
   });
 
   test("should not show footer on photo detail page", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
     
@@ -84,7 +84,7 @@ test.describe("Photo Detail Page", () => {
   });
 
   test("should have navigation controls", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
     
@@ -106,7 +106,7 @@ test.describe("Photo Detail Page", () => {
   });
 
   test("should support keyboard navigation", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
     
@@ -135,7 +135,7 @@ test.describe("Photo Detail Page", () => {
     // Set mobile viewport
     await page.setViewportSize({ width: 375, height: 667 });
     
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "networkidle" });
 
     await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
     
