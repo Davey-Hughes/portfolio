@@ -976,19 +976,45 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
     }
 
     let mut photos = Vec::new();
+    let gallery_path_buf = Path::new(&gallery_path).to_path_buf();
 
-    if let Ok(entries) = fs::read_dir(&gallery_path) {
+    // Recursively find all images
+    find_images_recursive(&gallery_path_buf, &gallery_path_buf, &mut photos);
+
+    // Sort by filename for consistent ordering
+    photos.sort_by(|a, b| a.filename.cmp(&b.filename));
+
+    Ok(photos)
+}
+
+#[cfg(feature = "ssr")]
+fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<PhotoInfo>) {
+    if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(extension) = path.extension() {
+
+            if path.is_dir() {
+                // Recursively search subdirectories
+                find_images_recursive(&path, gallery_root, photos);
+            } else if let Some(extension) = path.extension() {
                 let ext = extension.to_string_lossy().to_lowercase();
                 if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
                     if let Some(filename) = path.file_name() {
                         let filename_str = filename.to_string_lossy().to_string();
-                        let slug = filename_str
+
+                        // Calculate the relative path from gallery root
+                        let relative_path = path
+                            .strip_prefix(gallery_root)
+                            .unwrap_or(&path)
+                            .to_string_lossy()
+                            .to_string();
+
+                        // Create slug from relative path (unique identifier)
+                        let slug = relative_path
                             .trim_end_matches(&format!(".{}", ext))
                             .to_lowercase()
-                            .replace(' ', "-");
+                            .replace(['/', '\\', ' '], "-");
+
                         let title = filename_str
                             .trim_end_matches(&format!(".{}", ext))
                             .replace(['-', '_'], " ");
@@ -1008,7 +1034,7 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                         ) = extract_exif_data(&path);
 
                         photos.push(PhotoInfo {
-                            url: format!("/images/gallery/{}", filename_str),
+                            url: format!("/images/gallery/{}", relative_path),
                             title,
                             filename: filename_str,
                             slug,
@@ -1028,11 +1054,6 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
             }
         }
     }
-
-    // Sort by filename for consistent ordering
-    photos.sort_by(|a, b| a.filename.cmp(&b.filename));
-
-    Ok(photos)
 }
 
 #[cfg(feature = "ssr")]
