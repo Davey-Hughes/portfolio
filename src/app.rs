@@ -232,14 +232,13 @@ fn HomePage() -> impl IntoView {
                                     } else {
                                         photo_list
                                             .into_iter()
-                                            .enumerate()
-                                            .map(|(idx, photo)| {
-                                                let photo_id = idx.to_string();
+                                            .map(|photo| {
+                                                let photo_slug = photo.slug.clone();
                                                 let photo_url = photo.url.clone();
                                                 let photo_title = photo.title.clone();
                                                 view! {
                                                     <A
-                                                        href=format!("/photo/{}", photo_id)
+                                                        href=format!("/photo/{}", photo_slug)
                                                         attr:class="photo-hero-link"
                                                     >
                                                         <div class="photo-hero-section">
@@ -447,19 +446,15 @@ fn PhotoDetailPage() -> impl IntoView {
                 view! { <div class="loading">"Loading photo..."</div> }
             }>
                 {move || {
-                    let id_result = params.get().map(|p| p.id.parse::<usize>().ok()).ok().flatten();
+                    let slug = params.get().map(|p| p.id.clone()).ok();
                     photos
                         .get()
                         .map(move |photos_result| match photos_result {
                             Ok(photo_list) => {
-                                if let Some(id) = id_result {
-                                    if let Some(photo) = photo_list.get(id) {
-                                        let prev_id = if id > 0 { Some(id - 1) } else { None };
-                                        let next_id = if id < photo_list.len() - 1 {
-                                            Some(id + 1)
-                                        } else {
-                                            None
-                                        };
+                                if let Some(slug_val) = slug.clone() {
+                                    if let Some((idx, photo)) = photo_list.iter().enumerate().find(|(_, p)| p.slug == slug_val) {
+                                        let prev_photo = if idx > 0 { photo_list.get(idx - 1) } else { None };
+                                        let next_photo = if idx < photo_list.len() - 1 { photo_list.get(idx + 1) } else { None };
                                         let photo_url = photo.url.clone();
                                         let photo_url_fs = photo.url.clone();
                                         let photo_title = photo.title.clone();
@@ -578,11 +573,11 @@ fn PhotoDetailPage() -> impl IntoView {
                                                     </div>
                                                 </div>
                                                 <div class="photo-navigation">
-                                                    {prev_id
+                                                    {prev_photo
                                                         .map(|prev| {
                                                             view! {
                                                                 <A
-                                                                    href=format!("/photo/{}", prev)
+                                                                    href=format!("/photo/{}", prev.slug)
                                                                     attr:class="nav-button nav-prev"
                                                                 >
                                                                     "← Previous"
@@ -609,11 +604,11 @@ fn PhotoDetailPage() -> impl IntoView {
                                                             }}
                                                         </Suspense>
                                                     </div>
-                                                    {next_id
+                                                    {next_photo
                                                         .map(|next| {
                                                             view! {
                                                                 <A
-                                                                    href=format!("/photo/{}", next)
+                                                                    href=format!("/photo/{}", next.slug)
                                                                     attr:class="nav-button nav-next"
                                                                 >
                                                                     "Next →"
@@ -880,6 +875,7 @@ pub struct PhotoInfo {
     pub url: String,
     pub title: String,
     pub filename: String,
+    pub slug: String,
     pub date_taken: Option<String>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
@@ -919,6 +915,10 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                 if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
                     if let Some(filename) = path.file_name() {
                         let filename_str = filename.to_string_lossy().to_string();
+                        let slug = filename_str
+                            .trim_end_matches(&format!(".{}", ext))
+                            .to_lowercase()
+                            .replace(' ', "-");
                         let title = filename_str
                             .trim_end_matches(&format!(".{}", ext))
                             .replace(['-', '_'], " ");
@@ -939,6 +939,7 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                             url: format!("/images/gallery/{}", filename_str),
                             title,
                             filename: filename_str,
+                            slug,
                             date_taken,
                             camera_make,
                             camera_model,
