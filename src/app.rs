@@ -483,6 +483,17 @@ fn PhotoDetailPage() -> impl IntoView {
                                                         <h1>{photo_title}</h1>
                                                         <div class="photo-exif">
                                                             {photo
+                                                                .date_taken
+                                                                .as_ref()
+                                                                .map(|date| {
+                                                                    view! {
+                                                                        <div class="exif-section">
+                                                                            <h3 class="exif-heading">"Date"</h3>
+                                                                            <p class="exif-value">{date.clone()}</p>
+                                                                        </div>
+                                                                    }
+                                                                })}
+                                                            {photo
                                                                 .camera_make
                                                                 .as_ref()
                                                                 .or(photo.camera_model.as_ref())
@@ -869,6 +880,7 @@ pub struct PhotoInfo {
     pub url: String,
     pub title: String,
     pub filename: String,
+    pub date_taken: Option<String>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
     pub lens_model: Option<String>,
@@ -913,6 +925,7 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
 
                         // Extract EXIF data
                         let (
+                            date_taken,
                             camera_make,
                             camera_model,
                             lens_model,
@@ -926,6 +939,7 @@ pub async fn get_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
                             url: format!("/images/gallery/{}", filename_str),
                             title,
                             filename: filename_str,
+                            date_taken,
                             camera_make,
                             camera_model,
                             lens_model,
@@ -957,20 +971,35 @@ fn extract_exif_data(
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
 ) {
     use std::fs::File;
     use std::io::BufReader;
 
     let file = match File::open(path) {
         Ok(f) => f,
-        Err(_) => return (None, None, None, None, None, None, None),
+        Err(_) => return (None, None, None, None, None, None, None, None),
     };
 
     let mut reader = BufReader::new(file);
     let exif_reader = match exif::Reader::new().read_from_container(&mut reader) {
         Ok(r) => r,
-        Err(_) => return (None, None, None, None, None, None, None),
+        Err(_) => return (None, None, None, None, None, None, None, None),
     };
+
+    let date_taken = exif_reader
+        .get_field(exif::Tag::DateTime, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY))
+        .and_then(|f| {
+            let datetime_str = f.display_value().to_string();
+            // Remove seconds from format "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD HH:MM"
+            // or from "YYYY:MM:DD HH:MM:SS" -> "YYYY:MM:DD HH:MM"
+            if let Some(last_colon_idx) = datetime_str.rfind(':') {
+                Some(datetime_str[..last_colon_idx].to_string())
+            } else {
+                Some(datetime_str)
+            }
+        });
 
     let camera_make = exif_reader
         .get_field(exif::Tag::Make, exif::In::PRIMARY)
@@ -1015,6 +1044,7 @@ fn extract_exif_data(
         .and_then(|f| Some(format!("ISO {}", f.display_value().to_string())));
 
     (
+        date_taken,
         camera_make,
         camera_model,
         lens_model,
