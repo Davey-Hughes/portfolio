@@ -495,9 +495,9 @@ img {
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
-  transition: transform 0.1s ease-out;
   transform-origin: center center;
   pointer-events: auto;
+  will-change: transform;
 }
 
 // Loading and empty states
