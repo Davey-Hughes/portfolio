@@ -269,6 +269,10 @@ fn PhotoDetailPage() -> impl IntoView {
     let is_panning = RwSignal::new(false);
     let start_x = RwSignal::new(0.0);
     let start_y = RwSignal::new(0.0);
+    #[cfg(feature = "hydrate")]
+    let initial_pinch_distance = RwSignal::new(0.0);
+    #[cfg(feature = "hydrate")]
+    let initial_zoom = RwSignal::new(1.0);
 
     let toggle_fullscreen = move |_| {
         is_fullscreen.update(|val| *val = !*val);
@@ -354,6 +358,70 @@ fn PhotoDetailPage() -> impl IntoView {
                 }
             });
         }
+    };
+
+    let on_touch_start = move |_ev: leptos::ev::TouchEvent| {
+        #[cfg(feature = "hydrate")]
+        {
+            use leptos::wasm_bindgen::JsCast;
+            let touch_event = _ev.unchecked_ref::<web_sys::TouchEvent>();
+            let touches = touch_event.touches();
+            if touches.length() == 2 {
+                // Pinch zoom starting
+                touch_event.prevent_default();
+                let touch0 = touches.get(0).unwrap();
+                let touch1 = touches.get(1).unwrap();
+                let dx = f64::from(touch1.client_x() - touch0.client_x());
+                let dy = f64::from(touch1.client_y() - touch0.client_y());
+                let distance = (dx * dx + dy * dy).sqrt();
+                initial_pinch_distance.set(distance);
+                initial_zoom.set(zoom_level.get());
+            } else if touches.length() == 1 && zoom_level.get() > 1.0 {
+                // Single finger panning
+                touch_event.prevent_default();
+                let touch = touches.get(0).unwrap();
+                is_panning.set(true);
+                start_x.set(f64::from(touch.client_x()) - pan_x.get());
+                start_y.set(f64::from(touch.client_y()) - pan_y.get());
+            }
+        }
+    };
+
+    let on_touch_move = move |_ev: leptos::ev::TouchEvent| {
+        #[cfg(feature = "hydrate")]
+        {
+            use leptos::wasm_bindgen::JsCast;
+            let touch_event = _ev.unchecked_ref::<web_sys::TouchEvent>();
+            let touches = touch_event.touches();
+            if touches.length() == 2 {
+                // Pinch zoom
+                touch_event.prevent_default();
+                let touch0 = touches.get(0).unwrap();
+                let touch1 = touches.get(1).unwrap();
+                let dx = f64::from(touch1.client_x() - touch0.client_x());
+                let dy = f64::from(touch1.client_y() - touch0.client_y());
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                let scale = distance / initial_pinch_distance.get();
+                let new_zoom = (initial_zoom.get() * scale).max(1.0).min(10.0);
+                zoom_level.set(new_zoom);
+
+                if (new_zoom - 1.0).abs() < 0.01 {
+                    pan_x.set(0.0);
+                    pan_y.set(0.0);
+                }
+            } else if touches.length() == 1 && is_panning.get() && zoom_level.get() > 1.0 {
+                // Single finger panning
+                touch_event.prevent_default();
+                let touch = touches.get(0).unwrap();
+                pan_x.set(f64::from(touch.client_x()) - start_x.get());
+                pan_y.set(f64::from(touch.client_y()) - start_y.get());
+            }
+        }
+    };
+
+    let on_touch_end = move |_ev: leptos::ev::TouchEvent| {
+        is_panning.set(false);
     };
 
     view! {
@@ -556,6 +624,9 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                     on:mousemove=on_mouse_move
                                                                     on:mouseup=on_mouse_up
                                                                     on:mouseleave=on_mouse_up
+                                                                    on:touchstart=on_touch_start
+                                                                    on:touchmove=on_touch_move
+                                                                    on:touchend=on_touch_end
                                                                 />
                                                             </div>
                                                         }
