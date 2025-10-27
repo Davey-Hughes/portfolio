@@ -1,4 +1,5 @@
 use crate::server::*;
+use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
@@ -80,10 +81,59 @@ fn ConditionalFooter() -> impl IntoView {
     }
 }
 
+// Helper component for gallery navigation links
+#[component]
+fn GalleryNavLinks() -> impl IntoView {
+    let galleries = Resource::new(|| (), |()| async { get_galleries().await });
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || {
+                galleries
+                    .get()
+                    .and_then(|galleries_result| galleries_result.ok())
+                    .map(|gallery_list| {
+                        gallery_list
+                            .into_iter()
+                            .map(|gallery| {
+                                view! {
+                                    <li>
+                                        <A href=format!(
+                                            "/gallery/{}",
+                                            gallery.slug,
+                                        )>{gallery.name}</A>
+                                    </li>
+                                }
+                            })
+                            .collect_view()
+                    })
+            }}
+        </Suspense>
+    }
+}
+
+// Helper component for navigation links list
+#[component]
+fn NavLinksList() -> impl IntoView {
+    view! {
+        <ul class="nav-links">
+            <li>
+                <A href="/">"Home"</A>
+            </li>
+            <GalleryNavLinks />
+            <li>
+                <A href="/about">"About"</A>
+            </li>
+            <li>
+                <A href="/contact">"Contact"</A>
+            </li>
+        </ul>
+    }
+}
+
 #[component]
 fn Nav() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
-    let galleries = Resource::new(|| (), |()| async { get_galleries().await });
 
     view! {
         <nav class="navbar">
@@ -94,66 +144,17 @@ fn Nav() -> impl IntoView {
                     {move || {
                         config
                             .get()
-                            .map(|config_result| match config_result {
-                                Ok(cfg) => {
-                                    view! {
-                                        <A href="/" attr:class="nav-brand">
-                                            {cfg.site_name.clone()}
-                                        </A>
-                                        <ul class="nav-links">
-                                            <li>
-                                                <A href="/">"Home"</A>
-                                            </li>
-                                            <Suspense fallback=|| ()>
-                                                {move || {
-                                                    galleries
-                                                        .get()
-                                                        .and_then(|galleries_result| { galleries_result.ok() })
-                                                        .map(|gallery_list| {
-                                                            gallery_list
-                                                                .into_iter()
-                                                                .map(|gallery| {
-                                                                    view! {
-                                                                        <li>
-                                                                            <A href=format!(
-                                                                                "/gallery/{}",
-                                                                                gallery.slug,
-                                                                            )>{gallery.name}</A>
-                                                                        </li>
-                                                                    }
-                                                                })
-                                                                .collect_view()
-                                                        })
-                                                }}
-                                            </Suspense>
-                                            <li>
-                                                <A href="/about">"About"</A>
-                                            </li>
-                                            <li>
-                                                <A href="/contact">"Contact"</A>
-                                            </li>
-                                        </ul>
-                                    }
-                                        .into_any()
-                                }
-                                Err(_) => {
-                                    view! {
-                                        <A href="/" attr:class="nav-brand">
-                                            "Your Name"
-                                        </A>
-                                        <ul class="nav-links">
-                                            <li>
-                                                <A href="/">"Home"</A>
-                                            </li>
-                                            <li>
-                                                <A href="/about">"About"</A>
-                                            </li>
-                                            <li>
-                                                <A href="/contact">"Contact"</A>
-                                            </li>
-                                        </ul>
-                                    }
-                                        .into_any()
+                            .map(|config_result| {
+                                let site_name = config_result
+                                    .as_ref()
+                                    .map(|cfg| cfg.site_name.clone())
+                                    .unwrap_or_else(|_| "Your Name".to_string());
+
+                                view! {
+                                    <A href="/" attr:class="nav-brand">
+                                        {site_name}
+                                    </A>
+                                    <NavLinksList />
                                 }
                             })
                     }}
@@ -185,6 +186,77 @@ fn Footer() -> impl IntoView {
                 }}
             </Suspense>
         </footer>
+    }
+}
+
+// Helper function to determine orientation class from dimensions
+fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) -> &'static str {
+    if let (Some(w), Some(h)) = (width, height) {
+        let ratio = f64::from(w) / f64::from(h);
+        if ratio > 1.8 {
+            "wide-landscape"
+        } else if ratio > 1.3 {
+            "landscape"
+        } else if ratio > 1.05 {
+            "landscape-square"
+        } else if ratio > 0.95 {
+            "square"
+        } else if ratio > 0.75 {
+            "portrait-square"
+        } else if ratio > 0.55 {
+            "portrait"
+        } else {
+            "tall-portrait"
+        }
+    } else {
+        "square"
+    }
+}
+
+// Helper component for photo grid item
+#[component]
+fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
+    let photo_slug = photo.slug.clone();
+    let photo_url = photo.url.clone();
+    let photo_title = photo.title.clone();
+    let orientation_class = orientation_class_from_dimensions(photo.width, photo.height);
+
+    view! {
+        <a
+            href=format!("/photo/{}", photo_slug)
+            class=format!("photo-hero-link {}", orientation_class)
+        >
+            <div class="photo-hero-section">
+                <div class="photo-hero-image">
+                    <img src=photo_url alt=photo_title.clone() />
+                </div>
+                <div class="photo-hero-caption">
+                    <h2>{photo_title}</h2>
+                </div>
+            </div>
+        </a>
+    }
+}
+
+// Helper component for photo grid display
+#[component]
+fn PhotoGrid(photos: Vec<PhotoInfo>) -> impl IntoView {
+    if photos.is_empty() {
+        view! {
+            <div class="empty-gallery">
+                <p>"No photos found."</p>
+                <p class="hint">
+                    "Add photos to " <code>"public/images/home/"</code> " to see them here."
+                </p>
+            </div>
+        }
+        .into_any()
+    } else {
+        photos
+            .into_iter()
+            .map(|photo| view! { <PhotoGridItem photo=photo /> })
+            .collect_view()
+            .into_any()
     }
 }
 
@@ -236,77 +308,7 @@ fn HomePage() -> impl IntoView {
                             .get()
                             .map(|photos_result| match photos_result {
                                 Ok(photo_list) => {
-                                    if photo_list.is_empty() {
-                                        view! {
-                                            <div class="empty-gallery">
-                                                <p>"No photos found."</p>
-                                                <p class="hint">
-                                                    "Add photos to " <code>"public/images/home/"</code>
-                                                    " to see them here."
-                                                </p>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        photo_list
-                                            .into_iter()
-                                            .map(|photo| {
-                                                let photo_slug = photo.slug.clone();
-                                                let photo_url = photo.url.clone();
-                                                let photo_title = photo.title.clone();
-                                                let orientation_class = if let (Some(w), Some(h)) = (
-                                                    photo.width,
-                                                    photo.height,
-                                                ) {
-                                                    let ratio = f64::from(w) / f64::from(h);
-                                                    if ratio > 1.8 {
-                                                        "wide-landscape"
-                                                    } else if ratio > 1.3 {
-                                                        "landscape"
-                                                    } else if ratio > 1.05 {
-                                                        "landscape-square"
-                                                    } else if ratio > 0.95 {
-                                                        "square"
-                                                    } else if ratio > 0.75 {
-                                                        "portrait-square"
-                                                    } else if ratio > 0.55 {
-                                                        "portrait"
-                                                    } else {
-                                                        "tall-portrait"
-                                                    }
-                                                } else {
-                                                    "square"
-                                                };
-
-                                                // Determine orientation based on width/height with more granular sizing
-                                                // Very wide: 2x1
-                                                // Moderately wide: 2x1
-                                                // Slightly wide: 1x1 (helps fill gaps)
-                                                // Nearly square: 1x1
-                                                // Slightly tall: 1x1 (helps fill gaps)
-                                                // Moderately tall: 1x2
-                                                // Very tall: 1x2
-                                                // default fallback
-
-                                                view! {
-                                                    <a
-                                                        href=format!("/photo/{}", photo_slug)
-                                                        class=format!("photo-hero-link {}", orientation_class)
-                                                    >
-                                                        <div class="photo-hero-section">
-                                                            <div class="photo-hero-image">
-                                                                <img src=photo_url alt=photo_title.clone() />
-                                                            </div>
-                                                            <div class="photo-hero-caption">
-                                                                <h2>{photo_title}</h2>
-                                                            </div>
-                                                        </div>
-                                                    </a>
-                                                }
-                                            })
-                                            .collect_view()
-                                            .into_any()
-                                    }
+                                    view! { <PhotoGrid photos=photo_list /> }.into_any()
                                 }
                                 Err(_) => {
                                     view! { <div class="error">"Failed to load photos"</div> }
@@ -354,21 +356,9 @@ fn GalleryPage() -> impl IntoView {
                                 .get()
                                 .ok()
                                 .map(|p| {
-                                    let gallery_name = p
-                                        .name
-                                        .replace(['-', '_'], " ")
-                                        .split_whitespace()
-                                        .map(|word| {
-                                            let mut chars = word.chars();
-                                            match chars.next() {
-                                                None => String::new(),
-                                                Some(first) => {
-                                                    first.to_uppercase().collect::<String>() + chars.as_str()
-                                                }
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join(" ");
+                                    let gallery_name = normalize_display_key(
+                                        &p.name.replace(['-', '_'], " "),
+                                    );
                                     view! {
                                         <h1>{gallery_name.to_uppercase()}</h1>
                                         <p class="hero-tagline">
@@ -398,53 +388,7 @@ fn GalleryPage() -> impl IntoView {
                                         }
                                             .into_any()
                                     } else {
-                                        photo_list
-                                            .into_iter()
-                                            .map(|photo| {
-                                                let photo_slug = photo.slug.clone();
-                                                let photo_url = photo.url.clone();
-                                                let photo_title = photo.title.clone();
-                                                let orientation_class = if let (Some(w), Some(h)) = (
-                                                    photo.width,
-                                                    photo.height,
-                                                ) {
-                                                    let ratio = f64::from(w) / f64::from(h);
-                                                    if ratio > 1.8 {
-                                                        "wide-landscape"
-                                                    } else if ratio > 1.3 {
-                                                        "landscape"
-                                                    } else if ratio > 1.05 {
-                                                        "landscape-square"
-                                                    } else if ratio > 0.95 {
-                                                        "square"
-                                                    } else if ratio > 0.75 {
-                                                        "portrait-square"
-                                                    } else if ratio > 0.55 {
-                                                        "portrait"
-                                                    } else {
-                                                        "tall-portrait"
-                                                    }
-                                                } else {
-                                                    "square"
-                                                };
-                                                view! {
-                                                    <a
-                                                        href=format!("/photo/{}", photo_slug)
-                                                        class=format!("photo-hero-link {}", orientation_class)
-                                                    >
-                                                        <div class="photo-hero-section">
-                                                            <div class="photo-hero-image">
-                                                                <img src=photo_url alt=photo_title.clone() />
-                                                            </div>
-                                                            <div class="photo-hero-caption">
-                                                                <h2>{photo_title}</h2>
-                                                            </div>
-                                                        </div>
-                                                    </a>
-                                                }
-                                            })
-                                            .collect_view()
-                                            .into_any()
+                                        view! { <PhotoGrid photos=photo_list /> }.into_any()
                                     }
                                 }
                                 Err(_) => {
@@ -464,11 +408,91 @@ struct PhotoParams {
     id: String,
 }
 
+// Helper component for EXIF field display
+#[component]
+fn ExifField(heading: &'static str, value: String) -> impl IntoView {
+    view! {
+        <div class="exif-section">
+            <h3 class="exif-heading">{heading}</h3>
+            <p class="exif-value">{value}</p>
+        </div>
+    }
+}
+
+// Helper component for camera info
+#[component]
+fn CameraInfo(camera_make: Option<String>, camera_model: Option<String>) -> impl IntoView {
+    if camera_make.is_none() && camera_model.is_none() {
+        return view! { <div></div> }.into_any();
+    }
+
+    view! {
+        <div class="exif-section">
+            <h3 class="exif-heading">"Camera"</h3>
+            {match (camera_make, camera_model) {
+                (Some(make), Some(model)) => {
+                    view! { <p class="exif-value">{format!("{} {}", make, model)}</p> }.into_any()
+                }
+                (None, Some(model)) => view! { <p class="exif-value">{model}</p> }.into_any(),
+                (Some(make), None) => view! { <p class="exif-value">{make}</p> }.into_any(),
+                (None, None) => view! { <div></div> }.into_any(),
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+// Helper component for photo settings
+#[component]
+fn PhotoSettings(
+    focal_length: Option<String>,
+    aperture: Option<String>,
+    shutter_speed: Option<String>,
+    iso: Option<String>,
+) -> impl IntoView {
+    if focal_length.is_none() && aperture.is_none() && shutter_speed.is_none() && iso.is_none() {
+        return view! { <div></div> }.into_any();
+    }
+
+    view! {
+        <div class="exif-section">
+            <h3 class="exif-heading">"Settings"</h3>
+            <div class="exif-settings">
+                {focal_length.map(|fl| view! { <span class="exif-setting">{fl}</span> })}
+                {aperture.map(|ap| view! { <span class="exif-setting">{ap}</span> })}
+                {shutter_speed.map(|ss| view! { <span class="exif-setting">{ss}</span> })}
+                {iso.map(|iso_val| view! { <span class="exif-setting">{iso_val}</span> })}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+// Helper component for copyright footer
+#[component]
+fn CopyrightFooter() -> impl IntoView {
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
+
+    view! {
+        <Suspense fallback=move || {
+            view! { <p>"© 2025 All rights reserved."</p> }
+        }>
+            {move || {
+                config
+                    .get()
+                    .map(|config_result| match config_result {
+                        Ok(cfg) => view! { <p>{cfg.copyright()}</p> }.into_any(),
+                        Err(_) => view! { <p>"© 2025 All rights reserved."</p> }.into_any(),
+                    })
+            }}
+        </Suspense>
+    }
+}
+
 #[component]
 fn PhotoDetailPage() -> impl IntoView {
     let params = use_params::<PhotoParams>();
     let photos = Resource::new(|| (), |()| async { get_all_gallery_photos().await });
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
     let is_fullscreen = RwSignal::new(false);
     let zoom_level = RwSignal::new(1.0);
     let max_zoom = RwSignal::new(10.0); // Default 10x, will be updated based on image resolution
@@ -867,106 +891,36 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                 .date_taken
                                                                 .as_ref()
                                                                 .map(|date| {
-                                                                    view! {
-                                                                        <div class="exif-section">
-                                                                            <h3 class="exif-heading">"Date"</h3>
-                                                                            <p class="exif-value">{date.clone()}</p>
-                                                                        </div>
-                                                                    }
+                                                                    view! { <ExifField heading="Date" value=date.clone() /> }
                                                                 })}
                                                             {if let (Some(width), Some(height)) = (
                                                                 photo.width,
                                                                 photo.height,
                                                             ) {
+                                                                let dimensions = format!("{} × {} px", width, height);
                                                                 view! {
-                                                                    <div class="exif-section">
-                                                                        <h3 class="exif-heading">"Dimensions"</h3>
-                                                                        <p class="exif-value">
-                                                                            {format!("{} × {} px", width, height)}
-                                                                        </p>
-                                                                    </div>
+                                                                    <ExifField heading="Dimensions" value=dimensions />
                                                                 }
                                                                     .into_any()
                                                             } else {
                                                                 view! { <div></div> }.into_any()
                                                             }}
-                                                            {photo
-                                                                .camera_make
-                                                                .as_ref()
-                                                                .or(photo.camera_model.as_ref())
-                                                                .map(|_| {
-                                                                    view! {
-                                                                        <div class="exif-section">
-                                                                            <h3 class="exif-heading">"Camera"</h3>
-                                                                            {photo
-                                                                                .camera_make
-                                                                                .as_ref()
-                                                                                .zip(photo.camera_model.as_ref())
-                                                                                .map(|(make, model)| {
-                                                                                    view! {
-                                                                                        <p class="exif-value">{format!("{} {}", make, model)}</p>
-                                                                                    }
-                                                                                })
-                                                                                .or_else(|| {
-                                                                                    photo
-                                                                                        .camera_model
-                                                                                        .as_ref()
-                                                                                        .map(|model| {
-                                                                                            view! { <p class="exif-value">{model.clone()}</p> }
-                                                                                        })
-                                                                                })}
-                                                                        </div>
-                                                                    }
-                                                                })}
+                                                            <CameraInfo
+                                                                camera_make=photo.camera_make.clone()
+                                                                camera_model=photo.camera_model.clone()
+                                                            />
                                                             {photo
                                                                 .lens_model
                                                                 .as_ref()
                                                                 .map(|lens| {
-                                                                    view! {
-                                                                        <div class="exif-section">
-                                                                            <h3 class="exif-heading">"Lens"</h3>
-                                                                            <p class="exif-value">{lens.clone()}</p>
-                                                                        </div>
-                                                                    }
+                                                                    view! { <ExifField heading="Lens" value=lens.clone() /> }
                                                                 })}
-                                                            {if photo.focal_length.is_some() || photo.aperture.is_some()
-                                                                || photo.shutter_speed.is_some() || photo.iso.is_some()
-                                                            {
-                                                                view! {
-                                                                    <div class="exif-section">
-                                                                        <h3 class="exif-heading">"Settings"</h3>
-                                                                        <div class="exif-settings">
-                                                                            {photo
-                                                                                .focal_length
-                                                                                .as_ref()
-                                                                                .map(|fl| {
-                                                                                    view! { <span class="exif-setting">{fl.clone()}</span> }
-                                                                                })}
-                                                                            {photo
-                                                                                .aperture
-                                                                                .as_ref()
-                                                                                .map(|ap| {
-                                                                                    view! { <span class="exif-setting">{ap.clone()}</span> }
-                                                                                })}
-                                                                            {photo
-                                                                                .shutter_speed
-                                                                                .as_ref()
-                                                                                .map(|ss| {
-                                                                                    view! { <span class="exif-setting">{ss.clone()}</span> }
-                                                                                })}
-                                                                            {photo
-                                                                                .iso
-                                                                                .as_ref()
-                                                                                .map(|iso| {
-                                                                                    view! { <span class="exif-setting">{iso.clone()}</span> }
-                                                                                })}
-                                                                        </div>
-                                                                    </div>
-                                                                }
-                                                                    .into_any()
-                                                            } else {
-                                                                view! { <div></div> }.into_any()
-                                                            }}
+                                                            <PhotoSettings
+                                                                focal_length=photo.focal_length.clone()
+                                                                aperture=photo.aperture.clone()
+                                                                shutter_speed=photo.shutter_speed.clone()
+                                                                iso=photo.iso.clone()
+                                                            />
                                                         </div>
                                                     </div>
                                                 </div>
@@ -982,20 +936,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                 </A>
                                                             }
                                                         })} <div class="photo-nav-copyright">
-                                                        <Suspense fallback=move || {
-                                                            view! { <p>"© 2025 All rights reserved."</p> }
-                                                        }>
-                                                            {move || {
-                                                                config
-                                                                    .get()
-                                                                    .map(|config_result| match config_result {
-                                                                        Ok(cfg) => view! { <p>{cfg.copyright()}</p> }.into_any(),
-                                                                        Err(_) => {
-                                                                            view! { <p>"© 2025 All rights reserved."</p> }.into_any()
-                                                                        }
-                                                                    })
-                                                            }}
-                                                        </Suspense>
+                                                        <CopyrightFooter />
                                                     </div>
                                                     {next_photo
                                                         .map(|next| {
@@ -1182,6 +1123,64 @@ fn AboutPage() -> impl IntoView {
     }
 }
 
+// Helper function to capitalize display keys
+fn normalize_display_key(key: &str) -> String {
+    key.replace('_', " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// Helper function to get social media URL
+fn get_instagram_url(key: &str, value: &str) -> Option<String> {
+    if key.to_lowercase().contains("instagram") {
+        if let Some(handle) = value.strip_prefix('@') {
+            Some(format!("https://instagram.com/{}", handle))
+        } else if !value.starts_with("http") {
+            Some(format!(
+                "https://instagram.com/{}",
+                value.trim_start_matches('@')
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+// Helper component for contact information item
+#[component]
+fn ContactInfoItem(key: String, value: String) -> impl IntoView {
+    let display_key = normalize_display_key(&key);
+    let instagram_url = get_instagram_url(&key, &value);
+
+    view! {
+        <div class="contact-item">
+            <strong>{display_key}":"</strong>
+            {if let Some(url) = instagram_url {
+                view! {
+                    <p>
+                        <a href=url target="_blank" rel="noopener noreferrer">
+                            {value}
+                        </a>
+                    </p>
+                }
+                    .into_any()
+            } else {
+                view! { <p>{value}</p> }.into_any()
+            }}
+        </div>
+    }
+}
+
 #[component]
 fn ContactPage() -> impl IntoView {
     let name = RwSignal::new(String::new());
@@ -1222,55 +1221,7 @@ fn ContactPage() -> impl IntoView {
                                                 {sections_vec
                                                     .into_iter()
                                                     .map(|(key, value)| {
-                                                        let display_key = key
-                                                            .replace('_', " ")
-                                                            .split_whitespace()
-                                                            .map(|word| {
-                                                                let mut chars = word.chars();
-                                                                match chars.next() {
-                                                                    None => String::new(),
-                                                                    Some(first) => {
-                                                                        first.to_uppercase().collect::<String>() + chars.as_str()
-                                                                    }
-                                                                }
-                                                            })
-                                                            .collect::<Vec<_>>()
-                                                            .join(" ");
-                                                        let is_instagram = key.to_lowercase().contains("instagram");
-                                                        let instagram_url = if is_instagram
-                                                            && value.starts_with('@')
-                                                        {
-                                                            Some(format!("https://instagram.com/{}", &value[1..]))
-                                                        } else if is_instagram && !value.starts_with("http") {
-                                                            Some(
-                                                                format!(
-                                                                    "https://instagram.com/{}",
-                                                                    value.trim_start_matches('@'),
-                                                                ),
-                                                            )
-                                                        } else {
-                                                            None
-                                                        };
-
-                                                        // Check if this is an Instagram handle
-
-                                                        view! {
-                                                            <div class="contact-item">
-                                                                <strong>{display_key}":"</strong>
-                                                                {if let Some(url) = instagram_url {
-                                                                    view! {
-                                                                        <p>
-                                                                            <a href=url target="_blank" rel="noopener noreferrer">
-                                                                                {value}
-                                                                            </a>
-                                                                        </p>
-                                                                    }
-                                                                        .into_any()
-                                                                } else {
-                                                                    view! { <p>{value}</p> }.into_any()
-                                                                }}
-                                                            </div>
-                                                        }
+                                                        view! { <ContactInfoItem key=key value=value /> }
                                                     })
                                                     .collect_view()}
                                             </div>
