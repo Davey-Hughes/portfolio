@@ -2,6 +2,22 @@ use crate::types::{GalleryInfo, PhotoInfo};
 use std::fs;
 use std::path::Path;
 
+/// Get default image width and quality from environment variables
+/// Returns (width, quality) tuple with defaults of (3600, 100)
+fn get_default_image_params() -> (u32, u8) {
+    let width = std::env::var("DEFAULT_IMAGE_WIDTH")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(3600);
+
+    let quality = std::env::var("DEFAULT_IMAGE_QUALITY")
+        .ok()
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(100);
+
+    (width, quality)
+}
+
 /// Helper function to discover all gallery directories in public/images/
 pub fn discover_gallery_directories() -> Vec<String> {
     let images_base = if Path::new("public/images").exists() {
@@ -106,10 +122,11 @@ pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<P
                             iso,
                         ) = extract_exif_data(&path);
 
-                        // Use compressed images for thumbnails in galleries (max 3600px wide, 100% quality)
+                        // Use compressed images for thumbnails in galleries
+                        let (img_width, img_quality) = get_default_image_params();
                         let compressed_url = format!(
-                            "/images/compressed/{}?width=3600&quality=100",
-                            relative_path
+                            "/images/compressed/{}?width={}&quality={}",
+                            relative_path, img_width, img_quality
                         );
                         let original_url = format!("/images/{}", relative_path);
 
@@ -183,10 +200,11 @@ pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<Ph
                             iso,
                         ) = extract_exif_data(&path);
 
-                        // Use compressed images for gallery pages (max 3600px wide, 100% quality)
+                        // Use compressed images for gallery pages
+                        let (img_width, img_quality) = get_default_image_params();
                         let compressed_url = format!(
-                            "/images/compressed/{}?width=3600&quality=100",
-                            relative_path
+                            "/images/compressed/{}?width={}&quality={}",
+                            relative_path, img_width, img_quality
                         );
                         let original_url = format!("/images/{}", relative_path);
 
@@ -486,6 +504,77 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::fs;
+
+    #[test]
+    #[serial]
+    fn test_get_default_image_params_defaults() {
+        // Ensure env vars are not set
+        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
+        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+
+        let (width, quality) = get_default_image_params();
+        assert_eq!(width, 3600);
+        assert_eq!(quality, 100);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_default_image_params_custom_width() {
+        std::env::set_var("DEFAULT_IMAGE_WIDTH", "2400");
+        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+
+        let (width, quality) = get_default_image_params();
+
+        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
+
+        assert_eq!(width, 2400);
+        assert_eq!(quality, 100);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_default_image_params_custom_quality() {
+        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
+        std::env::set_var("DEFAULT_IMAGE_QUALITY", "80");
+
+        let (width, quality) = get_default_image_params();
+
+        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+
+        assert_eq!(width, 3600);
+        assert_eq!(quality, 80);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_default_image_params_both_custom() {
+        std::env::set_var("DEFAULT_IMAGE_WIDTH", "1200");
+        std::env::set_var("DEFAULT_IMAGE_QUALITY", "85");
+
+        let (width, quality) = get_default_image_params();
+
+        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
+        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+
+        assert_eq!(width, 1200);
+        assert_eq!(quality, 85);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_default_image_params_invalid_values() {
+        std::env::set_var("DEFAULT_IMAGE_WIDTH", "invalid");
+        std::env::set_var("DEFAULT_IMAGE_QUALITY", "not_a_number");
+
+        let (width, quality) = get_default_image_params();
+
+        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
+        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+
+        // Should fall back to defaults
+        assert_eq!(width, 3600);
+        assert_eq!(quality, 100);
+    }
 
     #[test]
     fn test_default_about_text() {

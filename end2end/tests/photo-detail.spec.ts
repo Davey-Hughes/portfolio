@@ -32,10 +32,14 @@ test.describe("Photo Detail Page", () => {
     if (count > 0) {
       await photos.first().click();
       await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      
+      // Wait for network to be idle to ensure image has loaded
+      await page.waitForLoadState("networkidle");
 
-      // Main photo should be visible
-      const mainPhoto = page.locator(".photo-detail-image");
-      await expect(mainPhoto).toBeVisible();
+      // Wait for the image to load - check it's attached to DOM and has a src
+      const mainPhotoImg = page.locator(".photo-detail-image img");
+      await expect(mainPhotoImg).toBeAttached({ timeout: 15000 });
+      await expect(mainPhotoImg).toHaveAttribute("src", /\/images\//);
     }
   });
 
