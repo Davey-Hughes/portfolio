@@ -31,6 +31,17 @@ pub fn discover_gallery_directories() -> Vec<String> {
     gallery_dirs
 }
 
+/// Strip leading numbers and dashes from a filename
+/// Example: "1 - space_needle.jpg" -> "space_needle.jpg"
+///          "42-mountain.jpg" -> "mountain.jpg"
+///          "1.5 - photo.jpg" -> "photo.jpg"
+fn strip_leading_number_and_dash(filename: &str) -> String {
+    // Match patterns like "1 - ", "42-", "003 - ", "1.5-", "2.3.4 - ", etc.
+    // Allows digits with optional periods in between
+    let re = regex::Regex::new(r"^[\d.]+\s*-\s*").unwrap();
+    re.replace(filename, "").to_string()
+}
+
 /// Count images recursively in a directory
 pub fn count_images_recursive(dir: &Path, count: &mut usize) {
     if let Ok(entries) = fs::read_dir(dir) {
@@ -76,7 +87,8 @@ pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<P
                             .to_lowercase()
                             .replace(['/', '\\', ' '], "-");
 
-                        let title = filename_str
+                        // Strip leading numbers and dashes, then convert to title
+                        let title = strip_leading_number_and_dash(&filename_str)
                             .trim_end_matches(&format!(".{}", ext))
                             .replace(['-', '_'], " ");
 
@@ -150,7 +162,8 @@ pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<Ph
                             .to_lowercase()
                             .replace(['/', '\\', ' '], "-");
 
-                        let title = filename_str
+                        // Strip leading numbers and dashes, then convert to title
+                        let title = strip_leading_number_and_dash(&filename_str)
                             .trim_end_matches(&format!(".{}", ext))
                             .replace(['-', '_'], " ");
 
@@ -702,6 +715,64 @@ mod tests {
             .replace(['-', '_'], " ");
 
         assert_eq!(title, "test photo 2024");
+    }
+
+    #[test]
+    fn test_strip_leading_number_and_dash() {
+        // Test with space before and after dash
+        assert_eq!(
+            strip_leading_number_and_dash("1 - space_needle.jpg"),
+            "space_needle.jpg"
+        );
+
+        // Test with just dash, no spaces
+        assert_eq!(
+            strip_leading_number_and_dash("42-mountain.jpg"),
+            "mountain.jpg"
+        );
+
+        // Test with multiple digits
+        assert_eq!(
+            strip_leading_number_and_dash("003 - photo.jpg"),
+            "photo.jpg"
+        );
+
+        // Test with no leading number
+        assert_eq!(
+            strip_leading_number_and_dash("regular_photo.jpg"),
+            "regular_photo.jpg"
+        );
+
+        // Test with number in middle (should not be stripped)
+        assert_eq!(
+            strip_leading_number_and_dash("photo-2024-test.jpg"),
+            "photo-2024-test.jpg"
+        );
+
+        // Test with just number and dash at beginning
+        assert_eq!(strip_leading_number_and_dash("5-test.jpg"), "test.jpg");
+
+        // Test with decimal numbers
+        assert_eq!(
+            strip_leading_number_and_dash("1.5 - photo.jpg"),
+            "photo.jpg"
+        );
+        assert_eq!(
+            strip_leading_number_and_dash("2.3-mountain.jpg"),
+            "mountain.jpg"
+        );
+
+        // Test with multiple periods
+        assert_eq!(
+            strip_leading_number_and_dash("1.2.3 - test.jpg"),
+            "test.jpg"
+        );
+
+        // Test with period but no space
+        assert_eq!(
+            strip_leading_number_and_dash("10.5-sunset.jpg"),
+            "sunset.jpg"
+        );
     }
 
     #[test]
