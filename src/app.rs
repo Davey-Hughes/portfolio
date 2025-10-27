@@ -503,6 +503,25 @@ fn PhotoDetailPage() -> impl IntoView {
     let start_y = RwSignal::new(0.0);
     let is_details_expanded = RwSignal::new(false);
     let show_zoom_controls = RwSignal::new(true);
+
+    // Create a signal to track viewport width for mobile detection
+    let viewport_width = RwSignal::new(0.0);
+
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::prelude::Effect;
+        // Set initial viewport width on mount
+        Effect::new(move |_| {
+            if let Some(window) = web_sys::window() {
+                if let Ok(width) = window.inner_width() {
+                    if let Some(width_f64) = width.as_f64() {
+                        viewport_width.set(width_f64);
+                    }
+                }
+            }
+        });
+    }
+
     #[cfg(feature = "hydrate")]
     let initial_pinch_distance = RwSignal::new(0.0);
     #[cfg(feature = "hydrate")]
@@ -842,8 +861,13 @@ fn PhotoDetailPage() -> impl IntoView {
                                         } else {
                                             None
                                         };
-                                        let photo_url = photo.original_url.clone();
-                                        let photo_url_fs = photo.original_url.clone();
+                                        let is_mobile = move || {
+                                            viewport_width.get() <= 768.0 && viewport_width.get() > 0.0
+                                        };
+                                        let photo_url_cached = StoredValue::new(photo.url.clone());
+                                        let photo_url_original = StoredValue::new(
+                                            photo.original_url.clone(),
+                                        );
                                         let photo_title = photo.title.clone();
                                         let photo_title_fs = photo.title.clone();
                                         let calculated_max_zoom = if let (
@@ -855,6 +879,16 @@ fn PhotoDetailPage() -> impl IntoView {
                                             10.0
                                         };
                                         max_zoom.set(calculated_max_zoom);
+                                        // Use StoredValue to avoid move closure issues
+
+                                        // Clone for detail page image
+
+                                        // Clone for fullscreen image
+
+                                        // Use reactive viewport width signal for mobile detection
+
+                                        // Use cached URL for mobile devices (viewport width <= 768px)
+                                        // to improve performance with large images
 
                                         // Calculate max zoom based on image resolution
                                         // High-res images (>8000px in either dimension) get 20x zoom, others get 10x
@@ -873,7 +907,16 @@ fn PhotoDetailPage() -> impl IntoView {
                                                         on:click=toggle_fullscreen
                                                         style="cursor: pointer;"
                                                     >
-                                                        <img src=photo_url alt=photo_title.clone() />
+                                                        <img
+                                                            src=move || {
+                                                                if is_mobile() {
+                                                                    photo_url_cached.get_value()
+                                                                } else {
+                                                                    photo_url_original.get_value()
+                                                                }
+                                                            }
+                                                            alt=photo_title.clone()
+                                                        />
                                                     </div>
                                                     <div class="photo-detail-info">
                                                         <h1
@@ -1003,7 +1046,13 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                     </div>
                                                                 </div>
                                                                 <img
-                                                                    src=photo_url_fs.clone()
+                                                                    src=move || {
+                                                                        if is_mobile() {
+                                                                            photo_url_cached.get_value()
+                                                                        } else {
+                                                                            photo_url_original.get_value()
+                                                                        }
+                                                                    }
                                                                     alt=photo_title_fs.clone()
                                                                     class="fullscreen-image"
                                                                     style=transform_style
