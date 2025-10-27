@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// let photo = PhotoInfo {
 ///     url: "/images/photo.jpg".to_string(),
+///     original_url: "/images/photo.jpg".to_string(),
 ///     title: "Sunset".to_string(),
 ///     filename: "photo.jpg".to_string(),
 ///     slug: "sunset".to_string(),
@@ -30,6 +31,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct PhotoInfo {
     pub url: String,
+    pub original_url: String, // Full resolution original image
     pub title: String,
     pub filename: String,
     pub slug: String,
@@ -96,6 +98,7 @@ mod tests {
     fn test_photo_info_serialization() {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
+            original_url: "/images/test.jpg".to_string(),
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
@@ -124,6 +127,7 @@ mod tests {
     fn test_photo_info_with_missing_exif() {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
+            original_url: "/images/test.jpg".to_string(),
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
@@ -194,6 +198,7 @@ mod tests {
     fn test_photo_info_clone() {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
+            original_url: "/images/test.jpg".to_string(),
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),

@@ -26,3 +26,7 @@ public/images/*
 public/content/*
 !public/content/README.md
 !public/content/config.toml.example
+
+# Image cache
+public/cache/
+cache/

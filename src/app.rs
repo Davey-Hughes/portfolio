@@ -2,12 +2,12 @@ use crate::server::*;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{A, Route, Router, Routes},
+    components::{Route, Router, Routes, A},
     hooks::{use_location, use_params},
     params::Params,
+    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -476,6 +476,7 @@ fn PhotoDetailPage() -> impl IntoView {
     let is_panning = RwSignal::new(false);
     let start_x = RwSignal::new(0.0);
     let start_y = RwSignal::new(0.0);
+    let is_details_expanded = RwSignal::new(false);
     #[cfg(feature = "hydrate")]
     let initial_pinch_distance = RwSignal::new(0.0);
     #[cfg(feature = "hydrate")]
@@ -686,8 +687,8 @@ fn PhotoDetailPage() -> impl IntoView {
                                         } else {
                                             None
                                         };
-                                        let photo_url = photo.url.clone();
-                                        let photo_url_fs = photo.url.clone();
+                                        let photo_url = photo.original_url.clone();
+                                        let photo_url_fs = photo.original_url.clone();
                                         let photo_title = photo.title.clone();
                                         let photo_title_fs = photo.title.clone();
                                         view! {
@@ -706,8 +707,20 @@ fn PhotoDetailPage() -> impl IntoView {
                                                         <img src=photo_url alt=photo_title.clone() />
                                                     </div>
                                                     <div class="photo-detail-info">
-                                                        <h1>{photo_title}</h1>
-                                                        <div class="photo-exif">
+                                                        <h1
+                                                            class="photo-title-toggle"
+                                                            class:expanded=move || is_details_expanded.get()
+                                                            on:click=move |_| {
+                                                                is_details_expanded
+                                                                    .update(|expanded| *expanded = !*expanded)
+                                                            }
+                                                        >
+                                                            {photo_title}
+                                                        </h1>
+                                                        <div
+                                                            class="photo-exif"
+                                                            class:expanded=move || is_details_expanded.get()
+                                                        >
                                                             {photo
                                                                 .date_taken
                                                                 .as_ref()
