@@ -874,6 +874,22 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                         </div>
                                                                     }
                                                                 })}
+                                                            {if let (Some(width), Some(height)) = (
+                                                                photo.width,
+                                                                photo.height,
+                                                            ) {
+                                                                view! {
+                                                                    <div class="exif-section">
+                                                                        <h3 class="exif-heading">"Dimensions"</h3>
+                                                                        <p class="exif-value">
+                                                                            {format!("{} × {} px", width, height)}
+                                                                        </p>
+                                                                    </div>
+                                                                }
+                                                                    .into_any()
+                                                            } else {
+                                                                view! { <div></div> }.into_any()
+                                                            }}
                                                             {photo
                                                                 .camera_make
                                                                 .as_ref()
