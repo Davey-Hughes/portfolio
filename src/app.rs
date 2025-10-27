@@ -2,12 +2,12 @@ use crate::server::*;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -471,6 +471,7 @@ fn PhotoDetailPage() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
     let is_fullscreen = RwSignal::new(false);
     let zoom_level = RwSignal::new(1.0);
+    let max_zoom = RwSignal::new(10.0); // Default 10x, will be updated based on image resolution
     let pan_x = RwSignal::new(0.0);
     let pan_y = RwSignal::new(0.0);
     let is_panning = RwSignal::new(false);
@@ -508,7 +509,7 @@ fn PhotoDetailPage() -> impl IntoView {
         let timeout_id = web_sys::window()
             .unwrap()
             .set_timeout_with_callback_and_timeout_and_arguments_0(
-                &leptos::wasm_bindgen::closure::Closure::once(move || {
+                leptos::wasm_bindgen::closure::Closure::once(move || {
                     show_zoom_controls.set(false);
                 })
                 .into_js_value()
@@ -635,7 +636,7 @@ fn PhotoDetailPage() -> impl IntoView {
             let delta = ev.delta_y();
             let old_zoom = zoom_level.get();
             let new_zoom = if delta < 0.0 {
-                (old_zoom * 1.1_f64).min(10.0)
+                (old_zoom * 1.1_f64).min(max_zoom.get())
             } else {
                 (old_zoom / 1.1_f64).max(1.0)
             };
@@ -739,7 +740,7 @@ fn PhotoDetailPage() -> impl IntoView {
                 let distance = (dx * dx + dy * dy).sqrt();
 
                 let scale = distance / initial_pinch_distance.get();
-                let new_zoom = (initial_zoom.get() * scale).clamp(1.0, 10.0);
+                let new_zoom = (initial_zoom.get() * scale).clamp(1.0, max_zoom.get());
 
                 if (new_zoom - 1.0).abs() < 0.01 {
                     zoom_level.set(1.0);
@@ -818,6 +819,20 @@ fn PhotoDetailPage() -> impl IntoView {
                                         let photo_url_fs = photo.original_url.clone();
                                         let photo_title = photo.title.clone();
                                         let photo_title_fs = photo.title.clone();
+                                        let calculated_max_zoom = if let (
+                                            Some(width),
+                                            Some(height),
+                                        ) = (photo.width, photo.height) {
+                                            if width > 8000 || height > 8000 { 20.0 } else { 10.0 }
+                                        } else {
+                                            10.0
+                                        };
+                                        max_zoom.set(calculated_max_zoom);
+
+                                        // Calculate max zoom based on image resolution
+                                        // High-res images (>8000px in either dimension) get 20x zoom, others get 10x
+                                        // Default if dimensions unknown
+
                                         view! {
                                             <div class="photo-detail-container">
                                                 <div class="photo-detail-header">
@@ -1017,12 +1032,14 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                             type="range"
                                                                             class="zoom-slider"
                                                                             min="1.0"
-                                                                            max="10.0"
+                                                                            prop:max=move || max_zoom.get()
                                                                             step="0.1"
                                                                             prop:value=move || zoom_level.get()
                                                                             on:input=on_zoom_change
                                                                         />
-                                                                        <label class="zoom-label">"10×"</label>
+                                                                        <label class="zoom-label">
+                                                                            {move || format!("{}×", max_zoom.get() as i32)}
+                                                                        </label>
                                                                     </div>
                                                                 </div>
                                                                 <img
