@@ -11,22 +11,21 @@ async fn main() {
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
-    use serde::Deserialize;
+    use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
     use tower_http::services::ServeDir;
-
-    #[derive(Deserialize)]
-    struct ImageParams {
-        #[serde(default)]
-        quality: Option<u8>,
-        #[serde(default)]
-        width: Option<u32>,
-    }
 
     async fn serve_compressed_image(
         Path(image_path): Path<String>,
         Query(params): Query<ImageParams>,
     ) -> Response {
+        // Validate parameters
+        let (width, quality) = match params.validate() {
+            Ok(values) => values,
+            Err(err_msg) => {
+                return (StatusCode::BAD_REQUEST, err_msg).into_response();
+            }
+        };
         use std::fs;
         use std::io::Write;
 
@@ -53,19 +52,12 @@ async fn main() {
             return (StatusCode::NOT_FOUND, "Image not found").into_response();
         }
 
-        // Generate cache key based on path and parameters
-        let width_suffix = params.width.map(|w| format!("_w{}", w)).unwrap_or_default();
-        let quality_suffix = params
-            .quality
-            .map(|q| format!("_q{}", q))
-            .unwrap_or_default();
-
-        // Create cache filename: original_name_w2400_q100.webp
+        // Generate cache key based on validated parameters
         let cache_filename = format!(
-            "{}{}{}_{}.webp",
+            "{}_w{}_q{}_{}.webp",
             image_path.replace(['/', '\\'], "_"),
-            width_suffix,
-            quality_suffix,
+            width,
+            quality,
             full_path
                 .metadata()
                 .ok()
@@ -115,21 +107,17 @@ async fn main() {
             }
         };
 
-        // Resize if width is specified
-        let img = if let Some(max_width) = params.width {
-            log!("Resizing image to {}px", max_width);
-            if img.width() > max_width {
-                img.resize(max_width, u32::MAX, image::imageops::FilterType::Lanczos3)
-            } else {
-                img
-            }
+        // Resize to validated width
+        let img = if img.width() > width {
+            log!("Resizing image to {}px", width);
+            img.resize(width, u32::MAX, image::imageops::FilterType::Lanczos3)
         } else {
             img
         };
 
-        // Convert to WebP with compression
+        // Convert to WebP with validated quality
         let mut webp_data = Vec::new();
-        let _quality = params.quality.unwrap_or(80).clamp(1, 100);
+        let _quality = quality;
 
         // Note: The image crate's WebP encoder uses default quality settings
         // For more control, a dedicated WebP encoder library would be needed

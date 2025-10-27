@@ -6,6 +6,9 @@ pub mod types;
 #[cfg(feature = "ssr")]
 pub mod gallery;
 
+#[cfg(feature = "ssr")]
+pub mod image_params;
+
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
