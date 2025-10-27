@@ -2,6 +2,39 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A section value can be either a simple string or a structured link with display text and URL
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SectionValue {
+    /// A simple string value
+    Simple(String),
+    /// A structured link with display text and URL
+    Link { display: String, url: String },
+}
+
+impl SectionValue {
+    /// Get the display text for this value
+    pub fn display(&self) -> &str {
+        match self {
+            SectionValue::Simple(s) => s,
+            SectionValue::Link { display, .. } => display,
+        }
+    }
+
+    /// Get the URL if this is a Link variant
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            SectionValue::Simple(_) => None,
+            SectionValue::Link { url, .. } => Some(url),
+        }
+    }
+
+    /// Check if this is a simple string value
+    pub fn is_simple(&self) -> bool {
+        matches!(self, SectionValue::Simple(_))
+    }
+}
+
 /// Configuration for the portfolio site loaded from a TOML config file.
 ///
 /// # TOML Format
@@ -35,7 +68,7 @@ pub struct SiteConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_copyright: Option<String>,
     #[serde(default)]
-    pub sections: HashMap<String, String>,
+    pub sections: HashMap<String, SectionValue>,
 }
 
 impl SiteConfig {
@@ -175,11 +208,11 @@ contact_email = "john@example.com"
         assert_eq!(config.copyright(), "© 2024 John Doe");
         assert_eq!(
             config.sections.get("about_title"),
-            Some(&"About Me".to_string())
+            Some(&SectionValue::Simple("About Me".to_string()))
         );
         assert_eq!(
             config.sections.get("contact_email"),
-            Some(&"john@example.com".to_string())
+            Some(&SectionValue::Simple("john@example.com".to_string()))
         );
 
         // Cleanup
@@ -222,7 +255,7 @@ custom_field = "value"
         assert_eq!(config.site_tagline, "Test Tagline");
         assert_eq!(
             config.sections.get("custom_field"),
-            Some(&"value".to_string())
+            Some(&SectionValue::Simple("value".to_string()))
         );
 
         // Cleanup
@@ -260,7 +293,7 @@ custom_field = "value"
         assert_eq!(config.site_name, "Whitespace Test");
         assert_eq!(
             config.sections.get("custom_key"),
-            Some(&"value with spaces".to_string())
+            Some(&SectionValue::Simple("value with spaces".to_string()))
         );
 
         // Cleanup
@@ -300,15 +333,15 @@ another_field = "Another Value"
         assert_eq!(config.sections.len(), 3);
         assert_eq!(
             config.sections.get("custom_section_1"),
-            Some(&"Value 1".to_string())
+            Some(&SectionValue::Simple("Value 1".to_string()))
         );
         assert_eq!(
             config.sections.get("custom_section_2"),
-            Some(&"Value 2".to_string())
+            Some(&SectionValue::Simple("Value 2".to_string()))
         );
         assert_eq!(
             config.sections.get("another_field"),
-            Some(&"Another Value".to_string())
+            Some(&SectionValue::Simple("Another Value".to_string()))
         );
 
         // Special keys should not be in sections
