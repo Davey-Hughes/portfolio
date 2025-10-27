@@ -106,9 +106,11 @@ pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<P
                             iso,
                         ) = extract_exif_data(&path);
 
-                        // Use compressed images for thumbnails in galleries (max 1200px wide, 80% quality)
-                        let compressed_url =
-                            format!("/images/compressed/{}?width=1200&quality=80", relative_path);
+                        // Use compressed images for thumbnails in galleries (max 3600px wide, 100% quality)
+                        let compressed_url = format!(
+                            "/images/compressed/{}?width=3600&quality=100",
+                            relative_path
+                        );
                         let original_url = format!("/images/{}", relative_path);
 
                         photos.push(PhotoInfo {
@@ -181,9 +183,11 @@ pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<Ph
                             iso,
                         ) = extract_exif_data(&path);
 
-                        // Use compressed images for gallery pages (max 1200px wide, 80% quality)
-                        let compressed_url =
-                            format!("/images/compressed/{}?width=1200&quality=80", relative_path);
+                        // Use compressed images for gallery pages (max 3600px wide, 100% quality)
+                        let compressed_url = format!(
+                            "/images/compressed/{}?width=3600&quality=100",
+                            relative_path
+                        );
                         let original_url = format!("/images/{}", relative_path);
 
                         photos.push(PhotoInfo {

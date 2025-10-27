@@ -2,14 +2,14 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        extract::{Path, Query},
-        http::{header, StatusCode},
-        response::{IntoResponse, Response},
         Router,
+        extract::{Path, Query},
+        http::{StatusCode, header},
+        response::{IntoResponse, Response},
     };
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
     use serde::Deserialize;
     use std::path::PathBuf;
@@ -60,7 +60,7 @@ async fn main() {
             .map(|q| format!("_q{}", q))
             .unwrap_or_default();
 
-        // Create cache filename: original_name_w1200_q80.webp
+        // Create cache filename: original_name_w2400_q100.webp
         let cache_filename = format!(
             "{}{}{}_{}.webp",
             image_path.replace(['/', '\\'], "_"),
@@ -117,6 +117,7 @@ async fn main() {
 
         // Resize if width is specified
         let img = if let Some(max_width) = params.width {
+            log!("Resizing image to {}px", max_width);
             if img.width() > max_width {
                 img.resize(max_width, u32::MAX, image::imageops::FilterType::Lanczos3)
             } else {
