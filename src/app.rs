@@ -1190,18 +1190,44 @@ fn normalize_display_key(key: &str) -> String {
         .join(" ")
 }
 
-// Helper function to get social media URL
-fn get_instagram_url(key: &str, value: &str) -> Option<String> {
-    if key.to_lowercase().contains("instagram") {
+// Helper function to get social media URL and display text
+fn get_social_media_link(key: &str, value: &str) -> Option<(String, String)> {
+    let key_lower = key.to_lowercase();
+
+    if key_lower.contains("instagram") {
         if let Some(handle) = value.strip_prefix('@') {
-            Some(format!("https://instagram.com/{}", handle))
+            Some((
+                format!("https://instagram.com/{}", handle),
+                value.to_string(),
+            ))
         } else if !value.starts_with("http") {
-            Some(format!(
-                "https://instagram.com/{}",
-                value.trim_start_matches('@')
+            Some((
+                format!("https://instagram.com/{}", value.trim_start_matches('@')),
+                value.to_string(),
             ))
         } else {
             None
+        }
+    } else if key_lower.contains("github") {
+        // Handle GitHub URLs
+        if value.starts_with("https://github.com/") || value.starts_with("http://github.com/") {
+            // Extract username from full URL
+            if let Some(username) = value.split('/').nth(3) {
+                if !username.is_empty() {
+                    return Some((
+                        format!("https://github.com/{}", username),
+                        username.to_string(),
+                    ));
+                }
+            }
+            None
+        } else {
+            // Treat as username
+            let username = value.trim_start_matches('@');
+            Some((
+                format!("https://github.com/{}", username),
+                username.to_string(),
+            ))
         }
     } else {
         None
@@ -1212,16 +1238,16 @@ fn get_instagram_url(key: &str, value: &str) -> Option<String> {
 #[component]
 fn ContactInfoItem(key: String, value: String) -> impl IntoView {
     let display_key = normalize_display_key(&key);
-    let instagram_url = get_instagram_url(&key, &value);
+    let social_link = get_social_media_link(&key, &value);
 
     view! {
         <div class="contact-item">
             <strong>{display_key}":"</strong>
-            {if let Some(url) = instagram_url {
+            {if let Some((url, display_text)) = social_link {
                 view! {
                     <p>
                         <a href=url target="_blank" rel="noopener noreferrer">
-                            {value}
+                            {display_text}
                         </a>
                     </p>
                 }
