@@ -94,8 +94,14 @@ pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<P
                             iso,
                         ) = extract_exif_data(&path);
 
+                        // Use compressed images for thumbnails in galleries (max 1200px wide, 80% quality)
+                        let compressed_url =
+                            format!("/images/compressed/{}?width=1200&quality=80", relative_path);
+                        let original_url = format!("/images/{}", relative_path);
+
                         photos.push(PhotoInfo {
-                            url: format!("/images/{}", relative_path),
+                            url: compressed_url,
+                            original_url,
                             title,
                             filename: filename_str,
                             slug,
@@ -162,8 +168,14 @@ pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<Ph
                             iso,
                         ) = extract_exif_data(&path);
 
+                        // Use compressed images for gallery pages (max 1200px wide, 80% quality)
+                        let compressed_url =
+                            format!("/images/compressed/{}?width=1200&quality=80", relative_path);
+                        let original_url = format!("/images/{}", relative_path);
+
                         photos.push(PhotoInfo {
-                            url: format!("/images/{}", relative_path),
+                            url: compressed_url,
+                            original_url,
                             title,
                             filename: filename_str,
                             slug,
@@ -224,7 +236,8 @@ fn extract_exif_data(path: &Path) -> ExifData {
 
     // If EXIF didn't have dimensions, try reading image dimensions from file header
     if width.is_none() || height.is_none() {
-        if let Ok(reader) = image::ImageReader::open(path) {
+        if let Ok(mut reader) = image::ImageReader::open(path) {
+            reader.limits(image::Limits::no_limits());
             if let Ok(dimensions) = reader.into_dimensions() {
                 width = Some(dimensions.0);
                 height = Some(dimensions.1);
@@ -286,7 +299,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
 
     let iso = exif_reader
         .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
-        .map(|f| format!("ISO {}", f.display_value().to_string()));
+        .map(|f| format!("ISO {}", f.display_value()));
 
     (
         width,
@@ -431,10 +444,7 @@ pub fn load_about_content() -> crate::types::AboutContent {
         .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
         .map(|filename| format!("/content/{}", filename));
 
-    crate::types::AboutContent {
-        image_url,
-        content,
-    }
+    crate::types::AboutContent { image_url, content }
 }
 
 /// Returns default about page text when no custom content is provided.
@@ -457,8 +467,8 @@ pub fn default_about_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use serial_test::serial;
+    use std::fs;
 
     #[test]
     fn test_default_about_text() {
@@ -472,18 +482,18 @@ mod tests {
     fn test_count_images_recursive() {
         let temp_dir = std::env::temp_dir().join("test_gallery_count");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         // Create some test files
         fs::write(temp_dir.join("photo1.jpg"), b"fake jpg").unwrap();
         fs::write(temp_dir.join("photo2.png"), b"fake png").unwrap();
         fs::write(temp_dir.join("photo3.webp"), b"fake webp").unwrap();
         fs::write(temp_dir.join("readme.txt"), b"not an image").unwrap();
-        
+
         let mut count = 0;
         count_images_recursive(&temp_dir, &mut count);
-        
+
         assert_eq!(count, 3);
-        
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -491,17 +501,17 @@ mod tests {
     #[test]
     fn test_count_images_recursive_nested() {
         let temp_dir = std::env::temp_dir().join("test_gallery_nested");
-        fs::create_dir_all(&temp_dir.join("subdir")).unwrap();
-        
+        fs::create_dir_all(temp_dir.join("subdir")).unwrap();
+
         fs::write(temp_dir.join("photo1.jpg"), b"fake jpg").unwrap();
         fs::write(temp_dir.join("subdir/photo2.jpeg"), b"fake jpeg").unwrap();
         fs::write(temp_dir.join("subdir/photo3.gif"), b"fake gif").unwrap();
-        
+
         let mut count = 0;
         count_images_recursive(&temp_dir, &mut count);
-        
+
         assert_eq!(count, 3);
-        
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -510,12 +520,12 @@ mod tests {
     fn test_count_images_recursive_empty_directory() {
         let temp_dir = std::env::temp_dir().join("test_gallery_empty");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         let mut count = 0;
         count_images_recursive(&temp_dir, &mut count);
-        
+
         assert_eq!(count, 0);
-        
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -523,10 +533,10 @@ mod tests {
     #[test]
     fn test_count_images_nonexistent_directory() {
         let temp_dir = std::env::temp_dir().join("nonexistent_gallery_12345");
-        
+
         let mut count = 0;
         count_images_recursive(&temp_dir, &mut count);
-        
+
         // Should not panic, just count 0
         assert_eq!(count, 0);
     }
@@ -544,20 +554,20 @@ mod tests {
     fn test_load_about_content_with_default() {
         // Create a fresh temp directory with no profile image
         let temp_path = std::env::temp_dir().join("test_about_default_only");
-        
+
         // Clean up and recreate to ensure it's empty
         fs::remove_dir_all(&temp_path).ok();
         fs::create_dir_all(&temp_path).unwrap();
-        
+
         std::env::set_var("ABOUT_CONTENT_PATH", temp_path.to_str().unwrap());
-        
+
         let about = load_about_content();
-        
+
         // Should have no image in an empty directory
         assert_eq!(about.image_url, None);
         // Should contain default text since no about.txt exists
         assert!(about.content.contains("photographer"));
-        
+
         std::env::remove_var("ABOUT_CONTENT_PATH");
         // Cleanup
         fs::remove_dir_all(&temp_path).ok();
@@ -568,17 +578,17 @@ mod tests {
     fn test_load_about_content_with_custom_text() {
         let temp_dir = std::env::temp_dir().join("test_about_content");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         let custom_text = "This is my custom about text!";
         fs::write(temp_dir.join("about.txt"), custom_text).unwrap();
-        
+
         std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap());
-        
+
         let about = load_about_content();
-        
+
         assert_eq!(about.content, custom_text);
         assert_eq!(about.image_url, None);
-        
+
         std::env::remove_var("ABOUT_CONTENT_PATH");
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -588,17 +598,17 @@ mod tests {
     fn test_load_about_content_with_profile_image() {
         let temp_dir = std::env::temp_dir().join("test_about_profile");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         fs::write(temp_dir.join("about.txt"), "Custom text").unwrap();
         fs::write(temp_dir.join("profile.jpg"), b"fake jpg").unwrap();
-        
+
         std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap());
-        
+
         let about = load_about_content();
-        
+
         assert_eq!(about.image_url, Some("/content/profile.jpg".to_string()));
         assert_eq!(about.content, "Custom text");
-        
+
         std::env::remove_var("ABOUT_CONTENT_PATH");
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -608,18 +618,18 @@ mod tests {
     fn test_load_about_content_prefers_jpg_over_png() {
         let temp_dir = std::env::temp_dir().join("test_about_multi_image");
         fs::create_dir_all(&temp_dir).unwrap();
-        
+
         // Create multiple profile images
         fs::write(temp_dir.join("profile.jpg"), b"fake jpg").unwrap();
         fs::write(temp_dir.join("profile.png"), b"fake png").unwrap();
-        
+
         std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap());
-        
+
         let about = load_about_content();
-        
+
         // Should prefer .jpg as it's first in the array
         assert_eq!(about.image_url, Some("/content/profile.jpg".to_string()));
-        
+
         std::env::remove_var("ABOUT_CONTENT_PATH");
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -628,18 +638,18 @@ mod tests {
     #[serial]
     fn test_load_home_photos_creates_directory() {
         let temp_gallery = std::env::temp_dir().join("test_home_gallery_create");
-        
+
         // Make sure it doesn't exist
         fs::remove_dir_all(&temp_gallery).ok();
-        
+
         std::env::set_var("GALLERY_PATH", temp_gallery.to_str().unwrap());
-        
+
         let photos = load_home_photos();
-        
+
         // Directory should be created
         assert!(temp_gallery.exists());
         assert!(photos.is_empty()); // No photos in new directory
-        
+
         std::env::remove_var("GALLERY_PATH");
         fs::remove_dir_all(&temp_gallery).ok();
     }
@@ -650,12 +660,12 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    #[test] 
+    #[test]
     fn test_extract_exif_data_nonexistent_file() {
         let nonexistent = Path::new("/tmp/nonexistent_image_12345.jpg");
-        let (width, height, date, make, model, lens, focal, aperture, shutter, iso) = 
+        let (width, height, date, make, model, lens, focal, aperture, shutter, iso) =
             extract_exif_data(nonexistent);
-        
+
         assert_eq!(width, None);
         assert_eq!(height, None);
         assert_eq!(date, None);
@@ -673,12 +683,12 @@ mod tests {
         // Test slug generation logic
         let filename = "Test Photo.jpg";
         let ext = "jpg";
-        
+
         let slug = filename
             .trim_end_matches(&format!(".{}", ext))
             .to_lowercase()
             .replace(['/', '\\', ' '], "-");
-        
+
         assert_eq!(slug, "test-photo");
     }
 
@@ -686,11 +696,11 @@ mod tests {
     fn test_title_generation_from_filename() {
         let filename = "test-photo_2024.jpg";
         let ext = "jpg";
-        
+
         let title = filename
             .trim_end_matches(&format!(".{}", ext))
             .replace(['-', '_'], " ");
-        
+
         assert_eq!(title, "test photo 2024");
     }
 
@@ -698,11 +708,11 @@ mod tests {
     fn test_load_all_gallery_photos_returns_sorted() {
         // This test just verifies that the function can be called without panic
         let photos = load_all_gallery_photos();
-        
+
         // Check if sorting is maintained (if there are photos)
         if photos.len() > 1 {
-            for i in 0..photos.len()-1 {
-                assert!(photos[i].filename <= photos[i+1].filename);
+            for i in 0..photos.len() - 1 {
+                assert!(photos[i].filename <= photos[i + 1].filename);
             }
         }
     }
@@ -710,7 +720,7 @@ mod tests {
     #[test]
     fn test_load_galleries_excludes_home() {
         let galleries = load_galleries();
-        
+
         // Should not contain a gallery named "home"
         assert!(!galleries.iter().any(|g| g.slug == "home"));
     }
@@ -718,11 +728,11 @@ mod tests {
     #[test]
     fn test_load_galleries_sorted_alphabetically() {
         let galleries = load_galleries();
-        
+
         // Check if sorted by name
         if galleries.len() > 1 {
-            for i in 0..galleries.len()-1 {
-                assert!(galleries[i].name <= galleries[i+1].name);
+            for i in 0..galleries.len() - 1 {
+                assert!(galleries[i].name <= galleries[i + 1].name);
             }
         }
     }
@@ -734,7 +744,7 @@ mod tests {
             slug: "test-gallery".to_string(),
             photo_count: 10,
         };
-        
+
         assert_eq!(gallery.name, "Test Gallery");
         assert_eq!(gallery.slug, "test-gallery");
         assert_eq!(gallery.photo_count, 10);
