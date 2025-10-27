@@ -1190,8 +1190,8 @@ fn normalize_display_key(key: &str) -> String {
         .join(" ")
 }
 
-// Helper function to get social media URL and display text
-fn get_social_media_link(key: &str, value: &str) -> Option<(String, String)> {
+// Helper function to get social media URL and display text from a simple string value
+fn get_social_media_link_from_string(key: &str, value: &str) -> Option<(String, String)> {
     let key_lower = key.to_lowercase();
 
     if key_lower.contains("instagram") {
@@ -1236,14 +1236,27 @@ fn get_social_media_link(key: &str, value: &str) -> Option<(String, String)> {
 
 // Helper component for contact information item
 #[component]
-fn ContactInfoItem(key: String, value: String) -> impl IntoView {
+fn ContactInfoItem(key: String, value: crate::config::SectionValue) -> impl IntoView {
+    use crate::config::SectionValue;
+
     let display_key = normalize_display_key(&key);
-    let social_link = get_social_media_link(&key, &value);
+
+    // Determine the link information based on the section value type
+    let link_info: Option<(String, String)> = match &value {
+        SectionValue::Link { display, url } => {
+            // Explicit URL and display provided - use them directly
+            Some((url.clone(), display.clone()))
+        }
+        SectionValue::Simple(s) => {
+            // Simple string - try automatic formatting for known social media
+            get_social_media_link_from_string(&key, s)
+        }
+    };
 
     view! {
         <div class="contact-item">
             <strong>{display_key}":"</strong>
-            {if let Some((url, display_text)) = social_link {
+            {if let Some((url, display_text)) = link_info {
                 view! {
                     <p>
                         <a href=url target="_blank" rel="noopener noreferrer">
@@ -1253,7 +1266,7 @@ fn ContactInfoItem(key: String, value: String) -> impl IntoView {
                 }
                     .into_any()
             } else {
-                view! { <p>{value}</p> }.into_any()
+                view! { <p>{value.display()}</p> }.into_any()
             }}
         </div>
     }
