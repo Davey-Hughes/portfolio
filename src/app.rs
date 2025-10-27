@@ -771,31 +771,34 @@ fn PhotoDetailPage() -> impl IntoView {
                     pan_x.set(0.0);
                     pan_y.set(0.0);
                 } else {
-                    // Get the image element to calculate proper positioning
-                    if let Some(target) = touch_event.target() {
-                        if let Some(img) = target.dyn_ref::<web_sys::Element>() {
-                            let rect = img.get_bounding_client_rect();
+                    // Get viewport center
+                    let viewport_center_x = web_sys::window()
+                        .and_then(|w| w.inner_width().ok())
+                        .and_then(|w| w.as_f64())
+                        .unwrap_or(0.0)
+                        / 2.0;
+                    let viewport_center_y = web_sys::window()
+                        .and_then(|w| w.inner_height().ok())
+                        .and_then(|h| h.as_f64())
+                        .unwrap_or(0.0)
+                        / 2.0;
 
-                            // Calculate image center at the start of pinch
-                            let img_center_x = rect.left() + (rect.width() / 2.0);
-                            let img_center_y = rect.top() + (rect.height() / 2.0);
+                    // Calculate offset from viewport center to pinch center
+                    let offset_x = initial_pinch_center_x.get() - viewport_center_x;
+                    let offset_y = initial_pinch_center_y.get() - viewport_center_y;
 
-                            // Offset from pinch center to image center at start
-                            let offset_x = initial_pinch_center_x.get() - img_center_x;
-                            let offset_y = initial_pinch_center_y.get() - img_center_y;
+                    // Calculate zoom ratio
+                    let zoom_ratio = new_zoom / initial_zoom.get();
 
-                            // Calculate zoom ratio from initial zoom
-                            let zoom_ratio = new_zoom / initial_zoom.get();
+                    // Adjust pan to keep the pinch point stationary
+                    let new_pan_x =
+                        initial_pan_x.get() * zoom_ratio - offset_x * (zoom_ratio - 1.0);
+                    let new_pan_y =
+                        initial_pan_y.get() * zoom_ratio - offset_y * (zoom_ratio - 1.0);
 
-                            // Adjust pan to zoom towards pinch center
-                            let new_pan_x = initial_pan_x.get() + offset_x * (1.0 - zoom_ratio);
-                            let new_pan_y = initial_pan_y.get() + offset_y * (1.0 - zoom_ratio);
-
-                            zoom_level.set(new_zoom);
-                            pan_x.set(new_pan_x);
-                            pan_y.set(new_pan_y);
-                        }
-                    }
+                    zoom_level.set(new_zoom);
+                    pan_x.set(new_pan_x);
+                    pan_y.set(new_pan_y);
                 }
             } else if touches.length() == 1 && is_panning.get() && zoom_level.get() > 1.0 {
                 // Single finger panning
