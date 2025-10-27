@@ -485,9 +485,15 @@ img {
   transition: opacity 0.3s ease;
   z-index: 10001;
   line-height: 1;
+  opacity: 1;
 
   &:hover {
     opacity: 0.7;
+  }
+
+  &.hidden {
+    opacity: 0;
+    pointer-events: none;
   }
 }
 
@@ -497,6 +503,13 @@ img {
   left: 50%;
   transform: translateX(-50%);
   z-index: 10001;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+
+  &.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 .zoom-slider-container {

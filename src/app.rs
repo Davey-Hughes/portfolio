@@ -477,10 +477,48 @@ fn PhotoDetailPage() -> impl IntoView {
     let start_x = RwSignal::new(0.0);
     let start_y = RwSignal::new(0.0);
     let is_details_expanded = RwSignal::new(false);
+    let show_zoom_controls = RwSignal::new(true);
     #[cfg(feature = "hydrate")]
     let initial_pinch_distance = RwSignal::new(0.0);
     #[cfg(feature = "hydrate")]
     let initial_zoom = RwSignal::new(1.0);
+    #[cfg(feature = "hydrate")]
+    let initial_pinch_center_x = RwSignal::new(0.0);
+    #[cfg(feature = "hydrate")]
+    let initial_pinch_center_y = RwSignal::new(0.0);
+    #[cfg(feature = "hydrate")]
+    let initial_pan_x = RwSignal::new(0.0);
+    #[cfg(feature = "hydrate")]
+    let initial_pan_y = RwSignal::new(0.0);
+    #[cfg(feature = "hydrate")]
+    let hide_controls_timeout: StoredValue<Option<i32>> = StoredValue::new(None);
+
+    #[cfg(feature = "hydrate")]
+    let reset_hide_timer = move || {
+        show_zoom_controls.set(true);
+
+        // Clear existing timeout
+        if let Some(timeout_id) = hide_controls_timeout.get_value() {
+            web_sys::window()
+                .unwrap()
+                .clear_timeout_with_handle(timeout_id);
+        }
+
+        // Set new timeout
+        let timeout_id = web_sys::window()
+            .unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                &leptos::wasm_bindgen::closure::Closure::once(move || {
+                    show_zoom_controls.set(false);
+                })
+                .into_js_value()
+                .unchecked_ref(),
+                1000,
+            )
+            .ok();
+
+        hide_controls_timeout.set_value(timeout_id);
+    };
 
     let toggle_fullscreen = move |_| {
         is_fullscreen.update(|val| *val = !*val);
@@ -489,6 +527,11 @@ fn PhotoDetailPage() -> impl IntoView {
             zoom_level.set(1.0);
             pan_x.set(0.0);
             pan_y.set(0.0);
+        }
+        #[cfg(feature = "hydrate")]
+        {
+            show_zoom_controls.set(true);
+            reset_hide_timer();
         }
     };
 
@@ -514,6 +557,8 @@ fn PhotoDetailPage() -> impl IntoView {
             pan_x.set(0.0);
             pan_y.set(0.0);
         }
+        #[cfg(feature = "hydrate")]
+        reset_hide_timer();
     };
 
     let on_image_click = move |ev: leptos::ev::MouseEvent| {
@@ -574,6 +619,8 @@ fn PhotoDetailPage() -> impl IntoView {
             pan_x.set(f64::from(ev.client_x()) - start_x.get());
             pan_y.set(f64::from(ev.client_y()) - start_y.get());
         }
+        #[cfg(feature = "hydrate")]
+        reset_hide_timer();
     };
 
     let on_mouse_up = move |_ev: leptos::ev::MouseEvent| {
@@ -582,17 +629,61 @@ fn PhotoDetailPage() -> impl IntoView {
 
     let on_wheel = move |ev: leptos::ev::WheelEvent| {
         ev.prevent_default();
-        let delta = ev.delta_y();
-        if delta < 0.0 {
-            zoom_level.update(|z| *z = (*z * 1.1_f64).min(10.0));
-        } else {
-            zoom_level.update(|z| {
-                *z = (*z / 1.1_f64).max(1.0);
-                if (*z - 1.0).abs() < 0.01 {
-                    pan_x.set(0.0);
-                    pan_y.set(0.0);
+
+        #[cfg(feature = "hydrate")]
+        {
+            let delta = ev.delta_y();
+            let old_zoom = zoom_level.get();
+            let new_zoom = if delta < 0.0 {
+                (old_zoom * 1.1_f64).min(10.0)
+            } else {
+                (old_zoom / 1.1_f64).max(1.0)
+            };
+
+            if (new_zoom - 1.0).abs() < 0.01 {
+                zoom_level.set(1.0);
+                pan_x.set(0.0);
+                pan_y.set(0.0);
+            } else {
+                // Get mouse position relative to viewport
+                let mouse_x = f64::from(ev.client_x());
+                let mouse_y = f64::from(ev.client_y());
+
+                // Get the image element to calculate position relative to it
+                if let Some(target) = ev.target() {
+                    if let Some(img) = target.dyn_ref::<web_sys::Element>() {
+                        let rect = img.get_bounding_client_rect();
+
+                        // Calculate mouse position relative to the image center
+                        let img_center_x = rect.left() + (rect.width() / 2.0);
+                        let img_center_y = rect.top() + (rect.height() / 2.0);
+
+                        // Offset from mouse to current image center
+                        let offset_x = mouse_x - img_center_x;
+                        let offset_y = mouse_y - img_center_y;
+
+                        // Calculate the zoom ratio
+                        let zoom_ratio = new_zoom / old_zoom;
+
+                        // Adjust pan to zoom towards cursor
+                        let current_pan_x = pan_x.get();
+                        let current_pan_y = pan_y.get();
+
+                        let new_pan_x = current_pan_x + offset_x * (1.0 - zoom_ratio);
+                        let new_pan_y = current_pan_y + offset_y * (1.0 - zoom_ratio);
+
+                        zoom_level.set(new_zoom);
+                        pan_x.set(new_pan_x);
+                        pan_y.set(new_pan_y);
+                    } else {
+                        zoom_level.set(new_zoom);
+                    }
+                } else {
+                    zoom_level.set(new_zoom);
                 }
-            });
+            }
+
+            reset_hide_timer();
         }
     };
 
@@ -610,8 +701,17 @@ fn PhotoDetailPage() -> impl IntoView {
                 let dx = f64::from(touch1.client_x() - touch0.client_x());
                 let dy = f64::from(touch1.client_y() - touch0.client_y());
                 let distance = (dx * dx + dy * dy).sqrt();
+
+                // Calculate the center point between the two touches
+                let center_x = (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
+                let center_y = (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
+
                 initial_pinch_distance.set(distance);
                 initial_zoom.set(zoom_level.get());
+                initial_pinch_center_x.set(center_x);
+                initial_pinch_center_y.set(center_y);
+                initial_pan_x.set(pan_x.get());
+                initial_pan_y.set(pan_y.get());
             } else if touches.length() == 1 && zoom_level.get() > 1.0 {
                 // Single finger panning
                 touch_event.prevent_default();
@@ -640,11 +740,37 @@ fn PhotoDetailPage() -> impl IntoView {
 
                 let scale = distance / initial_pinch_distance.get();
                 let new_zoom = (initial_zoom.get() * scale).clamp(1.0, 10.0);
-                zoom_level.set(new_zoom);
 
                 if (new_zoom - 1.0).abs() < 0.01 {
+                    zoom_level.set(1.0);
                     pan_x.set(0.0);
                     pan_y.set(0.0);
+                } else {
+                    // Get the image element to calculate proper positioning
+                    if let Some(target) = touch_event.target() {
+                        if let Some(img) = target.dyn_ref::<web_sys::Element>() {
+                            let rect = img.get_bounding_client_rect();
+
+                            // Calculate image center at the start of pinch
+                            let img_center_x = rect.left() + (rect.width() / 2.0);
+                            let img_center_y = rect.top() + (rect.height() / 2.0);
+
+                            // Offset from pinch center to image center at start
+                            let offset_x = initial_pinch_center_x.get() - img_center_x;
+                            let offset_y = initial_pinch_center_y.get() - img_center_y;
+
+                            // Calculate zoom ratio from initial zoom
+                            let zoom_ratio = new_zoom / initial_zoom.get();
+
+                            // Adjust pan to zoom towards pinch center
+                            let new_pan_x = initial_pan_x.get() + offset_x * (1.0 - zoom_ratio);
+                            let new_pan_y = initial_pan_y.get() + offset_y * (1.0 - zoom_ratio);
+
+                            zoom_level.set(new_zoom);
+                            pan_x.set(new_pan_x);
+                            pan_y.set(new_pan_y);
+                        }
+                    }
                 }
             } else if touches.length() == 1 && is_panning.get() && zoom_level.get() > 1.0 {
                 // Single finger panning
@@ -653,6 +779,7 @@ fn PhotoDetailPage() -> impl IntoView {
                 pan_x.set(f64::from(touch.client_x()) - start_x.get());
                 pan_y.set(f64::from(touch.client_y()) - start_y.get());
             }
+            reset_hide_timer();
         }
     };
 
@@ -873,10 +1000,17 @@ fn PhotoDetailPage() -> impl IntoView {
                                                                 on:click=close_fullscreen
                                                                 on:wheel=on_wheel
                                                             >
-                                                                <div class="fullscreen-close" on:click=toggle_fullscreen>
+                                                                <div
+                                                                    class="fullscreen-close"
+                                                                    class:hidden=move || !show_zoom_controls.get()
+                                                                    on:click=toggle_fullscreen
+                                                                >
                                                                     "✕"
                                                                 </div>
-                                                                <div class="fullscreen-controls">
+                                                                <div
+                                                                    class="fullscreen-controls"
+                                                                    class:hidden=move || !show_zoom_controls.get()
+                                                                >
                                                                     <div class="zoom-slider-container">
                                                                         <label class="zoom-label">"1×"</label>
                                                                         <input
