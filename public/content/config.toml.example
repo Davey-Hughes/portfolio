@@ -6,6 +6,11 @@
 site_name = "Your Name"
 site_tagline = "Photography"
 
+# Optional: Custom page title
+# If not specified, it will default to site_name
+# Uncomment and customize if you want a different title for the browser tab:
+# site_title = "Your Name - Photography Portfolio"
+
 # Optional: Custom copyright text
 # If not specified, it will be auto-generated as: "© {current_year} {site_name}. All rights reserved."
 # Uncomment and customize if you want a custom copyright notice:

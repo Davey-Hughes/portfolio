@@ -42,6 +42,8 @@ impl SectionValue {
 /// ```toml
 /// site_name = "John Doe"
 /// site_tagline = "Photography Portfolio"
+/// # site_title is optional - if not specified, it will default to site_name
+/// # site_title = "John Doe Photography"
 /// # site_copyright is optional - if not specified, it will be auto-generated as:
 /// # "© {current_year} {site_name}. All rights reserved."
 /// # site_copyright = "© 2024 John Doe. All rights reserved."
@@ -66,12 +68,21 @@ pub struct SiteConfig {
     pub site_name: String,
     pub site_tagline: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub site_copyright: Option<String>,
     #[serde(default)]
     pub sections: HashMap<String, SectionValue>,
 }
 
 impl SiteConfig {
+    /// Get the page title, defaulting to site_name if not explicitly set
+    pub fn title(&self) -> String {
+        self.site_title
+            .clone()
+            .unwrap_or_else(|| self.site_name.clone())
+    }
+
     /// Get the copyright text, generating it if not explicitly set
     pub fn copyright(&self) -> String {
         self.site_copyright.clone().unwrap_or_else(|| {
@@ -89,6 +100,7 @@ impl Default for SiteConfig {
         Self {
             site_name: "Your Name".to_string(),
             site_tagline: "Photography".to_string(),
+            site_title: None,
             site_copyright: None,
             sections: HashMap::new(),
         }
