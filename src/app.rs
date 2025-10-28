@@ -3,12 +3,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -19,6 +19,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
                 <AutoReload options=options.clone() />
                 <HydrationScripts options />
                 <MetaTags />
@@ -914,8 +915,7 @@ fn PhotoDetailPage() -> impl IntoView {
                             .into_any();
                     };
                     let Some(photo_list) = photos.get().and_then(|result| result.ok()) else {
-                        return
-                        // Get photo list
+                        return // Get photo list
                         view! { <div class="error">"Failed to load photo"</div> }
                             .into_any();
                     };
@@ -923,8 +923,7 @@ fn PhotoDetailPage() -> impl IntoView {
                         .iter()
                         .enumerate()
                         .find(|(_, p)| p.slug == slug_val) else {
-                        return
-                        // Find the photo and its index
+                        return // Find the photo and its index
                         view! { <PhotoNotFound /> }
                             .into_any();
                     };
