@@ -3,12 +3,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{A, Route, Router, Routes},
+    components::{Route, Router, Routes, A},
     hooks::{use_location, use_params},
     params::Params,
+    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -42,28 +42,34 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
     }
 }
 
+// Helper component for page title
 #[component]
-pub fn App() -> impl IntoView {
-    provide_meta_context();
+fn PageTitle() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/portfolio.css" />
         <Suspense fallback=|| {
             view! { <Title text="Loading..." /> }
         }>
             {move || {
-                config
+                let title = config
                     .get()
-                    .map(|config_result| {
-                        let title = config_result
-                            .as_ref()
-                            .map(|cfg| cfg.title())
-                            .unwrap_or_else(|_| "Photography Portfolio".to_string());
-                        view! { <Title text=title /> }
-                    })
+                    .and_then(|result| result.ok())
+                    .map(|cfg| cfg.title())
+                    .unwrap_or_else(|| "Photography Portfolio".to_string());
+                view! { <Title text=title /> }
             }}
         </Suspense>
+    }
+}
+
+#[component]
+pub fn App() -> impl IntoView {
+    provide_meta_context();
+
+    view! {
+        <Stylesheet id="leptos" href="/pkg/portfolio.css" />
+        <PageTitle />
 
         <Router>
             <Nav />
@@ -146,34 +152,39 @@ fn NavLinksList() -> impl IntoView {
     }
 }
 
+// Helper component for nav brand
 #[component]
-fn Nav() -> impl IntoView {
+fn NavBrand() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
+        <Suspense fallback=|| {
+            view! { "Loading..." }
+        }>
+            {move || {
+                let site_name = config
+                    .get()
+                    .and_then(|result| result.ok())
+                    .map(|cfg| cfg.site_name)
+                    .unwrap_or_else(|| "Your Name".to_string());
+
+                view! {
+                    <A href="/" attr:class="nav-brand">
+                        {site_name}
+                    </A>
+                }
+            }}
+        </Suspense>
+    }
+}
+
+#[component]
+fn Nav() -> impl IntoView {
+    view! {
         <nav class="navbar">
             <div class="nav-container">
-                <Suspense fallback=move || {
-                    view! { "Loading..." }
-                }>
-                    {move || {
-                        config
-                            .get()
-                            .map(|config_result| {
-                                let site_name = config_result
-                                    .as_ref()
-                                    .map(|cfg| cfg.site_name.clone())
-                                    .unwrap_or_else(|_| "Your Name".to_string());
-
-                                view! {
-                                    <A href="/" attr:class="nav-brand">
-                                        {site_name}
-                                    </A>
-                                    <NavLinksList />
-                                }
-                            })
-                    }}
-                </Suspense>
+                <NavBrand />
+                <NavLinksList />
             </div>
         </nav>
     }
@@ -185,19 +196,18 @@ fn Footer() -> impl IntoView {
 
     view! {
         <footer class="footer">
-            <Suspense fallback=move || {
+            <Suspense fallback=|| {
                 view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
             }>
                 {move || {
-                    config
+                    let copyright = config
                         .get()
-                        .map(|config_result| match config_result {
-                            Ok(cfg) => view! { <p>{cfg.copyright()}</p> }.into_any(),
-                            Err(_) => {
-                                view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
-                                    .into_any()
-                            }
-                        })
+                        .and_then(|result| result.ok())
+                        .map(|cfg| cfg.copyright())
+                        .unwrap_or_else(|| {
+                            "© 2025 Your Photography. All rights reserved.".to_string()
+                        });
+                    view! { <p>{copyright}</p> }
                 }}
             </Suspense>
         </footer>
@@ -275,64 +285,70 @@ fn PhotoGrid(photos: Vec<PhotoInfo>) -> impl IntoView {
     }
 }
 
+// Helper component for hero section
 #[component]
-fn HomePage() -> impl IntoView {
-    let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
+fn HeroSection() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
-        <div class="home-page">
-            <div class="hero-simple">
-                <div class="hero-text">
-                    <Suspense fallback=move || {
-                        view! {
-                            <h1>"YOUR NAME"</h1>
-                            <p class="hero-tagline">"Photography"</p>
-                        }
-                    }>
-                        {move || {
-                            config
-                                .get()
-                                .map(|config_result| match config_result {
-                                    Ok(cfg) => {
-                                        view! {
-                                            <h1>{cfg.site_name.clone().to_uppercase()}</h1>
-                                            <p class="hero-tagline">{cfg.site_tagline.clone()}</p>
-                                        }
-                                            .into_any()
-                                    }
-                                    Err(_) => {
-                                        view! {
-                                            <h1>"YOUR NAME"</h1>
-                                            <p class="hero-tagline">"Photography"</p>
-                                        }
-                                            .into_any()
-                                    }
-                                })
-                        }}
-                    </Suspense>
-                </div>
-            </div>
-
-            <div class="photo-grid-home">
-                <Suspense fallback=move || {
-                    view! { <div class="loading">"Loading photos..."</div> }
+        <div class="hero-simple">
+            <div class="hero-text">
+                <Suspense fallback=|| {
+                    view! {
+                        <h1>"YOUR NAME"</h1>
+                        <p class="hero-tagline">"Photography"</p>
+                    }
                 }>
                     {move || {
-                        photos
+                        let (name, tagline) = config
                             .get()
-                            .map(|photos_result| match photos_result {
-                                Ok(photo_list) => {
-                                    view! { <PhotoGrid photos=photo_list /> }.into_any()
-                                }
-                                Err(_) => {
-                                    view! { <div class="error">"Failed to load photos"</div> }
-                                        .into_any()
-                                }
-                            })
+                            .and_then(|result| result.ok())
+                            .map(|cfg| (cfg.site_name.to_uppercase(), cfg.site_tagline))
+                            .unwrap_or_else(|| (
+                                "YOUR NAME".to_string(),
+                                "Photography".to_string(),
+                            ));
+
+                        view! {
+                            <h1>{name}</h1>
+                            <p class="hero-tagline">{tagline}</p>
+                        }
                     }}
                 </Suspense>
             </div>
+        </div>
+    }
+}
+
+// Helper component for photo grid loading
+#[component]
+fn PhotoGridLoader() -> impl IntoView {
+    let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
+
+    view! {
+        <div class="photo-grid-home">
+            <Suspense fallback=|| {
+                view! { <div class="loading">"Loading photos..."</div> }
+            }>
+                {move || {
+                    match photos.get().and_then(|result| result.ok()) {
+                        Some(photo_list) => view! { <PhotoGrid photos=photo_list /> }.into_any(),
+                        None => {
+                            view! { <div class="error">"Failed to load photos"</div> }.into_any()
+                        }
+                    }
+                }}
+            </Suspense>
+        </div>
+    }
+}
+
+#[component]
+fn HomePage() -> impl IntoView {
+    view! {
+        <div class="home-page">
+            <HeroSection />
+            <PhotoGridLoader />
         </div>
     }
 }
@@ -342,14 +358,31 @@ struct GalleryParams {
     name: String,
 }
 
+// Helper component for gallery hero
 #[component]
-fn GalleryPage() -> impl IntoView {
-    let params = use_params::<GalleryParams>();
+fn GalleryHero(gallery_name: String) -> impl IntoView {
+    let display_name = normalize_display_key(&gallery_name.replace(['-', '_'], " "));
+
+    view! {
+        <div class="hero-simple">
+            <div class="hero-text">
+                <h1>{display_name.to_uppercase()}</h1>
+                <p class="hero-tagline">
+                    <A href="/">"← Back to Home"</A>
+                </p>
+            </div>
+        </div>
+    }
+}
+
+// Helper component for gallery photos loader
+#[component]
+fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
     let photos = Resource::new(
-        move || params.get().map(|p| p.name.clone()).ok(),
-        |gallery_name| async move {
-            if let Some(name) = gallery_name {
-                get_gallery_photos_by_name(name).await
+        move || Some(gallery_name.clone()),
+        |name| async move {
+            if let Some(n) = name {
+                get_gallery_photos_by_name(n).await
             } else {
                 Err(ServerFnError::new("No gallery name provided"))
             }
@@ -357,63 +390,61 @@ fn GalleryPage() -> impl IntoView {
     );
 
     view! {
+        <div class="photo-grid-home">
+            <Suspense fallback=|| {
+                view! { <div class="loading">"Loading photos..."</div> }
+            }>
+                {move || {
+                    match photos.get().and_then(|result| result.ok()) {
+                        Some(photo_list) if !photo_list.is_empty() => {
+                            view! { <PhotoGrid photos=photo_list /> }.into_any()
+                        }
+                        Some(_) => {
+                            view! {
+                                <div class="empty-gallery">
+                                    <p>"No photos found in this gallery."</p>
+                                </div>
+                            }
+                                .into_any()
+                        }
+                        None => {
+                            view! { <div class="error">"Failed to load gallery"</div> }.into_any()
+                        }
+                    }
+                }}
+            </Suspense>
+        </div>
+    }
+}
+
+#[component]
+fn GalleryPage() -> impl IntoView {
+    let params = use_params::<GalleryParams>();
+
+    view! {
         <div class="home-page">
-            <div class="hero-simple">
-                <div class="hero-text">
-                    <Suspense fallback=move || {
-                        view! {
+            <Suspense fallback=|| {
+                view! {
+                    <div class="hero-simple">
+                        <div class="hero-text">
                             <h1>"GALLERY"</h1>
                             <p class="hero-tagline">"Loading..."</p>
-                        }
-                    }>
-                        {move || {
-                            params
-                                .get()
-                                .ok()
-                                .map(|p| {
-                                    let gallery_name = normalize_display_key(
-                                        &p.name.replace(['-', '_'], " "),
-                                    );
-                                    view! {
-                                        <h1>{gallery_name.to_uppercase()}</h1>
-                                        <p class="hero-tagline">
-                                            <A href="/">"← Back to Home"</A>
-                                        </p>
-                                    }
-                                })
-                        }}
-                    </Suspense>
-                </div>
-            </div>
-
-            <div class="photo-grid-home">
-                <Suspense fallback=move || {
-                    view! { <div class="loading">"Loading photos..."</div> }
-                }>
-                    {move || {
-                        photos
-                            .get()
-                            .map(|photos_result| match photos_result {
-                                Ok(photo_list) => {
-                                    if photo_list.is_empty() {
-                                        view! {
-                                            <div class="empty-gallery">
-                                                <p>"No photos found in this gallery."</p>
-                                            </div>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! { <PhotoGrid photos=photo_list /> }.into_any()
-                                    }
-                                }
-                                Err(_) => {
-                                    view! { <div class="error">"Failed to load gallery"</div> }
-                                        .into_any()
-                                }
-                            })
-                    }}
-                </Suspense>
-            </div>
+                        </div>
+                    </div>
+                }
+            }>
+                {move || {
+                    params
+                        .get()
+                        .ok()
+                        .map(|p| {
+                            view! {
+                                <GalleryHero gallery_name=p.name.clone() />
+                                <GalleryPhotosLoader gallery_name=p.name />
+                            }
+                        })
+                }}
+            </Suspense>
         </div>
     }
 }
@@ -489,18 +520,40 @@ fn CopyrightFooter() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
-        <Suspense fallback=move || {
+        <Suspense fallback=|| {
             view! { <p>"© 2025 All rights reserved."</p> }
         }>
             {move || {
-                config
+                let copyright = config
                     .get()
-                    .map(|config_result| match config_result {
-                        Ok(cfg) => view! { <p>{cfg.copyright()}</p> }.into_any(),
-                        Err(_) => view! { <p>"© 2025 All rights reserved."</p> }.into_any(),
-                    })
+                    .and_then(|result| result.ok())
+                    .map(|cfg| cfg.copyright())
+                    .unwrap_or_else(|| "© 2025 All rights reserved.".to_string());
+                view! { <p>{copyright}</p> }
             }}
         </Suspense>
+    }
+}
+
+// Helper component for photo detail error view
+#[component]
+fn PhotoNotFound() -> impl IntoView {
+    view! {
+        <div class="error">
+            <p>"Photo not found"</p>
+            <A href="/">"Return to Gallery"</A>
+        </div>
+    }
+}
+
+// Helper component for invalid photo ID error
+#[component]
+fn InvalidPhotoId() -> impl IntoView {
+    view! {
+        <div class="error">
+            <p>"Invalid photo ID"</p>
+            <A href="/">"Return to Gallery"</A>
+        </div>
     }
 }
 
@@ -851,341 +904,318 @@ fn PhotoDetailPage() -> impl IntoView {
 
     view! {
         <div class="photo-detail-page">
-            <Suspense fallback=move || {
+            <Suspense fallback=|| {
                 view! { <div class="loading">"Loading photo..."</div> }
             }>
                 {move || {
-                    let slug = params.get().map(|p| p.id.clone()).ok();
-                    photos
-                        .get()
-                        .map(move |photos_result| match photos_result {
-                            Ok(photo_list) => {
-                                if let Some(slug_val) = slug.clone() {
-                                    if let Some((idx, photo)) = photo_list
-                                        .iter()
-                                        .enumerate()
-                                        .find(|(_, p)| p.slug == slug_val)
-                                    {
-                                        let prev_photo = if idx > 0 {
-                                            photo_list.get(idx - 1)
-                                        } else {
-                                            None
-                                        };
-                                        let next_photo = if idx < photo_list.len() - 1 {
-                                            photo_list.get(idx + 1)
-                                        } else {
-                                            None
-                                        };
-                                        let is_mobile = move || {
-                                            viewport_width.get() <= 768.0 && viewport_width.get() > 0.0
-                                        };
-                                        let photo_url_cached = StoredValue::new(photo.url.clone());
-                                        let photo_url_original = StoredValue::new(
-                                            photo.original_url.clone(),
-                                        );
-                                        let photo_title = photo.title.clone();
-                                        let photo_title_fs = photo.title.clone();
-                                        let calculated_max_zoom = if let (
-                                            Some(width),
-                                            Some(height),
-                                        ) = (photo.width, photo.height) {
-                                            if width > 8000 || height > 8000 { 20.0 } else { 10.0 }
-                                        } else {
-                                            10.0
-                                        };
-                                        max_zoom.set(calculated_max_zoom);
-                                        // Use StoredValue to avoid move closure issues
+                    let Some(slug_val) = params.get().ok().map(|p| p.id) else {
+                        return // Get slug from params
+                        view! { <InvalidPhotoId /> }
+                            .into_any();
+                    };
+                    let Some(photo_list) = photos.get().and_then(|result| result.ok()) else {
+                        return
+                        // Get photo list
+                        view! { <div class="error">"Failed to load photo"</div> }
+                            .into_any();
+                    };
+                    let Some((idx, photo)) = photo_list
+                        .iter()
+                        .enumerate()
+                        .find(|(_, p)| p.slug == slug_val) else {
+                        return
+                        // Find the photo and its index
+                        view! { <PhotoNotFound /> }
+                            .into_any();
+                    };
+                    let prev_photo = if idx > 0 { photo_list.get(idx - 1).cloned() } else { None };
+                    let next_photo = if idx < photo_list.len() - 1 {
+                        photo_list.get(idx + 1).cloned()
+                    } else {
+                        None
+                    };
+                    let is_mobile = move || {
+                        viewport_width.get() <= 768.0 && viewport_width.get() > 0.0
+                    };
+                    let photo_url_cached = StoredValue::new(photo.url.clone());
+                    let photo_url_original = StoredValue::new(photo.original_url.clone());
+                    let photo_title = photo.title.clone();
+                    let photo_title_fs = photo.title.clone();
+                    let calculated_max_zoom = match (photo.width, photo.height) {
+                        (Some(w), Some(h)) if w > 8000 || h > 8000 => 20.0,
+                        (Some(_), Some(_)) => 10.0,
+                        _ => 10.0,
+                    };
+                    max_zoom.set(calculated_max_zoom);
 
-                                        // Clone for detail page image
+                    // Get navigation photos
 
-                                        // Clone for fullscreen image
+                    // Setup mobile detection
 
-                                        // Use reactive viewport width signal for mobile detection
+                    // Store photo URLs to avoid cloning issues
 
-                                        // Use cached URL for mobile devices (viewport width <= 768px)
-                                        // to improve performance with large images
+                    // Calculate max zoom based on image resolution
 
-                                        // Calculate max zoom based on image resolution
-                                        // High-res images (>8000px in either dimension) get 20x zoom, others get 10x
-                                        // Default if dimensions unknown
-
-                                        view! {
-                                            <div class="photo-detail-container">
-                                                <div class="photo-detail-header">
-                                                    <A href="/" attr:class="back-link">
-                                                        "← Back to Gallery"
-                                                    </A>
-                                                </div>
-                                                <div class="photo-detail-content">
-                                                    <div
-                                                        class="photo-detail-image"
-                                                        on:click=toggle_fullscreen
-                                                        style="cursor: pointer;"
-                                                    >
-                                                        <img
-                                                            src=move || {
-                                                                if is_mobile() {
-                                                                    photo_url_cached.get_value()
-                                                                } else {
-                                                                    photo_url_original.get_value()
-                                                                }
-                                                            }
-                                                            alt=photo_title.clone()
-                                                        />
-                                                    </div>
-                                                    <div class="photo-detail-info">
-                                                        <h1
-                                                            class="photo-title-toggle"
-                                                            class:expanded=move || is_details_expanded.get()
-                                                            on:click=move |_| {
-                                                                is_details_expanded
-                                                                    .update(|expanded| *expanded = !*expanded)
-                                                            }
-                                                        >
-                                                            {photo_title}
-                                                        </h1>
-                                                        <div
-                                                            class="photo-exif"
-                                                            class:expanded=move || is_details_expanded.get()
-                                                        >
-                                                            {photo
-                                                                .date_taken
-                                                                .as_ref()
-                                                                .map(|date| {
-                                                                    view! { <ExifField heading="Date" value=date.clone() /> }
-                                                                })}
-                                                            {if let (Some(width), Some(height)) = (
-                                                                photo.width,
-                                                                photo.height,
-                                                            ) {
-                                                                let dimensions = format!("{} × {} px", width, height);
-                                                                view! {
-                                                                    <ExifField heading="Dimensions" value=dimensions />
-                                                                }
-                                                                    .into_any()
-                                                            } else {
-                                                                view! { <div></div> }.into_any()
-                                                            }}
-                                                            <CameraInfo
-                                                                camera_make=photo.camera_make.clone()
-                                                                camera_model=photo.camera_model.clone()
-                                                            />
-                                                            {photo
-                                                                .lens_model
-                                                                .as_ref()
-                                                                .map(|lens| {
-                                                                    view! { <ExifField heading="Lens" value=lens.clone() /> }
-                                                                })}
-                                                            <PhotoSettings
-                                                                focal_length=photo.focal_length.clone()
-                                                                aperture=photo.aperture.clone()
-                                                                shutter_speed=photo.shutter_speed.clone()
-                                                                iso=photo.iso.clone()
-                                                            />
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div class="photo-navigation">
-                                                    {prev_photo
-                                                        .map(|prev| {
-                                                            view! {
-                                                                <A
-                                                                    href=format!("/photo/{}", prev.slug)
-                                                                    attr:class="nav-button nav-prev"
-                                                                >
-                                                                    "← Previous"
-                                                                </A>
-                                                            }
-                                                        })} <div class="photo-nav-copyright">
-                                                        <CopyrightFooter />
-                                                    </div>
-                                                    {next_photo
-                                                        .map(|next| {
-                                                            view! {
-                                                                <A
-                                                                    href=format!("/photo/{}", next.slug)
-                                                                    attr:class="nav-button nav-next"
-                                                                >
-                                                                    "Next →"
-                                                                </A>
-                                                            }
-                                                        })}
-                                                </div>
-
-                                                {move || {
-                                                    if is_fullscreen.get() {
-                                                        let transform_style = move || {
-                                                            format!(
-                                                                "transform: translate({}px, {}px) scale({}); cursor: {};",
-                                                                pan_x.get(),
-                                                                pan_y.get(),
-                                                                zoom_level.get(),
-                                                                if zoom_level.get() > 1.0 {
-                                                                    if is_panning.get() { "grabbing" } else { "grab" }
-                                                                } else {
-                                                                    "default"
-                                                                },
-                                                            )
-                                                        };
-                                                        view! {
-                                                            <div
-                                                                class="fullscreen-overlay"
-                                                                on:click=close_fullscreen
-                                                                on:wheel=on_wheel
-                                                            >
-                                                                <div
-                                                                    class="fullscreen-close"
-                                                                    class:hidden=move || !show_zoom_controls.get()
-                                                                    on:click=toggle_fullscreen
-                                                                >
-                                                                    "✕"
-                                                                </div>
-                                                                <div
-                                                                    class="fullscreen-controls"
-                                                                    class:hidden=move || !show_zoom_controls.get()
-                                                                >
-                                                                    <div class="zoom-slider-container">
-                                                                        <label class="zoom-label">"1×"</label>
-                                                                        <input
-                                                                            type="range"
-                                                                            class="zoom-slider"
-                                                                            min="1.0"
-                                                                            prop:max=move || max_zoom.get()
-                                                                            step="0.1"
-                                                                            prop:value=move || zoom_level.get()
-                                                                            on:input=on_zoom_change
-                                                                        />
-                                                                        <label class="zoom-label">
-                                                                            {move || format!("{}×", max_zoom.get() as i32)}
-                                                                        </label>
-                                                                    </div>
-                                                                </div>
-                                                                <img
-                                                                    src=move || {
-                                                                        if is_mobile() {
-                                                                            photo_url_cached.get_value()
-                                                                        } else {
-                                                                            photo_url_original.get_value()
-                                                                        }
-                                                                    }
-                                                                    alt=photo_title_fs.clone()
-                                                                    class="fullscreen-image"
-                                                                    style=transform_style
-                                                                    on:click=on_image_click
-                                                                    on:dblclick=on_image_dblclick
-                                                                    on:mousedown=on_mouse_down
-                                                                    on:mousemove=on_mouse_move
-                                                                    on:mouseup=on_mouse_up
-                                                                    on:mouseleave=on_mouse_up
-                                                                    on:touchstart=on_touch_start
-                                                                    on:touchmove=on_touch_move
-                                                                    on:touchend=on_touch_end
-                                                                />
-                                                            </div>
-                                                        }
-                                                            .into_any()
-                                                    } else {
-                                                        view! { <div></div> }.into_any()
-                                                    }
-                                                }}
-                                            </div>
+                    view! {
+                        <div class="photo-detail-container">
+                            <div class="photo-detail-header">
+                                <A href="/" attr:class="back-link">
+                                    "← Back to Gallery"
+                                </A>
+                            </div>
+                            <div class="photo-detail-content">
+                                <div
+                                    class="photo-detail-image"
+                                    on:click=toggle_fullscreen
+                                    style="cursor: pointer;"
+                                >
+                                    <img
+                                        src=move || {
+                                            if is_mobile() {
+                                                photo_url_cached.get_value()
+                                            } else {
+                                                photo_url_original.get_value()
+                                            }
                                         }
-                                            .into_any()
-                                    } else {
-                                        view! {
-                                            <div class="error">
-                                                <p>"Photo not found"</p>
-                                                <A href="/">"Return to Gallery"</A>
-                                            </div>
+                                        alt=photo_title.clone()
+                                    />
+                                </div>
+                                <div class="photo-detail-info">
+                                    <h1
+                                        class="photo-title-toggle"
+                                        class:expanded=move || is_details_expanded.get()
+                                        on:click=move |_| {
+                                            is_details_expanded
+                                                .update(|expanded| *expanded = !*expanded)
                                         }
-                                            .into_any()
-                                    }
-                                } else {
+                                    >
+                                        {photo_title}
+                                    </h1>
+                                    <div
+                                        class="photo-exif"
+                                        class:expanded=move || is_details_expanded.get()
+                                    >
+                                        {photo
+                                            .date_taken
+                                            .as_ref()
+                                            .map(|date| {
+                                                view! { <ExifField heading="Date" value=date.clone() /> }
+                                            })}
+                                        {if let (Some(width), Some(height)) = (
+                                            photo.width,
+                                            photo.height,
+                                        ) {
+                                            let dimensions = format!("{} × {} px", width, height);
+                                            view! {
+                                                <ExifField heading="Dimensions" value=dimensions />
+                                            }
+                                                .into_any()
+                                        } else {
+                                            view! { <div></div> }.into_any()
+                                        }}
+                                        <CameraInfo
+                                            camera_make=photo.camera_make.clone()
+                                            camera_model=photo.camera_model.clone()
+                                        />
+                                        {photo
+                                            .lens_model
+                                            .as_ref()
+                                            .map(|lens| {
+                                                view! { <ExifField heading="Lens" value=lens.clone() /> }
+                                            })}
+                                        <PhotoSettings
+                                            focal_length=photo.focal_length.clone()
+                                            aperture=photo.aperture.clone()
+                                            shutter_speed=photo.shutter_speed.clone()
+                                            iso=photo.iso.clone()
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="photo-navigation">
+                                {prev_photo
+                                    .map(|prev| {
+                                        view! {
+                                            <A
+                                                href=format!("/photo/{}", prev.slug)
+                                                attr:class="nav-button nav-prev"
+                                            >
+                                                "← Previous"
+                                            </A>
+                                        }
+                                    })} <div class="photo-nav-copyright">
+                                    <CopyrightFooter />
+                                </div>
+                                {next_photo
+                                    .map(|next| {
+                                        view! {
+                                            <A
+                                                href=format!("/photo/{}", next.slug)
+                                                attr:class="nav-button nav-next"
+                                            >
+                                                "Next →"
+                                            </A>
+                                        }
+                                    })}
+                            </div>
+
+                            {move || {
+                                if is_fullscreen.get() {
+                                    let transform_style = move || {
+                                        format!(
+                                            "transform: translate({}px, {}px) scale({}); cursor: {};",
+                                            pan_x.get(),
+                                            pan_y.get(),
+                                            zoom_level.get(),
+                                            if zoom_level.get() > 1.0 {
+                                                if is_panning.get() { "grabbing" } else { "grab" }
+                                            } else {
+                                                "default"
+                                            },
+                                        )
+                                    };
                                     view! {
-                                        <div class="error">
-                                            <p>"Invalid photo ID"</p>
-                                            <A href="/">"Return to Gallery"</A>
+                                        <div
+                                            class="fullscreen-overlay"
+                                            on:click=close_fullscreen
+                                            on:wheel=on_wheel
+                                        >
+                                            <div
+                                                class="fullscreen-close"
+                                                class:hidden=move || !show_zoom_controls.get()
+                                                on:click=toggle_fullscreen
+                                            >
+                                                "✕"
+                                            </div>
+                                            <div
+                                                class="fullscreen-controls"
+                                                class:hidden=move || !show_zoom_controls.get()
+                                            >
+                                                <div class="zoom-slider-container">
+                                                    <label class="zoom-label">"1×"</label>
+                                                    <input
+                                                        type="range"
+                                                        class="zoom-slider"
+                                                        min="1.0"
+                                                        prop:max=move || max_zoom.get()
+                                                        step="0.1"
+                                                        prop:value=move || zoom_level.get()
+                                                        on:input=on_zoom_change
+                                                    />
+                                                    <label class="zoom-label">
+                                                        {move || format!("{}×", max_zoom.get() as i32)}
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <img
+                                                src=move || {
+                                                    if is_mobile() {
+                                                        photo_url_cached.get_value()
+                                                    } else {
+                                                        photo_url_original.get_value()
+                                                    }
+                                                }
+                                                alt=photo_title_fs.clone()
+                                                class="fullscreen-image"
+                                                style=transform_style
+                                                on:click=on_image_click
+                                                on:dblclick=on_image_dblclick
+                                                on:mousedown=on_mouse_down
+                                                on:mousemove=on_mouse_move
+                                                on:mouseup=on_mouse_up
+                                                on:mouseleave=on_mouse_up
+                                                on:touchstart=on_touch_start
+                                                on:touchmove=on_touch_move
+                                                on:touchend=on_touch_end
+                                            />
                                         </div>
                                     }
                                         .into_any()
+                                } else {
+                                    view! { <div></div> }.into_any()
                                 }
-                            }
-                            Err(_) => {
-                                view! { <div class="error">"Failed to load photo"</div> }.into_any()
-                            }
-                        })
+                            }}
+                        </div>
+                    }
+                        .into_any()
                 }}
             </Suspense>
         </div>
     }
 }
 
+// Helper component for about content display
 #[component]
-fn AboutPage() -> impl IntoView {
+fn AboutContent() -> impl IntoView {
     let about_content = Resource::new(|| (), |()| async { get_about_content().await });
 
     view! {
-        <div class="about-page">
-            <Suspense fallback=move || {
-                view! {
-                    <div class="about-container">
-                        <div class="about-image">
-                            <img src="/images/profile.jpg" alt="Photographer" />
-                        </div>
-                        <div class="about-content">
-                            <h1>"About Me"</h1>
-                            <p>"Loading..."</p>
-                        </div>
+        <Suspense fallback=|| {
+            view! {
+                <div class="about-container">
+                    <div class="about-image">
+                        <img src="/images/profile.jpg" alt="Photographer" />
                     </div>
+                    <div class="about-content">
+                        <h1>"About Me"</h1>
+                        <p>"Loading..."</p>
+                    </div>
+                </div>
+            }
+        }>
+            {move || {
+                match about_content.get().and_then(|result| result.ok()) {
+                    Some(about) => {
+                        let paragraphs: Vec<_> = about
+                            .content
+                            .split("\n\n")
+                            .map(|p| p.trim())
+                            .filter(|p| !p.is_empty())
+                            .collect();
+
+                        view! {
+                            <div class="about-container">
+                                {about
+                                    .image_url
+                                    .map(|url| {
+                                        view! {
+                                            <div class="about-image">
+                                                <img src=url alt="Photographer" />
+                                            </div>
+                                        }
+                                    })} <div class="about-content">
+                                    <h1>"About Me"</h1>
+                                    {paragraphs
+                                        .into_iter()
+                                        .map(|p| view! { <p>{p}</p> })
+                                        .collect_view()}
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    None => {
+                        view! {
+                            <div class="about-container">
+                                <div class="about-content">
+                                    <h1>"About Me"</h1>
+                                    <p>"Failed to load about content"</p>
+                                </div>
+                            </div>
+                        }
+                            .into_any()
+                    }
                 }
-            }>
-                {move || {
-                    about_content
-                        .get()
-                        .map(|content_result| match content_result {
-                            Ok(about) => {
-                                let paragraphs = about
-                                    .content
-                                    .split("\n\n")
-                                    .map(|p| p.trim())
-                                    .filter(|p| !p.is_empty())
-                                    .collect::<Vec<_>>();
-                                view! {
-                                    <div class="about-container">
-                                        {about
-                                            .image_url
-                                            .as_ref()
-                                            .map(|url| {
-                                                view! {
-                                                    <div class="about-image">
-                                                        <img src=url.clone() alt="Photographer" />
-                                                    </div>
-                                                }
-                                            })} <div class="about-content">
-                                            <h1>"About Me"</h1>
-                                            {paragraphs
-                                                .into_iter()
-                                                .map(|p| view! { <p>{p}</p> })
-                                                .collect_view()}
-                                        </div>
-                                    </div>
-                                }
-                                    .into_any()
-                            }
-                            Err(_) => {
-                                view! {
-                                    <div class="about-container">
-                                        <div class="about-content">
-                                            <h1>"About Me"</h1>
-                                            <p>"Failed to load about content"</p>
-                                        </div>
-                                    </div>
-                                }
-                                    .into_any()
-                            }
-                        })
-                }}
-            </Suspense>
+            }}
+        </Suspense>
+    }
+}
+
+#[component]
+fn AboutPage() -> impl IntoView {
+    view! {
+        <div class="about-page">
+            <AboutContent />
         </div>
     }
 }
@@ -1287,13 +1317,46 @@ fn ContactInfoItem(key: String, value: crate::config::SectionValue) -> impl Into
     }
 }
 
+// Helper component for contact information section
 #[component]
-fn ContactPage() -> impl IntoView {
+fn ContactInfoSection() -> impl IntoView {
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <div class="contact-info"></div> }
+        }>
+            {move || {
+                match config.get().and_then(|result| result.ok()) {
+                    Some(cfg) if !cfg.sections.is_empty() => {
+                        let mut sections_vec: Vec<_> = cfg.sections.into_iter().collect();
+                        sections_vec.sort_by(|a, b| a.0.cmp(&b.0));
+                        view! {
+                            <div class="contact-info">
+                                <h2>"Contact Information"</h2>
+                                {sections_vec
+                                    .into_iter()
+                                    .map(|(key, value)| {
+                                        view! { <ContactInfoItem key=key value=value /> }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    _ => view! { <div class="contact-info"></div> }.into_any(),
+                }
+            }}
+        </Suspense>
+    }
+}
+
+// Helper component for contact form
+#[component]
+fn ContactForm(submitted: RwSignal<bool>) -> impl IntoView {
     let name = RwSignal::new(String::new());
     let email = RwSignal::new(String::new());
     let message = RwSignal::new(String::new());
-    let submitted = RwSignal::new(false);
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -1302,97 +1365,70 @@ fn ContactPage() -> impl IntoView {
     };
 
     view! {
+        <div class="contact-form">
+            {move || {
+                if submitted.get() {
+                    view! {
+                        <div class="success-message">
+                            <p>"Thank you for your message! I'll get back to you soon."</p>
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    view! {
+                        <form on:submit=on_submit>
+                            <div class="form-group">
+                                <label for="name">"Name"</label>
+                                <input
+                                    type="text"
+                                    id="name"
+                                    required
+                                    prop:value=name
+                                    on:input=move |ev| name.set(event_target_value(&ev))
+                                />
+                            </div>
+                            <div class="form-group">
+                                <label for="email">"Email"</label>
+                                <input
+                                    type="email"
+                                    id="email"
+                                    required
+                                    prop:value=email
+                                    on:input=move |ev| email.set(event_target_value(&ev))
+                                />
+                            </div>
+                            <div class="form-group">
+                                <label for="message">"Message"</label>
+                                <textarea
+                                    id="message"
+                                    rows="5"
+                                    required
+                                    prop:value=message
+                                    on:input=move |ev| message.set(event_target_value(&ev))
+                                />
+                            </div>
+                            <button type="submit" class="submit-button">
+                                "Send Message"
+                            </button>
+                        </form>
+                    }
+                        .into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+#[component]
+fn ContactPage() -> impl IntoView {
+    let submitted = RwSignal::new(false);
+
+    view! {
         <div class="contact-page">
             <h1>"Get In Touch"</h1>
-
             <div class="contact-container">
-                <Suspense fallback=move || {
-                    view! { <div class="contact-info"></div> }
-                }>
-                    {move || {
-                        config
-                            .get()
-                            .map(|config_result| match config_result {
-                                Ok(cfg) => {
-                                    if !cfg.sections.is_empty() {
-                                        let mut sections_vec: Vec<_> = cfg
-                                            .sections
-                                            .clone()
-                                            .into_iter()
-                                            .collect();
-                                        sections_vec.sort_by(|a, b| a.0.cmp(&b.0));
-                                        view! {
-                                            <div class="contact-info">
-                                                <h2>"Contact Information"</h2>
-                                                {sections_vec
-                                                    .into_iter()
-                                                    .map(|(key, value)| {
-                                                        view! { <ContactInfoItem key=key value=value /> }
-                                                    })
-                                                    .collect_view()}
-                                            </div>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! { <div class="contact-info"></div> }.into_any()
-                                    }
-                                }
-                                Err(_) => view! { <div class="contact-info"></div> }.into_any(),
-                            })
-                    }}
-                </Suspense>
-
-                <div class="contact-form">
-                    {move || {
-                        if submitted.get() {
-                            view! {
-                                <div class="success-message">
-                                    <p>"Thank you for your message! I'll get back to you soon."</p>
-                                </div>
-                            }
-                                .into_any()
-                        } else {
-                            view! {
-                                <form on:submit=on_submit>
-                                    <div class="form-group">
-                                        <label for="name">"Name"</label>
-                                        <input
-                                            type="text"
-                                            id="name"
-                                            required
-                                            prop:value=name
-                                            on:input=move |ev| name.set(event_target_value(&ev))
-                                        />
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="email">"Email"</label>
-                                        <input
-                                            type="email"
-                                            id="email"
-                                            required
-                                            prop:value=email
-                                            on:input=move |ev| email.set(event_target_value(&ev))
-                                        />
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="message">"Message"</label>
-                                        <textarea
-                                            id="message"
-                                            rows="5"
-                                            required
-                                            prop:value=message
-                                            on:input=move |ev| message.set(event_target_value(&ev))
-                                        />
-                                    </div>
-                                    <button type="submit" class="submit-button">
-                                        "Send Message"
-                                    </button>
-                                </form>
-                            }
-                                .into_any()
-                        }
-                    }}
-                </div>
+                <ContactInfoSection />
+                <ContactForm submitted=submitted />
             </div>
         </div>
     }
