@@ -281,8 +281,8 @@ fn extract_exif_data(path: &Path) -> ExifData {
     }
 
     let date_taken = exif_reader
-        .get_field(exif::Tag::DateTime, exif::In::PRIMARY)
-        .or_else(|| exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY))
+        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::DateTime, exif::In::PRIMARY))
         .map(|f| {
             let datetime_str = f.display_value().to_string();
             // Remove seconds from format "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD HH:MM"
