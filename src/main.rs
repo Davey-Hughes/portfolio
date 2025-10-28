@@ -2,14 +2,14 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        Router,
         extract::{Path, Query},
-        http::{StatusCode, header},
+        http::{header, StatusCode},
         response::{IntoResponse, Response},
+        Router,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_axum::{generate_route_list, LeptosRoutes};
     use portfolio::app::*;
     use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
