@@ -45,10 +45,25 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
         <Stylesheet id="leptos" href="/pkg/portfolio.css" />
-        <Title text="Photography Portfolio" />
+        <Suspense fallback=|| {
+            view! { <Title text="Loading..." /> }
+        }>
+            {move || {
+                config
+                    .get()
+                    .map(|config_result| {
+                        let title = config_result
+                            .as_ref()
+                            .map(|cfg| cfg.title())
+                            .unwrap_or_else(|_| "Photography Portfolio".to_string());
+                        view! { <Title text=title /> }
+                    })
+            }}
+        </Suspense>
 
         <Router>
             <Nav />
