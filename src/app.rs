@@ -959,7 +959,10 @@ fn PhotoDetailPage() -> impl IntoView {
                     view! {
                         <div class="photo-detail-container">
                             <div class="photo-detail-header">
-                                <A href="/" attr:class="back-link">
+                                <A
+                                    href=format!("/gallery/{}", photo.gallery_name)
+                                    attr:class="back-link"
+                                >
                                     "← Back to Gallery"
                                 </A>
                             </div>
