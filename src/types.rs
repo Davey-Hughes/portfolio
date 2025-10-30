@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Represents an image source with its URL and MIME type for use in <picture> elements
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ImageSource {
+    pub url: String,
+    pub mime_type: String,
+}
+
 /// Represents metadata and information for a photo in the portfolio.
 ///
 /// # Examples
@@ -10,6 +17,8 @@ use serde::{Deserialize, Serialize};
 /// let photo = PhotoInfo {
 ///     url: "/images/photo.jpg".to_string(),
 ///     original_url: "/images/photo.jpg".to_string(),
+///     sources: vec![],
+///     original_sources: vec![],
 ///     title: "Sunset".to_string(),
 ///     filename: "photo.jpg".to_string(),
 ///     slug: "sunset".to_string(),
@@ -30,8 +39,10 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct PhotoInfo {
-    pub url: String,
-    pub original_url: String, // Full resolution original image
+    pub url: String,                          // Primary/fallback image URL
+    pub original_url: String,                 // Full resolution primary image
+    pub sources: Vec<ImageSource>,            // Alternative compressed formats
+    pub original_sources: Vec<ImageSource>,   // Alternative original formats
     pub title: String,
     pub filename: String,
     pub slug: String,
@@ -99,6 +110,8 @@ mod tests {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
             original_url: "/images/test.jpg".to_string(),
+            sources: vec![],
+            original_sources: vec![],
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
@@ -128,6 +141,8 @@ mod tests {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
             original_url: "/images/test.jpg".to_string(),
+            sources: vec![],
+            original_sources: vec![],
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
@@ -199,6 +214,8 @@ mod tests {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
             original_url: "/images/test.jpg".to_string(),
+            sources: vec![],
+            original_sources: vec![],
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
