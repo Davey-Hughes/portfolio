@@ -22,6 +22,7 @@ pub struct ImageSource {
 ///     title: "Sunset".to_string(),
 ///     filename: "photo.jpg".to_string(),
 ///     slug: "sunset".to_string(),
+///     gallery_name: "landscapes".to_string(),
 ///     width: Some(1920),
 ///     height: Some(1080),
 ///     date_taken: Some("2024-01-15".to_string()),
@@ -39,13 +40,14 @@ pub struct ImageSource {
 /// ```
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct PhotoInfo {
-    pub url: String,                          // Primary/fallback image URL
-    pub original_url: String,                 // Full resolution primary image
-    pub sources: Vec<ImageSource>,            // Alternative compressed formats
-    pub original_sources: Vec<ImageSource>,   // Alternative original formats
+    pub url: String,                        // Primary/fallback image URL
+    pub original_url: String,               // Full resolution primary image
+    pub sources: Vec<ImageSource>,          // Alternative compressed formats
+    pub original_sources: Vec<ImageSource>, // Alternative original formats
     pub title: String,
     pub filename: String,
     pub slug: String,
+    pub gallery_name: String, // Name of the gallery this photo belongs to
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub date_taken: Option<String>,
@@ -115,6 +117,7 @@ mod tests {
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
+            gallery_name: "home".to_string(),
             width: Some(1920),
             height: Some(1080),
             date_taken: Some("2024-01-15 14:30".to_string()),
@@ -146,6 +149,7 @@ mod tests {
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
+            gallery_name: "home".to_string(),
             width: None,
             height: None,
             date_taken: None,
@@ -219,6 +223,7 @@ mod tests {
             title: "Test Photo".to_string(),
             filename: "test.jpg".to_string(),
             slug: "test-photo".to_string(),
+            gallery_name: "home".to_string(),
             width: Some(1920),
             height: Some(1080),
             date_taken: None,

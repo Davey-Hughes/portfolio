@@ -94,6 +94,16 @@ pub fn count_images_recursive(dir: &Path, count: &mut usize) {
 
 /// Find all images recursively in a directory for display on home page
 pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<PhotoInfo>) {
+    find_images_recursive_with_gallery(dir, gallery_root, photos, "home");
+}
+
+/// Find all images recursively with explicit gallery name
+fn find_images_recursive_with_gallery(
+    dir: &Path,
+    gallery_root: &Path,
+    photos: &mut Vec<PhotoInfo>,
+    gallery_name: &str,
+) {
     // First pass: collect all image files and group by basename
     let mut image_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
     collect_image_files(dir, gallery_root, &mut image_groups);
@@ -181,6 +191,7 @@ pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<P
             title,
             filename: filename_str,
             slug,
+            gallery_name: gallery_name.to_string(),
             width,
             height,
             date_taken,
@@ -249,6 +260,22 @@ fn format_priority(ext: &str) -> u8 {
 
 /// Find images for a specific gallery (with different base path handling)
 pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<PhotoInfo>) {
+    // Extract gallery name from directory path (as slug format)
+    let gallery_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase().replace(' ', "-"))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    find_images_for_gallery_with_name(dir, base_root, photos, &gallery_name);
+}
+
+/// Find images for a specific gallery with explicit gallery name
+fn find_images_for_gallery_with_name(
+    dir: &Path,
+    base_root: &Path,
+    photos: &mut Vec<PhotoInfo>,
+    gallery_name: &str,
+) {
     // First pass: collect all image files and group by basename
     let mut image_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
     collect_image_files(dir, base_root, &mut image_groups);
@@ -336,6 +363,7 @@ pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<Ph
             title,
             filename: filename_str,
             slug,
+            gallery_name: gallery_name.to_string(),
             width,
             height,
             date_taken,
@@ -558,7 +586,18 @@ pub fn load_all_gallery_photos() -> Vec<PhotoInfo> {
     for gallery_path in gallery_roots {
         let gallery_path_buf = Path::new(&gallery_path);
         if gallery_path_buf.exists() {
-            find_images_recursive(gallery_path_buf, images_base, &mut photos);
+            // Extract gallery name from directory path
+            let gallery_name = gallery_path_buf
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase().replace(' ', "-"))
+                .unwrap_or_else(|| "home".to_string());
+
+            find_images_recursive_with_gallery(
+                gallery_path_buf,
+                images_base,
+                &mut photos,
+                &gallery_name,
+            );
         }
     }
 
