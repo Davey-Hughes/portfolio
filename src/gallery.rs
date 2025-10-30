@@ -1,6 +1,20 @@
-use crate::types::{GalleryInfo, PhotoInfo};
+use crate::types::{GalleryInfo, ImageSource, PhotoInfo};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+/// Get MIME type from file extension
+fn get_mime_type(extension: &str) -> &'static str {
+    match extension {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "jxl" => "image/jxl",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    }
+}
 
 /// Get default image width and quality from environment variables
 /// Returns (width, quality) tuple with defaults of (3600, 100)
@@ -67,7 +81,10 @@ pub fn count_images_recursive(dir: &Path, count: &mut usize) {
                 count_images_recursive(&path, count);
             } else if let Some(extension) = path.extension() {
                 let ext = extension.to_string_lossy().to_lowercase();
-                if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
+                if matches!(
+                    ext.as_ref(),
+                    "jpg" | "jpeg" | "png" | "webp" | "gif" | "jxl" | "avif"
+                ) {
                     *count += 1;
                 }
             }
@@ -77,158 +94,259 @@ pub fn count_images_recursive(dir: &Path, count: &mut usize) {
 
 /// Find all images recursively in a directory for display on home page
 pub fn find_images_recursive(dir: &Path, gallery_root: &Path, photos: &mut Vec<PhotoInfo>) {
+    // First pass: collect all image files and group by basename
+    let mut image_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    collect_image_files(dir, gallery_root, &mut image_groups);
+
+    // Second pass: create PhotoInfo for each group
+    for (base_path, variants) in image_groups {
+        // Sort variants by priority (modern formats first for sources)
+        let mut sorted_variants = variants.clone();
+        sorted_variants.sort_by(|a, b| {
+            let priority_a = format_priority(&a.1);
+            let priority_b = format_priority(&b.1);
+            priority_a.cmp(&priority_b)
+        });
+
+        // Use the first variant as the primary image (fallback)
+        let (primary_relative_path, primary_ext) = &sorted_variants[0];
+        let primary_full_path = gallery_root.join(primary_relative_path);
+
+        // Extract metadata from the primary image
+        let filename_str = primary_full_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Create slug from base path
+        let slug = base_path.to_lowercase().replace(['/', '\\', ' '], "-");
+
+        // Strip leading numbers and dashes, then convert to title
+        let title = strip_leading_number_and_dash(&filename_str)
+            .trim_end_matches(&format!(".{}", primary_ext))
+            .replace(['-', '_'], " ");
+
+        // Extract EXIF data from primary image
+        let (
+            width,
+            height,
+            date_taken,
+            camera_make,
+            camera_model,
+            lens_model,
+            focal_length,
+            aperture,
+            shutter_speed,
+            iso,
+        ) = extract_exif_data(&primary_full_path);
+
+        // Build sources for compressed versions
+        let (img_width, img_quality) = get_default_image_params();
+        let mut sources = Vec::new();
+        let mut original_sources = Vec::new();
+
+        for (relative_path, ext) in &sorted_variants {
+            if relative_path != primary_relative_path {
+                // Add as alternative source
+                let compressed_url = format!(
+                    "/images/compressed/{}?width={}&quality={}",
+                    relative_path, img_width, img_quality
+                );
+                let original_url = format!("/images/{}", relative_path);
+                let mime_type = get_mime_type(ext).to_string();
+
+                sources.push(ImageSource {
+                    url: compressed_url,
+                    mime_type: mime_type.clone(),
+                });
+                original_sources.push(ImageSource {
+                    url: original_url,
+                    mime_type,
+                });
+            }
+        }
+
+        // Primary image URLs
+        let compressed_url = format!(
+            "/images/compressed/{}?width={}&quality={}",
+            primary_relative_path, img_width, img_quality
+        );
+        let original_url = format!("/images/{}", primary_relative_path);
+
+        photos.push(PhotoInfo {
+            url: compressed_url,
+            original_url,
+            sources,
+            original_sources,
+            title,
+            filename: filename_str,
+            slug,
+            width,
+            height,
+            date_taken,
+            camera_make,
+            camera_model,
+            lens_model,
+            focal_length,
+            aperture,
+            shutter_speed,
+            iso,
+        });
+    }
+}
+
+/// Helper function to collect all image files and group them by basename
+fn collect_image_files(
+    dir: &Path,
+    gallery_root: &Path,
+    groups: &mut HashMap<String, Vec<(String, String)>>,
+) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
 
             if path.is_dir() {
-                // Recursively search subdirectories
-                find_images_recursive(&path, gallery_root, photos);
+                collect_image_files(&path, gallery_root, groups);
             } else if let Some(extension) = path.extension() {
                 let ext = extension.to_string_lossy().to_lowercase();
-                if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
-                    if let Some(filename) = path.file_name() {
-                        let filename_str = filename.to_string_lossy().to_string();
+                if matches!(
+                    ext.as_ref(),
+                    "jpg" | "jpeg" | "png" | "webp" | "gif" | "jxl" | "avif"
+                ) {
+                    let relative_path = path
+                        .strip_prefix(gallery_root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
 
-                        // Calculate the relative path from gallery root
-                        let relative_path = path
-                            .strip_prefix(gallery_root)
-                            .unwrap_or(&path)
-                            .to_string_lossy()
-                            .to_string();
+                    // Create base path without extension
+                    let base_path = relative_path
+                        .trim_end_matches(&format!(".{}", ext))
+                        .to_string();
 
-                        // Create slug from relative path (unique identifier)
-                        let slug = relative_path
-                            .trim_end_matches(&format!(".{}", ext))
-                            .to_lowercase()
-                            .replace(['/', '\\', ' '], "-");
-
-                        // Strip leading numbers and dashes, then convert to title
-                        let title = strip_leading_number_and_dash(&filename_str)
-                            .trim_end_matches(&format!(".{}", ext))
-                            .replace(['-', '_'], " ");
-
-                        // Extract EXIF data
-                        let (
-                            width,
-                            height,
-                            date_taken,
-                            camera_make,
-                            camera_model,
-                            lens_model,
-                            focal_length,
-                            aperture,
-                            shutter_speed,
-                            iso,
-                        ) = extract_exif_data(&path);
-
-                        // Use compressed images for thumbnails in galleries
-                        let (img_width, img_quality) = get_default_image_params();
-                        let compressed_url = format!(
-                            "/images/compressed/{}?width={}&quality={}",
-                            relative_path, img_width, img_quality
-                        );
-                        let original_url = format!("/images/{}", relative_path);
-
-                        photos.push(PhotoInfo {
-                            url: compressed_url,
-                            original_url,
-                            title,
-                            filename: filename_str,
-                            slug,
-                            width,
-                            height,
-                            date_taken,
-                            camera_make,
-                            camera_model,
-                            lens_model,
-                            focal_length,
-                            aperture,
-                            shutter_speed,
-                            iso,
-                        });
-                    }
+                    groups
+                        .entry(base_path)
+                        .or_default()
+                        .push((relative_path, ext.to_string()));
                 }
             }
         }
     }
 }
 
+/// Determine format priority (lower is better/more modern)
+fn format_priority(ext: &str) -> u8 {
+    match ext {
+        "jpg" | "jpeg" => 0, // Fallback, widest support (manually setting to first for now)
+        "avif" => 1,         // Most modern, best compression
+        "jxl" => 2,          // Modern, excellent quality
+        "webp" => 3,         // Good compression, wide support
+        "png" => 4,          // Lossless, but larger
+        "gif" => 5,          // Lowest priority
+        _ => 99,
+    }
+}
+
 /// Find images for a specific gallery (with different base path handling)
 pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<PhotoInfo>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
+    // First pass: collect all image files and group by basename
+    let mut image_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    collect_image_files(dir, base_root, &mut image_groups);
 
-            if path.is_dir() {
-                find_images_for_gallery(&path, base_root, photos);
-            } else if let Some(extension) = path.extension() {
-                let ext = extension.to_string_lossy().to_lowercase();
-                if matches!(ext.as_ref(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
-                    if let Some(filename) = path.file_name() {
-                        let filename_str = filename.to_string_lossy().to_string();
+    // Second pass: create PhotoInfo for each group
+    for (base_path, variants) in image_groups {
+        // Sort variants by priority (modern formats first for sources)
+        let mut sorted_variants = variants.clone();
+        sorted_variants.sort_by(|a, b| {
+            let priority_a = format_priority(&a.1);
+            let priority_b = format_priority(&b.1);
+            priority_a.cmp(&priority_b)
+        });
 
-                        // Calculate the relative path from base gallery root
-                        let relative_path = path
-                            .strip_prefix(base_root)
-                            .unwrap_or(&path)
-                            .to_string_lossy()
-                            .to_string();
+        // Use the first variant as the primary image (fallback)
+        let (primary_relative_path, primary_ext) = &sorted_variants[0];
+        let primary_full_path = base_root.join(primary_relative_path);
 
-                        // Create slug from relative path (unique identifier)
-                        let slug = relative_path
-                            .trim_end_matches(&format!(".{}", ext))
-                            .to_lowercase()
-                            .replace(['/', '\\', ' '], "-");
+        // Extract metadata from the primary image
+        let filename_str = primary_full_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
 
-                        // Strip leading numbers and dashes, then convert to title
-                        let title = strip_leading_number_and_dash(&filename_str)
-                            .trim_end_matches(&format!(".{}", ext))
-                            .replace(['-', '_'], " ");
+        // Create slug from base path
+        let slug = base_path.to_lowercase().replace(['/', '\\', ' '], "-");
 
-                        // Extract EXIF data
-                        let (
-                            width,
-                            height,
-                            date_taken,
-                            camera_make,
-                            camera_model,
-                            lens_model,
-                            focal_length,
-                            aperture,
-                            shutter_speed,
-                            iso,
-                        ) = extract_exif_data(&path);
+        // Strip leading numbers and dashes, then convert to title
+        let title = strip_leading_number_and_dash(&filename_str)
+            .trim_end_matches(&format!(".{}", primary_ext))
+            .replace(['-', '_'], " ");
 
-                        // Use compressed images for gallery pages
-                        let (img_width, img_quality) = get_default_image_params();
-                        let compressed_url = format!(
-                            "/images/compressed/{}?width={}&quality={}",
-                            relative_path, img_width, img_quality
-                        );
-                        let original_url = format!("/images/{}", relative_path);
+        // Extract EXIF data from primary image
+        let (
+            width,
+            height,
+            date_taken,
+            camera_make,
+            camera_model,
+            lens_model,
+            focal_length,
+            aperture,
+            shutter_speed,
+            iso,
+        ) = extract_exif_data(&primary_full_path);
 
-                        photos.push(PhotoInfo {
-                            url: compressed_url,
-                            original_url,
-                            title,
-                            filename: filename_str,
-                            slug,
-                            width,
-                            height,
-                            date_taken,
-                            camera_make,
-                            camera_model,
-                            lens_model,
-                            focal_length,
-                            aperture,
-                            shutter_speed,
-                            iso,
-                        });
-                    }
-                }
+        // Build sources for compressed versions
+        let (img_width, img_quality) = get_default_image_params();
+        let mut sources = Vec::new();
+        let mut original_sources = Vec::new();
+
+        for (relative_path, ext) in &sorted_variants {
+            if relative_path != primary_relative_path {
+                // Add as alternative source
+                let compressed_url = format!(
+                    "/images/compressed/{}?width={}&quality={}",
+                    relative_path, img_width, img_quality
+                );
+                let original_url = format!("/images/{}", relative_path);
+                let mime_type = get_mime_type(ext).to_string();
+
+                sources.push(ImageSource {
+                    url: compressed_url,
+                    mime_type: mime_type.clone(),
+                });
+                original_sources.push(ImageSource {
+                    url: original_url,
+                    mime_type,
+                });
             }
         }
+
+        // Primary image URLs
+        let compressed_url = format!(
+            "/images/compressed/{}?width={}&quality={}",
+            primary_relative_path, img_width, img_quality
+        );
+        let original_url = format!("/images/{}", primary_relative_path);
+
+        photos.push(PhotoInfo {
+            url: compressed_url,
+            original_url,
+            sources,
+            original_sources,
+            title,
+            filename: filename_str,
+            slug,
+            width,
+            height,
+            date_taken,
+            camera_make,
+            camera_model,
+            lens_model,
+            focal_length,
+            aperture,
+            shutter_speed,
+            iso,
+        });
     }
 }
 

@@ -2,14 +2,15 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        extract::{Path, Query},
-        http::{header, StatusCode},
-        response::{IntoResponse, Response},
         Router,
+        extract::{Path, Query},
+        http::{StatusCode, header},
+        response::{IntoResponse, Response},
     };
+    use jxl_oxide::integration::JxlDecoder;
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
     use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
@@ -84,27 +85,70 @@ async fn main() {
 
         log!("Processing and caching image: {}", image_path);
 
-        // Load the original image with no limits
-        let img = match image::ImageReader::open(&full_path) {
-            Ok(mut reader) => {
-                reader.limits(image::Limits::no_limits());
-                match reader.decode() {
-                    Ok(img) => img,
-                    Err(e) => {
-                        log!(
-                            "Failed to decode image: {}, err: {}",
-                            full_path.display(),
-                            e
-                        );
-                        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load image")
-                            .into_response();
+        let img = if full_path.extension().unwrap() == "jxl" {
+            // Read and decode a JPEG XL image.
+
+            use image::DynamicImage;
+            let file = match std::fs::File::open(&full_path) {
+                Ok(file) => file,
+                Err(e) => {
+                    log!("Failed to open image: {}, err: {}", full_path.display(), e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load image")
+                        .into_response();
+                }
+            };
+            let decoder = match JxlDecoder::new(file) {
+                Ok(decoder) => decoder,
+                Err(e) => {
+                    log!(
+                        "Failed to init decoder: {}, err: {}",
+                        full_path.display(),
+                        e
+                    );
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to init decoder")
+                        .into_response();
+                }
+            };
+            let img = match DynamicImage::from_decoder(decoder) {
+                Ok(image) => image,
+                Err(e) => {
+                    log!(
+                        "Failed to decode image: {}, err: {}",
+                        full_path.display(),
+                        e
+                    );
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load image")
+                        .into_response();
+                }
+            };
+            img
+        } else {
+            // Load the original image with no limits
+            let img = match image::ImageReader::open(&full_path) {
+                Ok(mut reader) => {
+                    reader.limits(image::Limits::no_limits());
+
+                    match reader.decode() {
+                        Ok(img) => img,
+                        Err(e) => {
+                            log!(
+                                "Failed to decode image: {}, err: {}",
+                                full_path.display(),
+                                e
+                            );
+                            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load image")
+                                .into_response();
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                log!("Failed to open image: {}, err: {}", full_path.display(), e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load image").into_response();
-            }
+                Err(e) => {
+                    log!("Failed to open image: {}, err: {}", full_path.display(), e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load image")
+                        .into_response();
+                }
+            };
+
+            img
         };
 
         // Resize to validated width

@@ -244,6 +244,7 @@ fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) ->
 fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
     let photo_slug = photo.slug.clone();
     let photo_url = photo.url.clone();
+    let photo_sources = photo.sources.clone();
     let photo_title = photo.title.clone();
     let orientation_class = orientation_class_from_dimensions(photo.width, photo.height);
 
@@ -254,7 +255,14 @@ fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
         >
             <div class="photo-hero-section">
                 <div class="photo-hero-image">
-                    <img src=photo_url alt=photo_title.clone() />
+                    <picture>
+                        {photo_sources
+                            .into_iter()
+                            .map(|source| {
+                                view! { <source srcset=source.url type=source.mime_type /> }
+                            })
+                            .collect_view()} <img src=photo_url alt=photo_title.clone() />
+                    </picture>
                 </div>
                 <div class="photo-hero-caption">
                     <h2>{photo_title}</h2>
@@ -938,6 +946,8 @@ fn PhotoDetailPage() -> impl IntoView {
                     };
                     let photo_url_cached = StoredValue::new(photo.url.clone());
                     let photo_url_original = StoredValue::new(photo.original_url.clone());
+                    let photo_sources_cached = StoredValue::new(photo.sources.clone());
+                    let photo_sources_original = StoredValue::new(photo.original_sources.clone());
                     let photo_title = photo.title.clone();
                     let photo_title_fs = photo.title.clone();
                     let calculated_max_zoom = match (photo.width, photo.height) {
@@ -946,15 +956,6 @@ fn PhotoDetailPage() -> impl IntoView {
                         _ => 10.0,
                     };
                     max_zoom.set(calculated_max_zoom);
-
-                    // Get navigation photos
-
-                    // Setup mobile detection
-
-                    // Store photo URLs to avoid cloning issues
-
-                    // Calculate max zoom based on image resolution
-
                     view! {
                         <div class="photo-detail-container">
                             <div class="photo-detail-header">
@@ -968,16 +969,31 @@ fn PhotoDetailPage() -> impl IntoView {
                                     on:click=toggle_fullscreen
                                     style="cursor: pointer;"
                                 >
-                                    <img
-                                        src=move || {
-                                            if is_mobile() {
-                                                photo_url_cached.get_value()
+                                    <picture>
+                                        {move || {
+                                            let sources = if is_mobile() {
+                                                photo_sources_cached.get_value()
                                             } else {
-                                                photo_url_original.get_value()
+                                                photo_sources_original.get_value()
+                                            };
+                                            sources
+                                                .into_iter()
+                                                .map(|source| {
+                                                    view! { <source srcset=source.url type=source.mime_type /> }
+                                                })
+                                                .collect_view()
+                                        }}
+                                        <img
+                                            src=move || {
+                                                if is_mobile() {
+                                                    photo_url_cached.get_value()
+                                                } else {
+                                                    photo_url_original.get_value()
+                                                }
                                             }
-                                        }
-                                        alt=photo_title.clone()
-                                    />
+                                            alt=photo_title.clone()
+                                        />
+                                    </picture>
                                 </div>
                                 <div class="photo-detail-info">
                                     <h1
@@ -1106,27 +1122,42 @@ fn PhotoDetailPage() -> impl IntoView {
                                                     </label>
                                                 </div>
                                             </div>
-                                            <img
-                                                src=move || {
-                                                    if is_mobile() {
-                                                        photo_url_cached.get_value()
+                                            <picture>
+                                                {move || {
+                                                    let sources = if is_mobile() {
+                                                        photo_sources_cached.get_value()
                                                     } else {
-                                                        photo_url_original.get_value()
+                                                        photo_sources_original.get_value()
+                                                    };
+                                                    sources
+                                                        .into_iter()
+                                                        .map(|source| {
+                                                            view! { <source srcset=source.url type=source.mime_type /> }
+                                                        })
+                                                        .collect_view()
+                                                }}
+                                                <img
+                                                    src=move || {
+                                                        if is_mobile() {
+                                                            photo_url_cached.get_value()
+                                                        } else {
+                                                            photo_url_original.get_value()
+                                                        }
                                                     }
-                                                }
-                                                alt=photo_title_fs.clone()
-                                                class="fullscreen-image"
-                                                style=transform_style
-                                                on:click=on_image_click
-                                                on:dblclick=on_image_dblclick
-                                                on:mousedown=on_mouse_down
-                                                on:mousemove=on_mouse_move
-                                                on:mouseup=on_mouse_up
-                                                on:mouseleave=on_mouse_up
-                                                on:touchstart=on_touch_start
-                                                on:touchmove=on_touch_move
-                                                on:touchend=on_touch_end
-                                            />
+                                                    alt=photo_title_fs.clone()
+                                                    class="fullscreen-image"
+                                                    style=transform_style
+                                                    on:click=on_image_click
+                                                    on:dblclick=on_image_dblclick
+                                                    on:mousedown=on_mouse_down
+                                                    on:mousemove=on_mouse_move
+                                                    on:mouseup=on_mouse_up
+                                                    on:mouseleave=on_mouse_up
+                                                    on:touchstart=on_touch_start
+                                                    on:touchmove=on_touch_move
+                                                    on:touchend=on_touch_end
+                                                />
+                                            </picture>
                                         </div>
                                     }
                                         .into_any()
