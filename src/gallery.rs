@@ -3,6 +3,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+/// URL-encode a path component, preserving forward slashes
+fn url_encode_path(path: &str) -> String {
+    path.split('/')
+        .map(|segment| urlencoding::encode(segment).into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Get MIME type from file extension
 fn get_mime_type(extension: &str) -> &'static str {
     match extension {
@@ -160,12 +168,13 @@ fn find_images_recursive_with_gallery(
 
         for (relative_path, ext) in &sorted_variants {
             if relative_path != primary_relative_path {
-                // Add as alternative source
+                // Add as alternative source (URL-encode the path)
+                let encoded_path = url_encode_path(relative_path);
                 let compressed_url = format!(
                     "/images/compressed/{}?width={}&quality={}",
-                    relative_path, img_width, img_quality
+                    encoded_path, img_width, img_quality
                 );
-                let original_url = format!("/images/{}", relative_path);
+                let original_url = format!("/images/{}", encoded_path);
                 let mime_type = get_mime_type(ext).to_string();
 
                 sources.push(ImageSource {
@@ -179,12 +188,13 @@ fn find_images_recursive_with_gallery(
             }
         }
 
-        // Primary image URLs
+        // Primary image URLs (URL-encode the path)
+        let encoded_primary_path = url_encode_path(primary_relative_path);
         let compressed_url = format!(
             "/images/compressed/{}?width={}&quality={}",
-            primary_relative_path, img_width, img_quality
+            encoded_primary_path, img_width, img_quality
         );
-        let original_url = format!("/images/{}", primary_relative_path);
+        let original_url = format!("/images/{}", encoded_primary_path);
 
         photos.push(PhotoInfo {
             url: compressed_url,
@@ -335,12 +345,13 @@ fn find_images_for_gallery_with_name(
 
         for (relative_path, ext) in &sorted_variants {
             if relative_path != primary_relative_path {
-                // Add as alternative source
+                // Add as alternative source (URL-encode the path)
+                let encoded_path = url_encode_path(relative_path);
                 let compressed_url = format!(
                     "/images/compressed/{}?width={}&quality={}",
-                    relative_path, img_width, img_quality
+                    encoded_path, img_width, img_quality
                 );
-                let original_url = format!("/images/{}", relative_path);
+                let original_url = format!("/images/{}", encoded_path);
                 let mime_type = get_mime_type(ext).to_string();
 
                 sources.push(ImageSource {
@@ -354,12 +365,13 @@ fn find_images_for_gallery_with_name(
             }
         }
 
-        // Primary image URLs
+        // Primary image URLs (URL-encode the path)
+        let encoded_primary_path = url_encode_path(primary_relative_path);
         let compressed_url = format!(
             "/images/compressed/{}?width={}&quality={}",
-            primary_relative_path, img_width, img_quality
+            encoded_primary_path, img_width, img_quality
         );
-        let original_url = format!("/images/{}", primary_relative_path);
+        let original_url = format!("/images/{}", encoded_primary_path);
 
         photos.push(PhotoInfo {
             url: compressed_url,

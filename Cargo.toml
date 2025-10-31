@@ -40,6 +40,7 @@ image = { version = "0.25", optional = true, default-features = false, features 
 ] }
 regex = { version = "1.11", optional = true }
 jxl-oxide = { version = "0.12.5", features = ["image"] }
+urlencoding = { version = "2.1", optional = true }
 
 [dev-dependencies]
 serial_test = "3.2"
@@ -62,6 +63,7 @@ ssr = [
   "dep:kamadak-exif",
   "dep:image",
   "dep:regex",
+  "dep:urlencoding",
   "leptos/ssr",
   "leptos_meta/ssr",
   "leptos_router/ssr",
