@@ -2,19 +2,20 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        extract::{Path, Query},
-        http::{header, StatusCode},
-        response::{IntoResponse, Response},
         Router,
+        extract::{Path, Query},
+        http::{StatusCode, header},
+        response::{IntoResponse, Response},
     };
     use jxl_oxide::integration::JxlDecoder;
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
     use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
-    use tower_http::services::ServeDir;
+    use tower::ServiceBuilder;
+    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
     /// Clean up orphaned cache files that no longer have corresponding source images
     fn cleanup_cache(images_dir: &str, cache_dir: &str) {
@@ -95,6 +96,183 @@ async fn main() {
         );
     }
 
+    /// Pre-generate cache images for all existing photos
+    fn prewarm_cache(images_dir: &str, cache_dir: &str) {
+        use portfolio::image_params::ImageParams;
+        use std::fs;
+        use std::io::Write;
+
+        log!("Starting cache prewarming...");
+
+        let valid_presets = ImageParams::get_valid_presets();
+        let supported_extensions = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "avif"];
+
+        let mut generated_count = 0;
+        let mut skipped_count = 0;
+        let mut error_count = 0;
+
+        // Recursively find all image files
+        let mut image_paths = Vec::new();
+        collect_image_paths(
+            std::path::Path::new(images_dir),
+            images_dir,
+            &mut image_paths,
+        );
+
+        log!("Found {} images to process", image_paths.len());
+
+        for image_path in image_paths {
+            // Strip extension to get base path
+            let path_without_ext = if let Some(dot_pos) = image_path.rfind('.') {
+                &image_path[..dot_pos]
+            } else {
+                &image_path
+            };
+
+            // Find the actual file with any supported extension
+            let full_path = supported_extensions
+                .iter()
+                .map(|ext| {
+                    std::path::PathBuf::from(images_dir)
+                        .join(format!("{}.{}", path_without_ext, ext))
+                })
+                .find(|path| path.exists());
+
+            let full_path = match full_path {
+                Some(path) => path,
+                None => continue,
+            };
+
+            // Get file modification time for cache key
+            let mtime = full_path
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            // Generate cache for each preset
+            for (width, quality) in &valid_presets {
+                let cache_filename = format!(
+                    "{}_w{}_q{}_{}.webp",
+                    path_without_ext.replace(['/', '\\'], "_"),
+                    width,
+                    quality,
+                    mtime
+                );
+
+                let cache_path = std::path::PathBuf::from(cache_dir).join(&cache_filename);
+
+                // Skip if already cached
+                if cache_path.exists() {
+                    skipped_count += 1;
+                    continue;
+                }
+
+                // Load and process image
+                let img_result = if full_path.extension().and_then(|e| e.to_str()) == Some("jxl") {
+                    use image::DynamicImage;
+                    use jxl_oxide::integration::JxlDecoder;
+
+                    std::fs::File::open(&full_path)
+                        .ok()
+                        .and_then(|file| JxlDecoder::new(file).ok())
+                        .and_then(|decoder| DynamicImage::from_decoder(decoder).ok())
+                } else {
+                    image::ImageReader::open(&full_path)
+                        .ok()
+                        .map(|mut reader| {
+                            reader.limits(image::Limits::no_limits());
+                            reader.decode()
+                        })
+                        .and_then(|r| r.ok())
+                };
+
+                let img = match img_result {
+                    Some(img) => img,
+                    None => {
+                        error_count += 1;
+                        continue;
+                    }
+                };
+
+                // Resize if needed
+                let img = if img.width() > *width {
+                    img.resize(*width, u32::MAX, image::imageops::FilterType::Lanczos3)
+                } else {
+                    img
+                };
+
+                // Convert to WebP
+                let mut webp_data = Vec::new();
+                if img
+                    .write_to(
+                        &mut std::io::Cursor::new(&mut webp_data),
+                        image::ImageFormat::WebP,
+                    )
+                    .is_err()
+                {
+                    error_count += 1;
+                    continue;
+                }
+
+                // Save to cache
+                if let Err(e) = fs::create_dir_all(cache_dir) {
+                    log!("Warning: Failed to create cache directory: {}", e);
+                    error_count += 1;
+                    continue;
+                }
+
+                match fs::File::create(&cache_path) {
+                    Ok(mut file) => {
+                        if let Err(e) = file.write_all(&webp_data) {
+                            log!("Warning: Failed to write cache file: {}", e);
+                            error_count += 1;
+                        } else {
+                            generated_count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        log!("Warning: Failed to create cache file: {}", e);
+                        error_count += 1;
+                    }
+                }
+            }
+        }
+
+        log!(
+            "Cache prewarming complete: generated {} new, skipped {} existing, {} errors",
+            generated_count,
+            skipped_count,
+            error_count
+        );
+    }
+
+    /// Recursively collect all image file paths
+    fn collect_image_paths(dir: &std::path::Path, base: &str, paths: &mut Vec<String>) {
+        use std::fs;
+
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_image_paths(&path, base, paths);
+                } else if let Some(extension) = path.extension() {
+                    let ext = extension.to_string_lossy().to_lowercase();
+                    if matches!(
+                        ext.as_ref(),
+                        "jpg" | "jpeg" | "png" | "webp" | "gif" | "jxl" | "avif"
+                    ) {
+                        if let Ok(relative) = path.strip_prefix(base) {
+                            paths.push(relative.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn serve_compressed_image(
         Path(image_path): Path<String>,
         Query(params): Query<ImageParams>,
@@ -170,7 +348,10 @@ async fn main() {
                 log!("Serving cached image: {}", cache_filename);
                 return (
                     StatusCode::OK,
-                    [(header::CONTENT_TYPE, "image/webp")],
+                    [
+                        (header::CONTENT_TYPE, "image/webp"),
+                        (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    ],
                     cached_data,
                 )
                     .into_response();
@@ -282,7 +463,10 @@ async fn main() {
 
         (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/webp")],
+            [
+                (header::CONTENT_TYPE, "image/webp"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
             webp_data,
         )
             .into_response()
@@ -327,6 +511,13 @@ async fn main() {
     // Clean up orphaned cache files on startup
     cleanup_cache(&images_dir, &cache_dir);
 
+    // Pre-generate cache for all existing images (async, non-blocking)
+    let images_dir_clone = images_dir.clone();
+    let cache_dir_clone = cache_dir.clone();
+    tokio::spawn(async move {
+        prewarm_cache(&images_dir_clone, &cache_dir_clone);
+    });
+
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
@@ -337,8 +528,24 @@ async fn main() {
             "/images/compressed/{*image_path}",
             axum::routing::get(serve_compressed_image),
         )
-        .nest_service("/images", ServeDir::new(&images_dir))
-        .nest_service("/content", ServeDir::new(&content_dir))
+        .nest_service(
+            "/images",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(ServeDir::new(&images_dir)),
+        )
+        .nest_service(
+            "/content",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(ServeDir::new(&content_dir)),
+        )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
 
