@@ -16,6 +16,85 @@ async fn main() {
     use std::path::PathBuf;
     use tower_http::services::ServeDir;
 
+    /// Clean up orphaned cache files that no longer have corresponding source images
+    fn cleanup_cache(images_dir: &str, cache_dir: &str) {
+        use std::fs;
+
+        log!("Starting cache cleanup...");
+
+        let cache_path = std::path::Path::new(cache_dir);
+        if !cache_path.exists() {
+            log!("Cache directory does not exist, skipping cleanup");
+            return;
+        }
+
+        let mut removed_count = 0;
+        let mut error_count = 0;
+
+        // Read all cache files
+        let cache_entries = match fs::read_dir(cache_path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                log!("Failed to read cache directory: {}", e);
+                return;
+            }
+        };
+
+        for entry in cache_entries.flatten() {
+            let cache_file = entry.path();
+
+            if !cache_file.is_file() {
+                continue;
+            }
+
+            let filename = match cache_file.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            // Parse cache filename format: "{path}_w{width}_q{quality}_{timestamp}.webp"
+            // Extract the original image path
+            if let Some(first_part) = filename.split("_w").next() {
+                // Convert underscores back to path separators
+                let original_path = first_part.replace('_', "/");
+
+                // Check if source image exists (try different extensions)
+                let extensions = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "avif"];
+                let mut source_exists = false;
+
+                for ext in &extensions {
+                    let source_path =
+                        PathBuf::from(images_dir).join(format!("{}.{}", original_path, ext));
+
+                    if source_path.exists() {
+                        source_exists = true;
+                        break;
+                    }
+                }
+
+                if !source_exists {
+                    // Source image doesn't exist, remove cached file
+                    match fs::remove_file(&cache_file) {
+                        Ok(_) => {
+                            log!("Removed orphaned cache file: {}", filename);
+                            removed_count += 1;
+                        }
+                        Err(e) => {
+                            log!("Failed to remove cache file {}: {}", filename, e);
+                            error_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        log!(
+            "Cache cleanup complete: removed {} orphaned files, {} errors",
+            removed_count,
+            error_count
+        );
+    }
+
     async fn serve_compressed_image(
         Path(image_path): Path<String>,
         Query(params): Query<ImageParams>,
@@ -220,6 +299,18 @@ async fn main() {
 
     log!("Serving images from: {}", images_dir);
     log!("Serving content from: {}", content_dir);
+
+    // Get cache directory path
+    let cache_dir = std::env::var("IMAGE_CACHE_DIR").unwrap_or_else(|_| {
+        if std::path::Path::new("public/cache").exists() {
+            "public/cache".to_string()
+        } else {
+            "./cache".to_string()
+        }
+    });
+
+    // Clean up orphaned cache files on startup
+    cleanup_cache(&images_dir, &cache_dir);
 
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
