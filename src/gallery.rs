@@ -109,7 +109,7 @@ fn find_images_recursive_with_gallery(
     collect_image_files(dir, gallery_root, &mut image_groups);
 
     // Second pass: create PhotoInfo for each group
-    for (base_path, variants) in image_groups {
+    for (_base_path, variants) in image_groups {
         // Sort variants by priority (modern formats first for sources)
         let mut sorted_variants = variants.clone();
         sorted_variants.sort_by(|a, b| {
@@ -128,8 +128,11 @@ fn find_images_recursive_with_gallery(
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        // Create slug from base path
-        let slug = base_path.to_lowercase().replace(['/', '\\', ' '], "-");
+        // Create slug from filename (without extension), stripping leading numbers
+        let slug = strip_leading_number_and_dash(&filename_str)
+            .trim_end_matches(&format!(".{}", primary_ext))
+            .to_lowercase()
+            .replace([' ', '_'], "-");
 
         // Strip leading numbers and dashes, then convert to title
         let title = strip_leading_number_and_dash(&filename_str)
@@ -281,7 +284,7 @@ fn find_images_for_gallery_with_name(
     collect_image_files(dir, base_root, &mut image_groups);
 
     // Second pass: create PhotoInfo for each group
-    for (base_path, variants) in image_groups {
+    for (_base_path, variants) in image_groups {
         // Sort variants by priority (modern formats first for sources)
         let mut sorted_variants = variants.clone();
         sorted_variants.sort_by(|a, b| {
@@ -300,8 +303,11 @@ fn find_images_for_gallery_with_name(
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        // Create slug from base path
-        let slug = base_path.to_lowercase().replace(['/', '\\', ' '], "-");
+        // Create slug from filename (without extension), stripping leading numbers
+        let slug = strip_leading_number_and_dash(&filename_str)
+            .trim_end_matches(&format!(".{}", primary_ext))
+            .to_lowercase()
+            .replace([' ', '_'], "-");
 
         // Strip leading numbers and dashes, then convert to title
         let title = strip_leading_number_and_dash(&filename_str)
