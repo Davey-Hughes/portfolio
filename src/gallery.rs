@@ -261,7 +261,7 @@ fn collect_image_files(
 /// Determine format priority (lower is better/more modern)
 fn format_priority(ext: &str) -> u8 {
     match ext {
-        "jpg" | "jpeg" => 0, // Fallback, widest support (manually setting to first for now)
+        "jpg" | "jpeg" => 0, // Fallback, widest support
         "avif" => 1,         // Most modern, best compression
         "jxl" => 2,          // Modern, excellent quality
         "webp" => 3,         // Good compression, wide support
