@@ -126,17 +126,25 @@ async fn main() {
             }
         });
 
-        let full_path = PathBuf::from(&images_dir).join(&image_path);
-
-        if !full_path.exists() {
-            return (StatusCode::NOT_FOUND, "Image not found").into_response();
-        }
-
-        // Strip extension from image_path for cache key (so different formats map to same cache)
+        // Strip extension from image_path to find any matching source file
         let path_without_ext = if let Some(dot_pos) = image_path.rfind('.') {
             &image_path[..dot_pos]
         } else {
             &image_path
+        };
+
+        // Try to find the source file with any supported extension
+        let supported_extensions = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "avif"];
+        let full_path = supported_extensions
+            .iter()
+            .map(|ext| PathBuf::from(&images_dir).join(format!("{}.{}", path_without_ext, ext)))
+            .find(|path| path.exists());
+
+        let full_path = match full_path {
+            Some(path) => path,
+            None => {
+                return (StatusCode::NOT_FOUND, "Image not found").into_response();
+            }
         };
 
         // Generate cache key based on validated parameters (without file extension)
