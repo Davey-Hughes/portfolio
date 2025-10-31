@@ -2,15 +2,15 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        Router,
         extract::{Path, Query},
-        http::{StatusCode, header},
+        http::{header, StatusCode},
         response::{IntoResponse, Response},
+        Router,
     };
     use jxl_oxide::integration::JxlDecoder;
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_axum::{generate_route_list, LeptosRoutes};
     use portfolio::app::*;
     use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
@@ -132,10 +132,17 @@ async fn main() {
             return (StatusCode::NOT_FOUND, "Image not found").into_response();
         }
 
-        // Generate cache key based on validated parameters
+        // Strip extension from image_path for cache key (so different formats map to same cache)
+        let path_without_ext = if let Some(dot_pos) = image_path.rfind('.') {
+            &image_path[..dot_pos]
+        } else {
+            &image_path
+        };
+
+        // Generate cache key based on validated parameters (without file extension)
         let cache_filename = format!(
             "{}_w{}_q{}_{}.webp",
-            image_path.replace(['/', '\\'], "_"),
+            path_without_ext.replace(['/', '\\'], "_"),
             width,
             quality,
             full_path
