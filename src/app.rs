@@ -49,9 +49,7 @@ fn PageTitle() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
-        <Suspense fallback=|| {
-            view! { <Title text="Loading..." /> }
-        }>
+        <Suspense>
             {move || {
                 let title = config
                     .get()
@@ -115,7 +113,7 @@ fn GalleryNavLinks() -> impl IntoView {
     let galleries = Resource::new(|| (), |()| async { get_galleries().await });
 
     view! {
-        <Suspense fallback=|| ()>
+        <Suspense>
             {move || {
                 galleries
                     .get()
