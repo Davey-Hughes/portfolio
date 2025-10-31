@@ -78,7 +78,14 @@ pub fn App() -> impl IntoView {
                 <Routes fallback=|| "Page not found.".into_view()>
                     <Route path=StaticSegment("") view=HomePage />
                     <Route path=(StaticSegment("gallery"), ParamSegment("name")) view=GalleryPage />
-                    <Route path=(StaticSegment("photo"), ParamSegment("id")) view=PhotoDetailPage />
+                    <Route
+                        path=(
+                            StaticSegment("gallery"),
+                            ParamSegment("gallery"),
+                            ParamSegment("photo"),
+                        )
+                        view=PhotoDetailPage
+                    />
                     <Route path=StaticSegment("about") view=AboutPage />
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
@@ -243,6 +250,7 @@ fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) ->
 #[component]
 fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
     let photo_slug = photo.slug.clone();
+    let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
     let photo_sources = photo.sources.clone();
     let photo_title = photo.title.clone();
@@ -250,7 +258,7 @@ fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
 
     view! {
         <a
-            href=format!("/photo/{}", photo_slug)
+            href=format!("/gallery/{}/{}", photo_gallery, photo_slug)
             class=format!("photo-hero-link {}", orientation_class)
         >
             <div class="photo-hero-section">
@@ -460,7 +468,8 @@ fn GalleryPage() -> impl IntoView {
 
 #[derive(Params, PartialEq, Clone)]
 struct PhotoParams {
-    id: String,
+    gallery: String,
+    photo: String,
 }
 
 // Helper component for EXIF field display
@@ -917,7 +926,7 @@ fn PhotoDetailPage() -> impl IntoView {
                 view! { <div class="loading">"Loading photo..."</div> }
             }>
                 {move || {
-                    let Some(slug_val) = params.get().ok().map(|p| p.id) else {
+                    let Some(slug_val) = params.get().ok().map(|p| p.photo) else {
                         return // Get slug from params
                         view! { <InvalidPhotoId /> }
                             .into_any();
@@ -1055,7 +1064,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                     .map(|prev| {
                                         view! {
                                             <A
-                                                href=format!("/photo/{}", prev.slug)
+                                                href=format!("/gallery/{}/{}", prev.gallery_name, prev.slug)
                                                 attr:class="nav-button nav-prev"
                                             >
                                                 "← Previous"
@@ -1068,7 +1077,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                     .map(|next| {
                                         view! {
                                             <A
-                                                href=format!("/photo/{}", next.slug)
+                                                href=format!("/gallery/{}/{}", next.gallery_name, next.slug)
                                                 attr:class="nav-button nav-next"
                                             >
                                                 "Next →"
