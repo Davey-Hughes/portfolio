@@ -339,7 +339,6 @@ img {
   background-color: #fafafa;
   overflow: hidden;
   min-height: 0;
-  height: 0;
 }
 
 .photo-detail-image {
@@ -349,12 +348,21 @@ img {
   flex: 0 1 auto;
   min-width: 0;
   min-height: 0;
-  height: 100%;
   margin-right: 2rem;
+  padding: 2rem 0;
 
-  img {
+  picture {
+    display: block;
     max-width: 100%;
     max-height: 100%;
+    width: auto;
+    height: auto;
+  }
+
+  img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 250px);
     height: auto;
     width: auto;
     object-fit: contain;
