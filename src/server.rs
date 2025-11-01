@@ -76,6 +76,7 @@ pub async fn get_about_content() -> Result<AboutContent, ServerFnError> {
         Ok(AboutContent {
             image_url: None,
             content: String::new(),
+            is_html: false,
         })
     }
 }
