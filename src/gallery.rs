@@ -638,12 +638,22 @@ pub fn load_about_content() -> crate::types::AboutContent {
         fs::create_dir_all(&content_path).ok();
     }
 
-    // Try to load the about text file
+    // Try to load the about HTML file first, then fall back to text file
+    let html_path = Path::new(&content_path).join("about.html");
     let text_path = Path::new(&content_path).join("about.txt");
-    let content = if text_path.exists() {
-        fs::read_to_string(&text_path).unwrap_or_else(|_| default_about_text())
+
+    let (content, is_html) = if html_path.exists() {
+        (
+            fs::read_to_string(&html_path).unwrap_or_else(|_| default_about_text()),
+            true,
+        )
+    } else if text_path.exists() {
+        (
+            fs::read_to_string(&text_path).unwrap_or_else(|_| default_about_text()),
+            false,
+        )
     } else {
-        default_about_text()
+        (default_about_text(), false)
     };
 
     // Check if profile image exists
@@ -654,7 +664,11 @@ pub fn load_about_content() -> crate::types::AboutContent {
         .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
         .map(|filename| format!("/content/{}", filename));
 
-    crate::types::AboutContent { image_url, content }
+    crate::types::AboutContent {
+        image_url,
+        content,
+        is_html,
+    }
 }
 
 /// Returns default about page text when no custom content is provided.

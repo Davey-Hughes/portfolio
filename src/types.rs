@@ -93,6 +93,7 @@ pub struct GalleryInfo {
 /// let about = AboutContent {
 ///     image_url: Some("/content/profile.jpg".to_string()),
 ///     content: "Welcome to my portfolio!".to_string(),
+///     is_html: false,
 /// };
 ///
 /// assert_eq!(about.content, "Welcome to my portfolio!");
@@ -101,6 +102,7 @@ pub struct GalleryInfo {
 pub struct AboutContent {
     pub image_url: Option<String>,
     pub content: String,
+    pub is_html: bool,
 }
 
 #[cfg(test)]
@@ -190,6 +192,7 @@ mod tests {
         let about = AboutContent {
             image_url: Some("/content/profile.jpg".to_string()),
             content: "This is my portfolio website.".to_string(),
+            is_html: false,
         };
 
         let json = leptos::serde_json::to_string(&about).unwrap();
@@ -197,6 +200,7 @@ mod tests {
 
         assert_eq!(about.image_url, deserialized.image_url);
         assert_eq!(about.content, deserialized.content);
+        assert_eq!(about.is_html, deserialized.is_html);
     }
 
     #[test]
@@ -204,6 +208,7 @@ mod tests {
         let about = AboutContent {
             image_url: None,
             content: "This is my portfolio website.".to_string(),
+            is_html: false,
         };
 
         let json = leptos::serde_json::to_string(&about).unwrap();
@@ -211,6 +216,7 @@ mod tests {
 
         assert_eq!(deserialized.image_url, None);
         assert_eq!(deserialized.content, about.content);
+        assert_eq!(deserialized.is_html, false);
     }
 
     #[test]

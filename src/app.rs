@@ -1204,13 +1204,6 @@ fn AboutContent() -> impl IntoView {
             {move || {
                 match about_content.get().and_then(|result| result.ok()) {
                     Some(about) => {
-                        let paragraphs: Vec<_> = about
-                            .content
-                            .split("\n\n")
-                            .map(|p| p.trim())
-                            .filter(|p| !p.is_empty())
-                            .collect();
-
                         view! {
                             <div class="about-container">
                                 {about
@@ -1223,10 +1216,22 @@ fn AboutContent() -> impl IntoView {
                                         }
                                     })} <div class="about-content">
                                     <h1>"About Me"</h1>
-                                    {paragraphs
-                                        .into_iter()
-                                        .map(|p| view! { <p>{p}</p> })
-                                        .collect_view()}
+                                    {if about.is_html {
+                                        let html_content = about.content.clone();
+                                        view! { <div inner_html=html_content></div> }.into_any()
+                                    } else {
+                                        let paragraphs: Vec<_> = about
+                                            .content
+                                            .split("\n\n")
+                                            .map(|p| p.trim())
+                                            .filter(|p| !p.is_empty())
+                                            .collect();
+                                        paragraphs
+                                            .into_iter()
+                                            .map(|p| view! { <p>{p}</p> })
+                                            .collect_view()
+                                            .into_any()
+                                    }}
                                 </div>
                             </div>
                         }
