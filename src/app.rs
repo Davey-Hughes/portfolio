@@ -98,8 +98,13 @@ fn ConditionalFooter() -> impl IntoView {
 
     view! {
         {move || {
-            if location.pathname.get().starts_with("/photo/") {
-                view! { <div></div> }.into_any()
+            let path = location.pathname.get();
+            let is_photo_detail = path.starts_with("/gallery/") && path.matches('/').count() >= 3;
+            if is_photo_detail {
+                // Hide footer on photo detail pages (format: /gallery/{gallery}/{photo})
+
+                view! { <div></div> }
+                    .into_any()
             } else {
                 view! { <Footer /> }.into_any()
             }
