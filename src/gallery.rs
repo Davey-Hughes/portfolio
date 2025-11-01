@@ -196,6 +196,16 @@ fn find_images_recursive_with_gallery(
         );
         let original_url = format!("/images/{}", encoded_primary_path);
 
+        // Extract subfolder from relative path
+        let subfolder = Path::new(primary_relative_path).parent().and_then(|p| {
+            let path_str = p.to_string_lossy().to_string();
+            if path_str.is_empty() || path_str == "." {
+                None
+            } else {
+                Some(path_str)
+            }
+        });
+
         photos.push(PhotoInfo {
             url: compressed_url,
             original_url,
@@ -205,6 +215,7 @@ fn find_images_recursive_with_gallery(
             filename: filename_str,
             slug,
             gallery_name: gallery_name.to_string(),
+            subfolder,
             width,
             height,
             date_taken,
@@ -373,6 +384,16 @@ fn find_images_for_gallery_with_name(
         );
         let original_url = format!("/images/{}", encoded_primary_path);
 
+        // Extract subfolder from relative path
+        let subfolder = Path::new(primary_relative_path).parent().and_then(|p| {
+            let path_str = p.to_string_lossy().to_string();
+            if path_str.is_empty() || path_str == "." {
+                None
+            } else {
+                Some(path_str)
+            }
+        });
+
         photos.push(PhotoInfo {
             url: compressed_url,
             original_url,
@@ -382,6 +403,7 @@ fn find_images_for_gallery_with_name(
             filename: filename_str,
             slug,
             gallery_name: gallery_name.to_string(),
+            subfolder,
             width,
             height,
             date_taken,
@@ -583,7 +605,21 @@ pub fn load_home_photos() -> Vec<PhotoInfo> {
     let images_base = Path::new("public/images");
 
     find_images_recursive(&gallery_path_buf, images_base, &mut photos);
-    photos.sort_by(|a, b| a.filename.cmp(&b.filename));
+    photos.sort_by(|a, b| {
+        // Sort by subfolder first, then by filename
+        match (&a.subfolder, &b.subfolder) {
+            (Some(sf_a), Some(sf_b)) => {
+                // Both have subfolders, compare them first
+                match sf_a.cmp(sf_b) {
+                    std::cmp::Ordering::Equal => a.filename.cmp(&b.filename),
+                    other => other,
+                }
+            }
+            (Some(_), None) => std::cmp::Ordering::Greater, // Photos in subfolders come after root
+            (None, Some(_)) => std::cmp::Ordering::Less,    // Root photos come first
+            (None, None) => a.filename.cmp(&b.filename),    // Both in root, sort by filename
+        }
+    });
     photos
 }
 
@@ -599,7 +635,21 @@ pub fn load_gallery_photos(gallery_name: &str) -> Option<Vec<PhotoInfo>> {
             let slug = dir_name.to_string_lossy().to_lowercase().replace(' ', "-");
             if slug == gallery_name {
                 find_images_for_gallery(base, images_base, &mut photos);
-                photos.sort_by(|a, b| a.filename.cmp(&b.filename));
+                photos.sort_by(|a, b| {
+                    // Sort by subfolder first, then by filename
+                    match (&a.subfolder, &b.subfolder) {
+                        (Some(sf_a), Some(sf_b)) => {
+                            // Both have subfolders, compare them first
+                            match sf_a.cmp(sf_b) {
+                                std::cmp::Ordering::Equal => a.filename.cmp(&b.filename),
+                                other => other,
+                            }
+                        }
+                        (Some(_), None) => std::cmp::Ordering::Greater, // Photos in subfolders come after root
+                        (None, Some(_)) => std::cmp::Ordering::Less,    // Root photos come first
+                        (None, None) => a.filename.cmp(&b.filename), // Both in root, sort by filename
+                    }
+                });
                 return Some(photos);
             }
         }
@@ -632,7 +682,21 @@ pub fn load_all_gallery_photos() -> Vec<PhotoInfo> {
         }
     }
 
-    photos.sort_by(|a, b| a.filename.cmp(&b.filename));
+    photos.sort_by(|a, b| {
+        // Sort by subfolder first, then by filename
+        match (&a.subfolder, &b.subfolder) {
+            (Some(sf_a), Some(sf_b)) => {
+                // Both have subfolders, compare them first
+                match sf_a.cmp(sf_b) {
+                    std::cmp::Ordering::Equal => a.filename.cmp(&b.filename),
+                    other => other,
+                }
+            }
+            (Some(_), None) => std::cmp::Ordering::Greater, // Photos in subfolders come after root
+            (None, Some(_)) => std::cmp::Ordering::Less,    // Root photos come first
+            (None, None) => a.filename.cmp(&b.filename),    // Both in root, sort by filename
+        }
+    });
     photos
 }
 
@@ -1076,9 +1140,30 @@ mod tests {
         let photos = load_all_gallery_photos();
 
         // Check if sorting is maintained (if there are photos)
+        // Photos should be sorted by subfolder first, then by filename
         if photos.len() > 1 {
             for i in 0..photos.len() - 1 {
-                assert!(photos[i].filename <= photos[i + 1].filename);
+                match (&photos[i].subfolder, &photos[i + 1].subfolder) {
+                    (Some(sf_a), Some(sf_b)) => {
+                        // Both have subfolders - either subfolder differs or filenames should be sorted
+                        if sf_a == sf_b {
+                            assert!(photos[i].filename <= photos[i + 1].filename);
+                        } else {
+                            assert!(sf_a <= sf_b);
+                        }
+                    }
+                    (Some(_), None) => {
+                        // Photos in subfolders come after root - this violates our sort order
+                        panic!("Subfolder photo should not come before root photo");
+                    }
+                    (None, Some(_)) => {
+                        // Root photos come before subfolder photos - this is correct
+                    }
+                    (None, None) => {
+                        // Both in root, check filename sort
+                        assert!(photos[i].filename <= photos[i + 1].filename);
+                    }
+                }
             }
         }
     }
