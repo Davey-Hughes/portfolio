@@ -1,0 +1,11 @@
+# Gallery grid configuration
+# These settings control how the photo grid is displayed for this specific gallery
+
+# Number of columns in the grid (default: 6)
+columns = 4
+
+# Height of each grid row in pixels (default: 280)
+row_height = 320
+
+# Gap between grid items in pixels (default: 8, which is 0.5rem)
+gap = 12

@@ -514,6 +514,17 @@ fn extract_exif_data(path: &Path) -> ExifData {
     )
 }
 
+/// Load gallery configuration from a TOML file
+fn load_gallery_config(gallery_path: &Path) -> Option<crate::types::GalleryConfig> {
+    let config_path = gallery_path.join("gallery.toml");
+    if !config_path.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&config_path).ok()?;
+    toml::from_str(&content).ok()
+}
+
 /// Load all galleries with photo counts
 pub fn load_galleries() -> Vec<GalleryInfo> {
     let mut galleries = Vec::new();
@@ -536,10 +547,12 @@ pub fn load_galleries() -> Vec<GalleryInfo> {
                 count_images_recursive(path, &mut photo_count);
 
                 if photo_count > 0 {
+                    let config = load_gallery_config(path);
                     galleries.push(GalleryInfo {
                         name: name.replace(['-', '_'], " "),
                         slug,
                         photo_count,
+                        config,
                     });
                 }
             }
@@ -1096,6 +1109,7 @@ mod tests {
             name: "Test Gallery".to_string(),
             slug: "test-gallery".to_string(),
             photo_count: 10,
+            config: None,
         };
 
         assert_eq!(gallery.name, "Test Gallery");

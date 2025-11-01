@@ -71,6 +71,7 @@ pub struct PhotoInfo {
 ///     name: "Landscapes".to_string(),
 ///     slug: "landscapes".to_string(),
 ///     photo_count: 42,
+///     config: None,
 /// };
 ///
 /// assert_eq!(gallery.name, "Landscapes");
@@ -81,6 +82,39 @@ pub struct GalleryInfo {
     pub name: String,
     pub slug: String,
     pub photo_count: usize,
+    pub config: Option<GalleryConfig>,
+}
+
+/// Configuration for gallery grid layout
+///
+/// # Examples
+///
+/// ```
+/// use portfolio::types::GalleryConfig;
+///
+/// let config = GalleryConfig {
+///     columns: Some(6),
+///     row_height: Some(280),
+///     gap: Some(8),
+/// };
+///
+/// assert_eq!(config.columns, Some(6));
+/// ```
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct GalleryConfig {
+    pub columns: Option<u32>,
+    pub row_height: Option<u32>,
+    pub gap: Option<u32>,
+}
+
+impl Default for GalleryConfig {
+    fn default() -> Self {
+        Self {
+            columns: Some(6),
+            row_height: Some(280),
+            gap: Some(8), // 0.5rem = 8px
+        }
+    }
 }
 
 /// Content for the About page including optional profile image and text.
@@ -177,6 +211,7 @@ mod tests {
             name: "Landscapes".to_string(),
             slug: "landscapes".to_string(),
             photo_count: 42,
+            config: None,
         };
 
         let json = leptos::serde_json::to_string(&gallery).unwrap();

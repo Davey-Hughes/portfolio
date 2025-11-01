@@ -20,7 +20,8 @@ Cargo.lock
 # Gallery images
 public/images/*
 !public/images/README.md
-!public/images/gallery/README.md
+!public/images/home/README.md
+!public/images/home/gallery.toml
 
 # Other content
 public/content/*
