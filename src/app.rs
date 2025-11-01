@@ -220,20 +220,20 @@ fn Footer() -> impl IntoView {
 fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) -> &'static str {
     if let (Some(w), Some(h)) = (width, height) {
         let ratio = f64::from(w) / f64::from(h);
-        if ratio > 1.8 {
-            "wide-landscape"
+        if ratio > 2.5 {
+            "wide-landscape" // Ultra-wide: 3 columns x 1 row
+        } else if ratio > 1.8 {
+            "landscape" // Wide: 2 columns x 1 row
         } else if ratio > 1.3 {
-            "landscape"
+            "landscape-square" // Standard landscape: 2 columns x 1 row
         } else if ratio > 1.05 {
-            "landscape-square"
-        } else if ratio > 0.95 {
-            "square"
+            "square" // Square-ish: 1 column x 1 row
         } else if ratio > 0.75 {
-            "portrait-square"
+            "portrait-square" // Near square portrait: 1 column x 1 row
         } else if ratio > 0.55 {
-            "portrait"
+            "portrait" // Standard portrait: 1 column x 2 rows
         } else {
-            "tall-portrait"
+            "tall-portrait" // Tall portrait: 1 column x 3 rows
         }
     } else {
         "square"
@@ -276,7 +276,10 @@ fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
 
 // Helper component for photo grid display
 #[component]
-fn PhotoGrid(photos: Vec<PhotoInfo>) -> impl IntoView {
+fn PhotoGrid(
+    photos: Vec<PhotoInfo>,
+    #[prop(optional)] config: Option<crate::types::GalleryConfig>,
+) -> impl IntoView {
     if photos.is_empty() {
         view! {
             <div class="empty-gallery">
@@ -288,11 +291,27 @@ fn PhotoGrid(photos: Vec<PhotoInfo>) -> impl IntoView {
         }
         .into_any()
     } else {
-        photos
-            .into_iter()
-            .map(|photo| view! { <PhotoGridItem photo=photo /> })
-            .collect_view()
-            .into_any()
+        let grid_style = if let Some(cfg) = config {
+            let columns = cfg.columns.unwrap_or(6);
+            let row_height = cfg.row_height.unwrap_or(280);
+            let gap = cfg.gap.unwrap_or(8);
+            format!(
+                "grid-template-columns: repeat({}, 1fr); grid-auto-rows: {}px; gap: {}px;",
+                columns, row_height, gap
+            )
+        } else {
+            String::new()
+        };
+
+        view! {
+            <div class="photo-grid-home" style=grid_style>
+                {photos
+                    .into_iter()
+                    .map(|photo| view! { <PhotoGridItem photo=photo /> })
+                    .collect_view()}
+            </div>
+        }
+        .into_any()
     }
 }
 
@@ -337,20 +356,16 @@ fn PhotoGridLoader() -> impl IntoView {
     let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
 
     view! {
-        <div class="photo-grid-home">
-            <Suspense fallback=|| {
-                view! { <div class="loading">"Loading photos..."</div> }
-            }>
-                {move || {
-                    match photos.get().and_then(|result| result.ok()) {
-                        Some(photo_list) => view! { <PhotoGrid photos=photo_list /> }.into_any(),
-                        None => {
-                            view! { <div class="error">"Failed to load photos"</div> }.into_any()
-                        }
-                    }
-                }}
-            </Suspense>
-        </div>
+        <Suspense fallback=|| {
+            view! { <div class="loading">"Loading photos..."</div> }
+        }>
+            {move || {
+                match photos.get().and_then(|result| result.ok()) {
+                    Some(photo_list) => view! { <PhotoGrid photos=photo_list /> }.into_any(),
+                    None => view! { <div class="error">"Failed to load photos"</div> }.into_any(),
+                }
+            }}
+        </Suspense>
     }
 }
 
@@ -389,8 +404,9 @@ fn GalleryHero(gallery_name: String) -> impl IntoView {
 // Helper component for gallery photos loader
 #[component]
 fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
+    let gallery_name_for_photos = gallery_name.clone();
     let photos = Resource::new(
-        move || Some(gallery_name.clone()),
+        move || Some(gallery_name_for_photos.clone()),
         |name| async move {
             if let Some(n) = name {
                 get_gallery_photos_by_name(n).await
@@ -400,31 +416,43 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
         },
     );
 
+    let galleries = Resource::new(|| (), |()| async { get_galleries().await });
+    let gallery_slug = gallery_name.to_lowercase().replace(' ', "-");
+
     view! {
-        <div class="photo-grid-home">
-            <Suspense fallback=|| {
-                view! { <div class="loading">"Loading photos..."</div> }
-            }>
-                {move || {
-                    match photos.get().and_then(|result| result.ok()) {
-                        Some(photo_list) if !photo_list.is_empty() => {
+        <Suspense fallback=|| {
+            view! { <div class="loading">"Loading photos..."</div> }
+        }>
+            {move || {
+                let gallery_config = galleries
+                    .get()
+                    .and_then(|result| result.ok())
+                    .and_then(|gallery_list| {
+                        gallery_list
+                            .into_iter()
+                            .find(|g| g.slug == gallery_slug)
+                            .and_then(|g| g.config)
+                    });
+                match photos.get().and_then(|result| result.ok()) {
+                    Some(photo_list) if !photo_list.is_empty() => {
+                        if let Some(cfg) = gallery_config {
+                            view! { <PhotoGrid photos=photo_list config=cfg /> }.into_any()
+                        } else {
                             view! { <PhotoGrid photos=photo_list /> }.into_any()
                         }
-                        Some(_) => {
-                            view! {
-                                <div class="empty-gallery">
-                                    <p>"No photos found in this gallery."</p>
-                                </div>
-                            }
-                                .into_any()
-                        }
-                        None => {
-                            view! { <div class="error">"Failed to load gallery"</div> }.into_any()
-                        }
                     }
-                }}
-            </Suspense>
-        </div>
+                    Some(_) => {
+                        view! {
+                            <div class="empty-gallery">
+                                <p>"No photos found in this gallery."</p>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    None => view! { <div class="error">"Failed to load gallery"</div> }.into_any(),
+                }
+            }}
+        </Suspense>
     }
 }
 
