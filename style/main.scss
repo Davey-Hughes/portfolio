@@ -153,6 +153,13 @@ img {
   gap: 0.5rem;
   padding: 2rem;
   background-color: #fafafa;
+
+  // Use CSS custom properties when custom-grid class is present
+  &.custom-grid {
+    grid-template-columns: repeat(var(--grid-columns, 6), 1fr);
+    grid-auto-rows: var(--grid-row-height, 280px);
+    gap: var(--grid-gap, 8px);
+  }
 }
 
 .photo-hero-link {
