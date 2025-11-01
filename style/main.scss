@@ -188,16 +188,31 @@ img {
     grid-row: span 1;
   }
 
-  // Square-ish (0.95-1.05:1)
+  // Square-ish (0.95-1.05:1) - varied sizes
   &.square {
     grid-column: span 1;
     grid-row: span 1;
+  }
+
+  &.square-large {
+    grid-column: span 2;
+    grid-row: span 2;
+  }
+
+  &.square-xlarge {
+    grid-column: span 3;
+    grid-row: span 3;
   }
 
   // Near square portrait (0.75-0.95:1)
   &.portrait-square {
     grid-column: span 1;
     grid-row: span 1;
+  }
+
+  &.portrait-square-large {
+    grid-column: span 2;
+    grid-row: span 2;
   }
 
   // Standard portrait (0.55-0.75:1)
@@ -921,6 +936,12 @@ img {
     grid-auto-flow: dense;
     gap: 0.5rem;
     padding: 1.5rem;
+
+    // Reduce large squares to medium at tablet size
+    .photo-hero-link.square-xlarge {
+      grid-column: span 2;
+      grid-row: span 2;
+    }
   }
 
   .photo-hero-caption {
@@ -1006,6 +1027,14 @@ img {
     .photo-hero-link.tall-portrait {
       grid-column: span 1;
       grid-row: span 2;
+    }
+
+    // Make all large squares regular 1x1 on mobile
+    .photo-hero-link.square-large,
+    .photo-hero-link.square-xlarge,
+    .photo-hero-link.portrait-square-large {
+      grid-column: span 1;
+      grid-row: span 1;
     }
   }
 
