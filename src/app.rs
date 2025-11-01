@@ -242,13 +242,44 @@ fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) ->
 
 // Helper component for photo grid item
 #[component]
-fn PhotoGridItem(photo: PhotoInfo) -> impl IntoView {
+fn PhotoGridItem(photo: PhotoInfo, #[prop(optional)] index: Option<usize>) -> impl IntoView {
     let photo_slug = photo.slug.clone();
     let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
     let photo_sources = photo.sources.clone();
     let photo_title = photo.title.clone();
-    let orientation_class = orientation_class_from_dimensions(photo.width, photo.height);
+    let base_orientation = orientation_class_from_dimensions(photo.width, photo.height);
+
+    // For square photos, vary the size based on index to create visual interest
+    // Using a more aggressive pattern to fill gaps better
+    let orientation_class = if let Some(idx) = index {
+        match base_orientation {
+            "square" => {
+                // More aggressive sizing:
+                // - Every 4th becomes xlarge (25%)
+                // - Every 2nd (not xlarge) becomes large (37.5%)
+                // - Remaining stay small (37.5%)
+                if idx % 4 == 0 {
+                    "square-xlarge"
+                } else if idx % 2 == 1 {
+                    "square-large"
+                } else {
+                    base_orientation
+                }
+            }
+            "portrait-square" => {
+                // Every other portrait-square becomes large (50%)
+                if idx % 2 == 0 {
+                    "portrait-square-large"
+                } else {
+                    base_orientation
+                }
+            }
+            _ => base_orientation,
+        }
+    } else {
+        base_orientation
+    };
 
     view! {
         <a
@@ -309,7 +340,8 @@ fn PhotoGrid(
             <div class="photo-grid-home" class:custom-grid=has_custom_style style=grid_style>
                 {photos
                     .into_iter()
-                    .map(|photo| view! { <PhotoGridItem photo=photo /> })
+                    .enumerate()
+                    .map(|(idx, photo)| view! { <PhotoGridItem photo=photo index=idx /> })
                     .collect_view()}
             </div>
         }
