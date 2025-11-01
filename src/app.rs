@@ -3,12 +3,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -143,9 +143,6 @@ fn GalleryNavLinks() -> impl IntoView {
 fn NavLinksList() -> impl IntoView {
     view! {
         <ul class="nav-links">
-            <li>
-                <A href="/">"Home"</A>
-            </li>
             <GalleryNavLinks />
             <li>
                 <A href="/about">"About"</A>
@@ -962,13 +959,15 @@ fn PhotoDetailPage() -> impl IntoView {
                         _ => 10.0,
                     };
                     max_zoom.set(calculated_max_zoom);
+                    let back_link = if photo.gallery_name == "home" {
+                        "/".to_string()
+                    } else {
+                        format!("/gallery/{}", photo.gallery_name)
+                    };
                     view! {
                         <div class="photo-detail-container">
                             <div class="photo-detail-header">
-                                <A
-                                    href=format!("/gallery/{}", photo.gallery_name)
-                                    attr:class="back-link"
-                                >
+                                <A href=back_link attr:class="back-link">
                                     "← Back to Gallery"
                                 </A>
                             </div>
