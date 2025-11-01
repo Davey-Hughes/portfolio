@@ -296,15 +296,17 @@ fn PhotoGrid(
             let row_height = cfg.row_height.unwrap_or(280);
             let gap = cfg.gap.unwrap_or(8);
             format!(
-                "grid-template-columns: repeat({}, 1fr); grid-auto-rows: {}px; gap: {}px;",
+                "--grid-columns: {}; --grid-row-height: {}px; --grid-gap: {}px;",
                 columns, row_height, gap
             )
         } else {
             String::new()
         };
 
+        let has_custom_style = !grid_style.is_empty();
+
         view! {
-            <div class="photo-grid-home" style=grid_style>
+            <div class="photo-grid-home" class:custom-grid=has_custom_style style=grid_style>
                 {photos
                     .into_iter()
                     .map(|photo| view! { <PhotoGridItem photo=photo /> })
@@ -1246,7 +1248,13 @@ fn AboutContent() -> impl IntoView {
                                     <h1>"About Me"</h1>
                                     {if about.is_html {
                                         let html_content = about.content.clone();
-                                        view! { <div inner_html=html_content></div> }.into_any()
+                                        view! {
+                                            <div
+                                                class="about-html-content"
+                                                inner_html=html_content
+                                            ></div>
+                                        }
+                                            .into_any()
                                     } else {
                                         let paragraphs: Vec<_> = about
                                             .content
