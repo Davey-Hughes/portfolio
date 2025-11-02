@@ -1,4 +1,7 @@
-use crate::server::*;
+use crate::server::{
+    get_about_content, get_all_gallery_photos, get_galleries, get_gallery_photos,
+    get_gallery_photos_by_name, get_site_config,
+};
 use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
@@ -53,9 +56,8 @@ fn PageTitle() -> impl IntoView {
             {move || {
                 let title = config
                     .get()
-                    .and_then(|result| result.ok())
-                    .map(|cfg| cfg.title())
-                    .unwrap_or_else(|| "Photography Portfolio".to_string());
+                    .and_then(std::result::Result::ok)
+                    .map_or_else(|| "Photography Portfolio".to_string(), |cfg| cfg.title());
                 view! { <Title text=title /> }
             }}
         </Suspense>
@@ -63,6 +65,7 @@ fn PageTitle() -> impl IntoView {
 }
 
 #[component]
+#[must_use]
 pub fn App() -> impl IntoView {
     provide_meta_context();
 
@@ -122,7 +125,7 @@ fn GalleryNavLinks() -> impl IntoView {
             {move || {
                 galleries
                     .get()
-                    .and_then(|galleries_result| galleries_result.ok())
+                    .and_then(std::result::Result::ok)
                     .map(|gallery_list| {
                         gallery_list
                             .into_iter()
@@ -171,9 +174,8 @@ fn NavBrand() -> impl IntoView {
             {move || {
                 let site_name = config
                     .get()
-                    .and_then(|result| result.ok())
-                    .map(|cfg| cfg.site_name)
-                    .unwrap_or_else(|| "Your Name".to_string());
+                    .and_then(std::result::Result::ok)
+                    .map_or_else(|| "Your Name".to_string(), |cfg| cfg.site_name);
 
                 view! {
                     <A href="/" attr:class="nav-brand">
@@ -209,7 +211,7 @@ fn Footer() -> impl IntoView {
                 {move || {
                     let copyright = config
                         .get()
-                        .and_then(|result| result.ok())
+                        .and_then(std::result::Result::ok)
                         .map(|cfg| cfg.copyright())
                         .unwrap_or_else(|| {
                             "© 2025 Your Photography. All rights reserved.".to_string()
@@ -332,8 +334,7 @@ fn PhotoGrid(
             let row_height = cfg.row_height.unwrap_or(280);
             let gap = cfg.gap.unwrap_or(8);
             format!(
-                "--grid-columns: {}; --grid-row-height: {}px; --grid-gap: {}px;",
-                columns, row_height, gap
+                "--grid-columns: {columns}; --grid-row-height: {row_height}px; --grid-gap: {gap}px;"
             )
         } else {
             String::new()
@@ -371,7 +372,7 @@ fn HeroSection() -> impl IntoView {
                     {move || {
                         let (name, tagline) = config
                             .get()
-                            .and_then(|result| result.ok())
+                            .and_then(std::result::Result::ok)
                             .map(|cfg| (cfg.site_name.to_uppercase(), cfg.site_tagline))
                             .unwrap_or_else(|| (
                                 "YOUR NAME".to_string(),
@@ -399,7 +400,7 @@ fn PhotoGridLoader() -> impl IntoView {
             view! { <div class="loading">"Loading photos..."</div> }
         }>
             {move || {
-                match photos.get().and_then(|result| result.ok()) {
+                match photos.get().and_then(std::result::Result::ok) {
                     Some(photo_list) => view! { <PhotoGrid photos=photo_list /> }.into_any(),
                     None => view! { <div class="error">"Failed to load photos"</div> }.into_any(),
                 }
@@ -465,14 +466,14 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
             {move || {
                 let gallery_config = galleries
                     .get()
-                    .and_then(|result| result.ok())
+                    .and_then(std::result::Result::ok)
                     .and_then(|gallery_list| {
                         gallery_list
                             .into_iter()
                             .find(|g| g.slug == gallery_slug)
                             .and_then(|g| g.config)
                     });
-                match photos.get().and_then(|result| result.ok()) {
+                match photos.get().and_then(std::result::Result::ok) {
                     Some(photo_list) if !photo_list.is_empty() => {
                         if let Some(cfg) = gallery_config {
                             view! { <PhotoGrid photos=photo_list config=cfg /> }.into_any()
@@ -556,7 +557,7 @@ fn CameraInfo(camera_make: Option<String>, camera_model: Option<String>) -> impl
             <h3 class="exif-heading">"Camera"</h3>
             {match (camera_make, camera_model) {
                 (Some(make), Some(model)) => {
-                    view! { <p class="exif-value">{format!("{} {}", make, model)}</p> }.into_any()
+                    view! { <p class="exif-value">{format!("{make} {model}")}</p> }.into_any()
                 }
                 (None, Some(model)) => view! { <p class="exif-value">{model}</p> }.into_any(),
                 (Some(make), None) => view! { <p class="exif-value">{make}</p> }.into_any(),
@@ -605,9 +606,11 @@ fn CopyrightFooter() -> impl IntoView {
             {move || {
                 let copyright = config
                     .get()
-                    .and_then(|result| result.ok())
-                    .map(|cfg| cfg.copyright())
-                    .unwrap_or_else(|| "© 2025 All rights reserved.".to_string());
+                    .and_then(std::result::Result::ok)
+                    .map_or_else(
+                        || "© 2025 All rights reserved.".to_string(),
+                        |cfg| cfg.copyright(),
+                    );
                 view! { <p>{copyright}</p> }
             }}
         </Suspense>
@@ -992,7 +995,7 @@ fn PhotoDetailPage() -> impl IntoView {
                         view! { <InvalidPhotoId /> }
                             .into_any();
                     };
-                    let Some(photo_list) = photos.get().and_then(|result| result.ok()) else {
+                    let Some(photo_list) = photos.get().and_then(std::result::Result::ok) else {
                         return // Get photo list
                         view! { <div class="error">"Failed to load photo"</div> }
                             .into_any();
@@ -1022,7 +1025,6 @@ fn PhotoDetailPage() -> impl IntoView {
                     let photo_title_fs = photo.title.clone();
                     let calculated_max_zoom = match (photo.width, photo.height) {
                         (Some(w), Some(h)) if w > 8000 || h > 8000 => 20.0,
-                        (Some(_), Some(_)) => 10.0,
                         _ => 10.0,
                     };
                     max_zoom.set(calculated_max_zoom);
@@ -1076,7 +1078,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                         class:expanded=move || is_details_expanded.get()
                                         on:click=move |_| {
                                             is_details_expanded
-                                                .update(|expanded| *expanded = !*expanded)
+                                                .update(|expanded| *expanded = !*expanded);
                                         }
                                     >
                                         {photo_title}
@@ -1095,7 +1097,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                             photo.width,
                                             photo.height,
                                         ) {
-                                            let dimensions = format!("{} × {} px", width, height);
+                                            let dimensions = format!("{width} × {height} px");
                                             view! {
                                                 <ExifField heading="Dimensions" value=dimensions />
                                             }
@@ -1193,7 +1195,11 @@ fn PhotoDetailPage() -> impl IntoView {
                                                         on:input=on_zoom_change
                                                     />
                                                     <label class="zoom-label">
-                                                        {move || format!("{}×", max_zoom.get() as i32)}
+                                                        {move || {
+                                                            #[allow(clippy::cast_possible_truncation)]
+                                                            let zoom_int = max_zoom.get() as i32;
+                                                            format!("{zoom_int}×")
+                                                        }}
                                                     </label>
                                                 </div>
                                             </div>
@@ -1269,7 +1275,7 @@ fn AboutContent() -> impl IntoView {
             }
         }>
             {move || {
-                match about_content.get().and_then(|result| result.ok()) {
+                match about_content.get().and_then(std::result::Result::ok) {
                     Some(about) => {
                         view! {
                             <div class="about-container">
@@ -1296,7 +1302,7 @@ fn AboutContent() -> impl IntoView {
                                         let paragraphs: Vec<_> = about
                                             .content
                                             .split("\n\n")
-                                            .map(|p| p.trim())
+                                            .map(str::trim)
                                             .filter(|p| !p.is_empty())
                                             .collect();
                                         paragraphs
@@ -1357,10 +1363,7 @@ fn get_social_media_link_from_string(key: &str, value: &str) -> Option<(String, 
 
     if key_lower.contains("instagram") {
         if let Some(handle) = value.strip_prefix('@') {
-            Some((
-                format!("https://instagram.com/{}", handle),
-                value.to_string(),
-            ))
+            Some((format!("https://instagram.com/{handle}"), value.to_string()))
         } else if !value.starts_with("http") {
             Some((
                 format!("https://instagram.com/{}", value.trim_start_matches('@')),
@@ -1376,7 +1379,7 @@ fn get_social_media_link_from_string(key: &str, value: &str) -> Option<(String, 
             if let Some(username) = value.split('/').nth(3) {
                 if !username.is_empty() {
                     return Some((
-                        format!("https://github.com/{}", username),
+                        format!("https://github.com/{username}"),
                         username.to_string(),
                     ));
                 }
@@ -1386,7 +1389,7 @@ fn get_social_media_link_from_string(key: &str, value: &str) -> Option<(String, 
             // Treat as username
             let username = value.trim_start_matches('@');
             Some((
-                format!("https://github.com/{}", username),
+                format!("https://github.com/{username}"),
                 username.to_string(),
             ))
         }
@@ -1443,7 +1446,7 @@ fn ContactInfoSection() -> impl IntoView {
             view! { <div class="contact-info"></div> }
         }>
             {move || {
-                match config.get().and_then(|result| result.ok()) {
+                match config.get().and_then(std::result::Result::ok) {
                     Some(cfg) if !cfg.sections.is_empty() => {
                         let mut sections_vec: Vec<_> = cfg.sections.into_iter().collect();
                         sections_vec.sort_by(|a, b| a.0.cmp(&b.0));
