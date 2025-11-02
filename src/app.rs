@@ -1,17 +1,17 @@
 use crate::server::{
-    get_about_content, get_all_gallery_photos, get_galleries, get_gallery_photos,
-    get_gallery_photos_by_name, get_site_config,
+    get_about_content, get_all_gallery_photos, get_galleries, get_gallery_data_by_name,
+    get_home_gallery_config, get_home_gallery_data, get_site_config,
 };
 use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{A, Route, Router, Routes},
+    components::{Route, Router, Routes, A},
     hooks::{use_location, use_params},
     params::Params,
+    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -247,6 +247,71 @@ fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) ->
     }
 }
 
+// Helper component for mosaic photo grid item
+#[component]
+fn MosaicPhotoGridItem(photo: PhotoInfo, cell: crate::types::MosaicCell) -> impl IntoView {
+    let photo_slug = photo.slug.clone();
+    let photo_gallery = photo.gallery_name.clone();
+    let photo_url = photo.url.clone();
+    let photo_sources = photo.sources.clone();
+    let photo_title = photo.title.clone();
+
+    let grid_style = format!(
+        "grid-row: {} / {}; grid-column: {} / {};",
+        cell.row_start, cell.row_end, cell.col_start, cell.col_end
+    );
+
+    view! {
+        <a
+            href=format!("/gallery/{}/{}", photo_gallery, photo_slug)
+            class="photo-hero-link mosaic-cell"
+            style=grid_style
+        >
+            <div class="photo-hero-section">
+                <div class="photo-hero-image">
+                    <picture>
+                        {photo_sources
+                            .into_iter()
+                            .map(|source| {
+                                view! { <source srcset=source.url type=source.mime_type /> }
+                            })
+                            .collect_view()} <img src=photo_url alt=photo_title.clone() />
+                    </picture>
+                </div>
+                <div class="photo-hero-caption">
+                    <h2>{photo_title}</h2>
+                </div>
+            </div>
+        </a>
+    }
+}
+
+// Helper component for mobile single-column photo display
+#[component]
+fn MobilePhotoItem(photo: PhotoInfo) -> impl IntoView {
+    let photo_slug = photo.slug.clone();
+    let photo_gallery = photo.gallery_name.clone();
+    let photo_url = photo.url.clone();
+    let photo_sources = photo.sources.clone();
+    let photo_title = photo.title.clone();
+
+    view! {
+        <a
+            href=format!("/gallery/{}/{}", photo_gallery, photo_slug)
+            class="photo-mobile-item"
+        >
+            <picture>
+                {photo_sources
+                    .into_iter()
+                    .map(|source| {
+                        view! { <source srcset=source.url type=source.mime_type /> }
+                    })
+                    .collect_view()} <img src=photo_url alt=photo_title />
+            </picture>
+        </a>
+    }
+}
+
 // Helper component for photo grid item
 #[component]
 fn PhotoGridItem(photo: PhotoInfo, #[prop(optional)] index: Option<usize>) -> impl IntoView {
@@ -317,6 +382,8 @@ fn PhotoGridItem(photo: PhotoInfo, #[prop(optional)] index: Option<usize>) -> im
 fn PhotoGrid(
     photos: Vec<PhotoInfo>,
     #[prop(optional)] config: Option<crate::types::GalleryConfig>,
+    #[prop(optional)] mosaic_layout: Option<crate::types::MosaicLayout>,
+    #[prop(optional)] mosaic_layout_tablet: Option<crate::types::MosaicLayout>,
 ) -> impl IntoView {
     if photos.is_empty() {
         view! {
@@ -329,29 +396,85 @@ fn PhotoGrid(
         }
         .into_any()
     } else {
-        let grid_style = if let Some(cfg) = config {
-            let columns = cfg.columns.unwrap_or(6);
-            let row_height = cfg.row_height.unwrap_or(280);
-            let gap = cfg.gap.unwrap_or(8);
-            format!(
-                "--grid-columns: {columns}; --grid-row-height: {row_height}px; --grid-gap: {gap}px;"
-            )
+        // Check if we have a pre-computed mosaic layout
+        if let Some(layout) = mosaic_layout {
+            // Use pre-computed mosaic layout (already has photos in correct order)
+            let gap = config.as_ref().and_then(|cfg| cfg.gap).unwrap_or(8);
+
+            // Desktop layout
+            let grid_style_desktop = format!(
+                "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); height: {}px; gap: {}px;",
+                layout.grid_cols, layout.grid_rows, layout.container_height, gap
+            );
+
+            // Clone photos for tablet and mobile layouts
+            let photos_tablet = photos.clone();
+            let photos_mobile = photos.clone();
+
+            view! {
+                // Desktop layout (hidden on tablet/mobile)
+                <div class="photo-grid-mosaic photo-grid-mosaic-desktop" style=grid_style_desktop>
+                    {layout
+                        .cells
+                        .into_iter()
+                        .zip(photos.into_iter())
+                        .map(|(cell, photo)| view! { <MosaicPhotoGridItem photo=photo cell=cell /> })
+                        .collect_view()}
+                </div>
+
+                // Tablet layout (hidden on desktop/mobile)
+                {mosaic_layout_tablet.map(|layout_tablet| {
+                    let grid_style_tablet = format!(
+                        "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); height: {}px; gap: {}px;",
+                        layout_tablet.grid_cols, layout_tablet.grid_rows, layout_tablet.container_height, gap
+                    );
+                    view! {
+                        <div class="photo-grid-mosaic photo-grid-mosaic-tablet" style=grid_style_tablet>
+                            {layout_tablet
+                                .cells
+                                .into_iter()
+                                .zip(photos_tablet.into_iter())
+                                .map(|(cell, photo)| view! { <MosaicPhotoGridItem photo=photo cell=cell /> })
+                                .collect_view()}
+                        </div>
+                    }
+                })}
+
+                // Mobile fallback: single column (hidden on tablet/desktop)
+                <div class="photo-grid-mobile">
+                    {photos_mobile
+                        .into_iter()
+                        .map(|photo| view! { <MobilePhotoItem photo=photo /> })
+                        .collect_view()}
+                </div>
+            }
+            .into_any()
         } else {
-            String::new()
-        };
+            // Use traditional grid layout
+            let grid_style = if let Some(cfg) = config {
+                let columns = cfg.columns.unwrap_or(6);
+                let row_height = cfg.row_height.unwrap_or(280);
+                let gap = cfg.gap.unwrap_or(8);
+                format!(
+                    "--grid-columns: {columns}; --grid-row-height: {row_height}px; --grid-gap: {gap}px;"
+                )
+            } else {
+                String::new()
+            };
 
-        let has_custom_style = !grid_style.is_empty();
+            let has_custom_style = !grid_style.is_empty();
 
-        view! {
-            <div class="photo-grid-home" class:custom-grid=has_custom_style style=grid_style>
-                {photos
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, photo)| view! { <PhotoGridItem photo=photo index=idx /> })
-                    .collect_view()}
-            </div>
+            view! {
+                <div class="photo-grid-home" class:custom-grid=has_custom_style style=grid_style>
+                    {photos
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, photo)| view! { <PhotoGridItem photo=photo index=idx /> })
+                        .collect_view()}
+                </div>
+            }
+            .into_any()
         }
-        .into_any()
     }
 }
 
@@ -393,15 +516,48 @@ fn HeroSection() -> impl IntoView {
 // Helper component for photo grid loading
 #[component]
 fn PhotoGridLoader() -> impl IntoView {
-    let photos = Resource::new(|| (), |()| async { get_gallery_photos().await });
+    let gallery_data = Resource::new(|| (), |()| async { get_home_gallery_data().await });
+    let home_config = Resource::new(|| (), |()| async { get_home_gallery_config().await });
 
     view! {
         <Suspense fallback=|| {
             view! { <div class="loading">"Loading photos..."</div> }
         }>
             {move || {
-                match photos.get().and_then(std::result::Result::ok) {
-                    Some(photo_list) => view! { <PhotoGrid photos=photo_list /> }.into_any(),
+                // Get the home gallery config
+                let gallery_config = home_config
+                    .get()
+                    .and_then(std::result::Result::ok)
+                    .flatten();
+
+                match gallery_data.get().and_then(std::result::Result::ok) {
+                    Some(data) => {
+                        let photos = data.photos;
+                        let mosaic_layout = data.mosaic_layout;
+                        let mosaic_layout_tablet = data.mosaic_layout_tablet;
+
+                        match (gallery_config, mosaic_layout, mosaic_layout_tablet) {
+                            (Some(cfg), Some(mosaic), Some(tablet)) => {
+                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                    .into_any()
+                            }
+                            (Some(cfg), Some(mosaic), None) => {
+                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }
+                                    .into_any()
+                            }
+                            (None, Some(mosaic), Some(tablet)) => {
+                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                    .into_any()
+                            }
+                            (None, Some(mosaic), None) => {
+                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
+                            }
+                            (Some(cfg), None, _) => {
+                                view! { <PhotoGrid photos=photos config=cfg /> }.into_any()
+                            }
+                            (None, None, _) => view! { <PhotoGrid photos=photos /> }.into_any(),
+                        }
+                    }
                     None => view! { <div class="error">"Failed to load photos"</div> }.into_any(),
                 }
             }}
@@ -444,12 +600,12 @@ fn GalleryHero(gallery_name: String) -> impl IntoView {
 // Helper component for gallery photos loader
 #[component]
 fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
-    let gallery_name_for_photos = gallery_name.clone();
-    let photos = Resource::new(
-        move || Some(gallery_name_for_photos.clone()),
+    let gallery_name_for_data = gallery_name.clone();
+    let gallery_data = Resource::new(
+        move || Some(gallery_name_for_data.clone()),
         |name| async move {
             if let Some(n) = name {
-                get_gallery_photos_by_name(n).await
+                get_gallery_data_by_name(n).await
             } else {
                 Err(ServerFnError::new("No gallery name provided"))
             }
@@ -473,12 +629,32 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
                             .find(|g| g.slug == gallery_slug)
                             .and_then(|g| g.config)
                     });
-                match photos.get().and_then(std::result::Result::ok) {
-                    Some(photo_list) if !photo_list.is_empty() => {
-                        if let Some(cfg) = gallery_config {
-                            view! { <PhotoGrid photos=photo_list config=cfg /> }.into_any()
-                        } else {
-                            view! { <PhotoGrid photos=photo_list /> }.into_any()
+                match gallery_data.get().and_then(std::result::Result::ok) {
+                    Some(data) if !data.photos.is_empty() => {
+                        let photos = data.photos;
+                        let mosaic_layout = data.mosaic_layout;
+                        let mosaic_layout_tablet = data.mosaic_layout_tablet;
+
+                        match (gallery_config, mosaic_layout, mosaic_layout_tablet) {
+                            (Some(cfg), Some(mosaic), Some(tablet)) => {
+                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                    .into_any()
+                            }
+                            (Some(cfg), Some(mosaic), None) => {
+                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }
+                                    .into_any()
+                            }
+                            (None, Some(mosaic), Some(tablet)) => {
+                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                    .into_any()
+                            }
+                            (None, Some(mosaic), None) => {
+                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
+                            }
+                            (Some(cfg), None, _) => {
+                                view! { <PhotoGrid photos=photos config=cfg /> }.into_any()
+                            }
+                            (None, None, _) => view! { <PhotoGrid photos=photos /> }.into_any(),
                         }
                     }
                     Some(_) => {

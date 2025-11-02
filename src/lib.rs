@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod mosaic;
 pub mod server;
 pub mod types;
 

@@ -552,7 +552,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
 }
 
 /// Load gallery configuration from a TOML file
-fn load_gallery_config(gallery_path: &Path) -> Option<crate::types::GalleryConfig> {
+pub fn load_gallery_config(gallery_path: &Path) -> Option<crate::types::GalleryConfig> {
     let config_path = gallery_path.join("gallery.toml");
     if !config_path.exists() {
         return None;
