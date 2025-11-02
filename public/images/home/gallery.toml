@@ -1,10 +1,20 @@
 # Gallery grid configuration
 # These settings control how the photo grid is displayed for this specific gallery
 
-# Number of columns in the grid (default: 6)
+# Use mosaic layout (default: false)
+# When enabled, creates a pleasing mosaic pattern instead of traditional grid
+use_mosaic = true
+
+# Mosaic cache duration in seconds (default: 3600 = 1 hour)
+# The mosaic layout is cached to avoid regenerating on every page load
+# Set to a lower value if you frequently add/remove photos
+# Set to a higher value for better performance on galleries that don't change often
+mosaic_cache_duration = 3600
+
+# Number of columns in the grid (default: 6) - ignored if use_mosaic is true
 columns = 4
 
-# Height of each grid row in pixels (default: 280)
+# Height of each grid row in pixels (default: 280) - ignored if use_mosaic is true
 row_height = 320
 
 # Gap between grid items in pixels (default: 8, which is 0.5rem)

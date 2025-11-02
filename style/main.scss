@@ -17,6 +17,8 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 a {
@@ -159,6 +161,101 @@ img {
     grid-template-columns: repeat(var(--grid-columns, 6), 1fr);
     grid-auto-rows: var(--grid-row-height, 280px);
     gap: var(--grid-gap, 8px);
+  }
+}
+
+// Mosaic grid layout
+.photo-grid-mosaic {
+  max-width: 100vw;
+  width: 100%;
+  display: grid;
+  padding: 2rem;
+  background-color: #fafafa;
+  min-height: 600px;
+  box-sizing: border-box;
+
+  // Override grid-auto-flow - mosaic uses explicit placement
+  grid-auto-flow: dense;
+
+  .mosaic-cell {
+    // Mosaic cells don't use the orientation classes
+    // They use explicit grid positioning via inline styles
+    min-height: 0; // Allow flexbox to shrink
+    min-width: 0; // Allow flexbox to shrink
+    overflow: hidden;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+}
+
+// Ensure parent containers don't cause overflow
+.home-page,
+.gallery-page {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+// Desktop layout: show desktop mosaic, hide tablet and mobile
+.photo-grid-mosaic-desktop {
+  display: grid;
+}
+
+.photo-grid-mosaic-tablet {
+  display: none;
+}
+
+.photo-grid-mobile {
+  display: none;
+}
+
+// Tablet layout (768px - 1199px): hide desktop, show tablet, hide mobile
+@media (max-width: 1199px) and (min-width: 768px) {
+  .photo-grid-mosaic-desktop {
+    display: none;
+  }
+
+  .photo-grid-mosaic-tablet {
+    display: grid;
+  }
+
+  .photo-grid-mobile {
+    display: none;
+  }
+}
+
+// Mobile layout (< 768px): hide desktop and tablet, show mobile single column
+@media (max-width: 767px) {
+  .photo-grid-mosaic-desktop {
+    display: none;
+  }
+
+  .photo-grid-mosaic-tablet {
+    display: none;
+  }
+
+  .photo-grid-mobile {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    gap: 1.5rem;
+    background-color: #fafafa;
+  }
+}
+
+// Mobile photo item styles
+.photo-mobile-item {
+  display: block;
+  text-decoration: none;
+  overflow: hidden;
+
+  img {
+    width: 100%;
+    height: auto;
+    display: block;
   }
 }
 

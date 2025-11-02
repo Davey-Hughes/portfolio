@@ -98,6 +98,8 @@ pub struct GalleryInfo {
 ///     columns: Some(6),
 ///     row_height: Some(280),
 ///     gap: Some(8),
+///     use_mosaic: None,
+///     mosaic_cache_duration: None,
 /// };
 ///
 /// assert_eq!(config.columns, Some(6));
@@ -107,6 +109,8 @@ pub struct GalleryConfig {
     pub columns: Option<u32>,
     pub row_height: Option<u32>,
     pub gap: Option<u32>,
+    pub use_mosaic: Option<bool>,
+    pub mosaic_cache_duration: Option<u64>, // Cache duration in seconds
 }
 
 impl Default for GalleryConfig {
@@ -115,8 +119,36 @@ impl Default for GalleryConfig {
             columns: Some(6),
             row_height: Some(280),
             gap: Some(8), // 0.5rem = 8px
+            use_mosaic: None,
+            mosaic_cache_duration: Some(3600), // Default 1 hour cache
         }
     }
+}
+
+/// Represents a cell in the mosaic grid layout
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MosaicCell {
+    pub row_start: u32,
+    pub row_end: u32,
+    pub col_start: u32,
+    pub col_end: u32,
+}
+
+/// Layout data for mosaic-style galleries
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MosaicLayout {
+    pub cells: Vec<MosaicCell>,
+    pub grid_rows: u32,
+    pub grid_cols: u32,
+    pub container_height: f64, // Actual height in pixels
+}
+
+/// Gallery data with photos and optional pre-computed mosaic layout
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct GalleryData {
+    pub photos: Vec<PhotoInfo>,
+    pub mosaic_layout: Option<MosaicLayout>, // Desktop layout
+    pub mosaic_layout_tablet: Option<MosaicLayout>, // Tablet layout
 }
 
 /// Content for the About page including optional profile image and text.
