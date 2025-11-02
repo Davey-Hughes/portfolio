@@ -424,9 +424,10 @@ fn PhotoGrid(
 
                 // Tablet layout (hidden on desktop/mobile)
                 {mosaic_layout_tablet.map(|layout_tablet| {
+                    let aspect_ratio_tablet = layout_tablet.grid_cols as f64 / layout_tablet.grid_rows as f64;
                     let grid_style_tablet = format!(
-                        "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); height: {}px; gap: {}px;",
-                        layout_tablet.grid_cols, layout_tablet.grid_rows, layout_tablet.container_height, gap
+                        "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); aspect-ratio: {}; gap: {}px;",
+                        layout_tablet.grid_cols, layout_tablet.grid_rows, aspect_ratio_tablet, gap
                     );
                     view! {
                         <div class="photo-grid-mosaic photo-grid-mosaic-tablet" style=grid_style_tablet>

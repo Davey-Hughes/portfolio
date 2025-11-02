@@ -166,13 +166,15 @@ img {
 
 // Mosaic grid layout
 .photo-grid-mosaic {
-  max-width: 100vw;
+  max-width: 100%;
   width: 100%;
   display: grid;
   padding: 2rem;
   background-color: #fafafa;
   min-height: 600px;
   box-sizing: border-box;
+  margin: 0;
+  position: relative;
 
   // Override grid-auto-flow - mosaic uses explicit placement
   grid-auto-flow: dense;
