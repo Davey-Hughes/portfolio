@@ -186,12 +186,14 @@ pub async fn get_home_gallery_data() -> Result<GalleryData, ServerFnError> {
                 let (layout_desktop, image_order) =
                     generate_mosaic_layout_for_size(&photos, 1200.0, 600.0);
 
-                // Generate tablet layout (768px)
-                let (layout_tablet, _) = generate_mosaic_layout_for_size(&photos, 768.0, 500.0);
-
                 // Reorder photos to match the desktop layout
                 let reordered_photos: Vec<PhotoInfo> =
                     image_order.iter().map(|&idx| photos[idx].clone()).collect();
+
+                // Generate tablet layout (768px) using the SAME photo order as desktop
+                // Tablet needs more height since it's narrower (768px vs 1200px)
+                let (layout_tablet, _) =
+                    generate_mosaic_layout_for_size(&reordered_photos, 768.0, 800.0);
 
                 let result = GalleryData {
                     photos: reordered_photos,
@@ -292,12 +294,14 @@ pub async fn get_gallery_data_by_name(gallery_name: String) -> Result<GalleryDat
                 let (layout_desktop, image_order) =
                     generate_mosaic_layout_for_size(&photos, 1200.0, 600.0);
 
-                // Generate tablet layout (768px)
-                let (layout_tablet, _) = generate_mosaic_layout_for_size(&photos, 768.0, 500.0);
-
                 // Reorder photos to match the desktop layout
                 let reordered_photos: Vec<PhotoInfo> =
                     image_order.iter().map(|&idx| photos[idx].clone()).collect();
+
+                // Generate tablet layout (768px) using the SAME photo order as desktop
+                // Tablet needs more height since it's narrower (768px vs 1200px)
+                let (layout_tablet, _) =
+                    generate_mosaic_layout_for_size(&reordered_photos, 768.0, 800.0);
 
                 let result = GalleryData {
                     photos: reordered_photos,
