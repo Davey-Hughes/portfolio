@@ -652,12 +652,14 @@ fn PhotoDetailPage() -> impl IntoView {
     let show_zoom_controls = RwSignal::new(true);
 
     // Create a signal to track viewport width for mobile detection
-    let viewport_width = RwSignal::new(0.0);
+    // Initialize viewport_width with a reasonable default to avoid hydration mismatch
+    // We'll use original (full quality) images by default during SSR
+    let viewport_width = RwSignal::new(1920.0); // Default to desktop width for SSR
 
     #[cfg(feature = "hydrate")]
     {
         use leptos::prelude::Effect;
-        // Set initial viewport width on mount
+        // Update viewport width on mount - but only affects future renders, not hydration
         Effect::new(move |_| {
             if let Some(window) = web_sys::window() {
                 if let Ok(width) = window.inner_width() {
@@ -669,46 +671,45 @@ fn PhotoDetailPage() -> impl IntoView {
         });
     }
 
-    #[cfg(feature = "hydrate")]
-    let initial_pinch_distance = RwSignal::new(0.0);
-    #[cfg(feature = "hydrate")]
-    let initial_zoom = RwSignal::new(1.0);
-    #[cfg(feature = "hydrate")]
-    let initial_pinch_center_x = RwSignal::new(0.0);
-    #[cfg(feature = "hydrate")]
-    let initial_pinch_center_y = RwSignal::new(0.0);
-    #[cfg(feature = "hydrate")]
-    let initial_pan_x = RwSignal::new(0.0);
-    #[cfg(feature = "hydrate")]
-    let initial_pan_y = RwSignal::new(0.0);
-    #[cfg(feature = "hydrate")]
-    let hide_controls_timeout: StoredValue<Option<i32>> = StoredValue::new(None);
+    // Define these signals unconditionally to avoid hydration errors
+    // Prefixed with underscore as they're only used in #[cfg(feature = "hydrate")] blocks
+    let _initial_pinch_distance = RwSignal::new(0.0);
+    let _initial_zoom = RwSignal::new(1.0);
+    let _initial_pinch_center_x = RwSignal::new(0.0);
+    let _initial_pinch_center_y = RwSignal::new(0.0);
+    let _initial_pan_x = RwSignal::new(0.0);
+    let _initial_pan_y = RwSignal::new(0.0);
+    let _hide_controls_timeout: StoredValue<Option<i32>> = StoredValue::new(None);
 
-    #[cfg(feature = "hydrate")]
+    // Define reset_hide_timer unconditionally, but only execute browser code on hydrate
     let reset_hide_timer = move || {
         show_zoom_controls.set(true);
 
-        // Clear existing timeout
-        if let Some(timeout_id) = hide_controls_timeout.get_value() {
-            web_sys::window()
-                .unwrap()
-                .clear_timeout_with_handle(timeout_id);
+        #[cfg(feature = "hydrate")]
+        {
+            // Clear existing timeout
+            if let Some(timeout_id) = _hide_controls_timeout.get_value() {
+                if let Some(window) = web_sys::window() {
+                    window.clear_timeout_with_handle(timeout_id);
+                }
+            }
+
+            // Set new timeout
+            if let Some(window) = web_sys::window() {
+                let timeout_id = window
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(
+                        leptos::wasm_bindgen::closure::Closure::once(move || {
+                            show_zoom_controls.set(false);
+                        })
+                        .into_js_value()
+                        .unchecked_ref(),
+                        1000,
+                    )
+                    .ok();
+
+                _hide_controls_timeout.set_value(timeout_id);
+            }
         }
-
-        // Set new timeout
-        let timeout_id = web_sys::window()
-            .unwrap()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(
-                leptos::wasm_bindgen::closure::Closure::once(move || {
-                    show_zoom_controls.set(false);
-                })
-                .into_js_value()
-                .unchecked_ref(),
-                1000,
-            )
-            .ok();
-
-        hide_controls_timeout.set_value(timeout_id);
     };
 
     let toggle_fullscreen = move |_| {
@@ -719,11 +720,8 @@ fn PhotoDetailPage() -> impl IntoView {
             pan_x.set(0.0);
             pan_y.set(0.0);
         }
-        #[cfg(feature = "hydrate")]
-        {
-            show_zoom_controls.set(true);
-            reset_hide_timer();
-        }
+        show_zoom_controls.set(true);
+        reset_hide_timer();
     };
 
     let close_fullscreen = move |ev: leptos::ev::MouseEvent| {
@@ -748,7 +746,6 @@ fn PhotoDetailPage() -> impl IntoView {
             pan_x.set(0.0);
             pan_y.set(0.0);
         }
-        #[cfg(feature = "hydrate")]
         reset_hide_timer();
     };
 
@@ -810,7 +807,6 @@ fn PhotoDetailPage() -> impl IntoView {
             pan_x.set(f64::from(ev.client_x()) - start_x.get());
             pan_y.set(f64::from(ev.client_y()) - start_y.get());
         }
-        #[cfg(feature = "hydrate")]
         reset_hide_timer();
     };
 
@@ -876,6 +872,10 @@ fn PhotoDetailPage() -> impl IntoView {
 
             reset_hide_timer();
         }
+        #[cfg(not(feature = "hydrate"))]
+        {
+            let _ = ev; // Suppress unused variable warning on SSR
+        }
     };
 
     let on_touch_start = move |_ev: leptos::ev::TouchEvent| {
@@ -897,12 +897,12 @@ fn PhotoDetailPage() -> impl IntoView {
                 let center_x = (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
                 let center_y = (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
 
-                initial_pinch_distance.set(distance);
-                initial_zoom.set(zoom_level.get());
-                initial_pinch_center_x.set(center_x);
-                initial_pinch_center_y.set(center_y);
-                initial_pan_x.set(pan_x.get());
-                initial_pan_y.set(pan_y.get());
+                _initial_pinch_distance.set(distance);
+                _initial_zoom.set(zoom_level.get());
+                _initial_pinch_center_x.set(center_x);
+                _initial_pinch_center_y.set(center_y);
+                _initial_pan_x.set(pan_x.get());
+                _initial_pan_y.set(pan_y.get());
             } else if touches.length() == 1 && zoom_level.get() > 1.0 {
                 // Single finger panning
                 touch_event.prevent_default();
@@ -929,8 +929,8 @@ fn PhotoDetailPage() -> impl IntoView {
                 let dy = f64::from(touch1.client_y() - touch0.client_y());
                 let distance = (dx * dx + dy * dy).sqrt();
 
-                let scale = distance / initial_pinch_distance.get();
-                let new_zoom = (initial_zoom.get() * scale).clamp(1.0, max_zoom.get());
+                let scale = distance / _initial_pinch_distance.get();
+                let new_zoom = (_initial_zoom.get() * scale).clamp(1.0, max_zoom.get());
 
                 if (new_zoom - 1.0).abs() < 0.01 {
                     zoom_level.set(1.0);
@@ -950,17 +950,17 @@ fn PhotoDetailPage() -> impl IntoView {
                         / 2.0;
 
                     // Calculate offset from viewport center to pinch center
-                    let offset_x = initial_pinch_center_x.get() - viewport_center_x;
-                    let offset_y = initial_pinch_center_y.get() - viewport_center_y;
+                    let offset_x = _initial_pinch_center_x.get() - viewport_center_x;
+                    let offset_y = _initial_pinch_center_y.get() - viewport_center_y;
 
                     // Calculate zoom ratio
-                    let zoom_ratio = new_zoom / initial_zoom.get();
+                    let zoom_ratio = new_zoom / _initial_zoom.get();
 
                     // Adjust pan to keep the pinch point stationary
                     let new_pan_x =
-                        initial_pan_x.get() * zoom_ratio - offset_x * (zoom_ratio - 1.0);
+                        _initial_pan_x.get() * zoom_ratio - offset_x * (zoom_ratio - 1.0);
                     let new_pan_y =
-                        initial_pan_y.get() * zoom_ratio - offset_y * (zoom_ratio - 1.0);
+                        _initial_pan_y.get() * zoom_ratio - offset_y * (zoom_ratio - 1.0);
 
                     zoom_level.set(new_zoom);
                     pan_x.set(new_pan_x);
