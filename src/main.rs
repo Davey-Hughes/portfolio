@@ -2,15 +2,15 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        Router,
         extract::{Path, Query},
-        http::{StatusCode, header},
+        http::{header, StatusCode},
         response::{IntoResponse, Response},
+        Router,
     };
     use jxl_oxide::integration::JxlDecoder;
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_axum::{generate_route_list, LeptosRoutes};
     use portfolio::app::*;
     use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
@@ -60,7 +60,8 @@ async fn main() {
                 let original_path = first_part.replace('_', "/");
 
                 // Check if source image exists (try different extensions)
-                let extensions = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "avif"];
+                // Priority order: jxl (best quality) -> avif (modern) -> jpeg (fallback) -> others
+                let extensions = ["jxl", "avif", "jpg", "jpeg", "webp", "png", "gif"];
                 let mut source_exists = false;
 
                 for ext in &extensions {
@@ -105,7 +106,8 @@ async fn main() {
         log!("Starting cache prewarming...");
 
         let valid_presets = ImageParams::get_valid_presets();
-        let supported_extensions = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "avif"];
+        // Priority order: jxl (best quality) -> avif (modern) -> jpeg (fallback) -> others
+        let supported_extensions = ["jxl", "avif", "jpg", "jpeg", "webp", "png", "gif"];
 
         let mut generated_count = 0;
         let mut skipped_count = 0;
@@ -130,6 +132,7 @@ async fn main() {
             };
 
             // Find the actual file with any supported extension
+            // Will use first match based on priority order (jxl -> avif -> jpeg -> others)
             let full_path = supported_extensions
                 .iter()
                 .map(|ext| {
@@ -260,9 +263,10 @@ async fn main() {
                     collect_image_paths(&path, base, paths);
                 } else if let Some(extension) = path.extension() {
                     let ext = extension.to_string_lossy().to_lowercase();
+                    // Support all formats: jxl, avif, jpg, jpeg, webp, png, gif
                     if matches!(
                         ext.as_ref(),
-                        "jpg" | "jpeg" | "png" | "webp" | "gif" | "jxl" | "avif"
+                        "jxl" | "avif" | "jpg" | "jpeg" | "webp" | "png" | "gif"
                     ) {
                         if let Ok(relative) = path.strip_prefix(base) {
                             paths.push(relative.to_string_lossy().to_string());
@@ -312,7 +316,8 @@ async fn main() {
         };
 
         // Try to find the source file with any supported extension
-        let supported_extensions = ["jpg", "jpeg", "png", "webp", "gif", "jxl", "avif"];
+        // Priority order: jxl (best quality) -> avif (modern) -> jpeg (fallback) -> others
+        let supported_extensions = ["jxl", "avif", "jpg", "jpeg", "webp", "png", "gif"];
         let full_path = supported_extensions
             .iter()
             .map(|ext| PathBuf::from(&images_dir).join(format!("{}.{}", path_without_ext, ext)))

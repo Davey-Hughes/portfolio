@@ -31,3 +31,6 @@ public/content/*
 # Image cache
 public/cache/
 cache/
+
+# MacOS Artifacts
+.DS_Store
