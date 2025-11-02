@@ -14,6 +14,7 @@ pub enum SectionValue {
 
 impl SectionValue {
     /// Get the display text for this value
+    #[must_use] 
     pub fn display(&self) -> &str {
         match self {
             SectionValue::Simple(s) => s,
@@ -22,6 +23,7 @@ impl SectionValue {
     }
 
     /// Get the URL if this is a Link variant
+    #[must_use] 
     pub fn url(&self) -> Option<&str> {
         match self {
             SectionValue::Simple(_) => None,
@@ -30,6 +32,7 @@ impl SectionValue {
     }
 
     /// Check if this is a simple string value
+    #[must_use] 
     pub fn is_simple(&self) -> bool {
         matches!(self, SectionValue::Simple(_))
     }
@@ -76,7 +79,8 @@ pub struct SiteConfig {
 }
 
 impl SiteConfig {
-    /// Get the page title, defaulting to site_name if not explicitly set
+    /// Get the page title, defaulting to `site_name` if not explicitly set
+    #[must_use] 
     pub fn title(&self) -> String {
         self.site_title
             .clone()
@@ -84,6 +88,7 @@ impl SiteConfig {
     }
 
     /// Get the copyright text, generating it if not explicitly set
+    #[must_use] 
     pub fn copyright(&self) -> String {
         self.site_copyright.clone().unwrap_or_else(|| {
             let current_year = chrono::Local::now().year();
@@ -132,6 +137,7 @@ pub fn load_config() -> SiteConfig {
 }
 
 #[cfg(not(feature = "ssr"))]
+#[must_use] 
 pub fn load_config() -> SiteConfig {
     SiteConfig::default()
 }
