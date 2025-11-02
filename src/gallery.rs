@@ -27,17 +27,32 @@ fn get_mime_type(extension: &str) -> &'static str {
 /// Get default image width and quality from environment variables
 /// Returns (width, quality) tuple with defaults of (3600, 100)
 fn get_default_image_params() -> (u32, u8) {
-    let width = std::env::var("DEFAULT_IMAGE_WIDTH")
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(3600);
+    // Use the first preset from ImageParams - this matches what prewarm_cache uses
+    // This ensures frontend requests match prewarmed cache files
+    #[cfg(feature = "ssr")]
+    {
+        use crate::image_params::ImageParams;
+        ImageParams::get_valid_presets()
+            .first()
+            .copied()
+            .unwrap_or((1200, 80))
+    }
 
-    let quality = std::env::var("DEFAULT_IMAGE_QUALITY")
-        .ok()
-        .and_then(|s| s.parse::<u8>().ok())
-        .unwrap_or(100);
+    #[cfg(not(feature = "ssr"))]
+    {
+        // For client-side, use environment variables or default to first preset
+        let width = std::env::var("DEFAULT_IMAGE_WIDTH")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(1200);
 
-    (width, quality)
+        let quality = std::env::var("DEFAULT_IMAGE_QUALITY")
+            .ok()
+            .and_then(|s| s.parse::<u8>().ok())
+            .unwrap_or(80);
+
+        (width, quality)
+    }
 }
 
 /// Helper function to discover all gallery directories in public/images/
