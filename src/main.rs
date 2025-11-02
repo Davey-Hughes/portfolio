@@ -28,8 +28,7 @@ async fn main() {
         use std::fs;
         use std::io::Write;
 
-        // Priority order: jxl (best quality) -> avif (modern) -> jpeg (fallback) -> others
-        let supported_extensions = ["jxl", "avif", "jpg", "jpeg", "webp", "png", "gif"];
+        let supported_extensions = ["jpg", "jpeg", "jxl", "avif", "webp", "png", "gif"];
 
         // Find the actual file with any supported extension
         let full_path = supported_extensions
