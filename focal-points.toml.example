@@ -1,0 +1,55 @@
+# Focal Point Configuration (Per-Photo)
+#
+# This file allows you to specify where the important part of a photo is
+# using a rule-of-thirds grid system. This ensures that when the photo is displayed
+# as a thumbnail in the mosaic layout, the main subject remains visible.
+#
+# HOW TO USE:
+# Create a .toml file with the same base name as your photo, next to the photo.
+#
+# For example, if you have:
+#   public/images/home/portrait.jpg
+#
+# Create:
+#   public/images/home/portrait.toml
+#
+# With the content:
+#   focal_point = "top-center"
+#
+# Rule of Thirds Grid:
+# The image is divided into 9 sections:
+#
+#   top-left     | top-center     | top-right
+#   -------------|----------------|-------------
+#   center-left  | center         | center-right
+#   -------------|----------------|-------------
+#   bottom-left  | bottom-center  | bottom-right
+#
+# Valid focal_point values:
+# - "top-left"       (20% horizontal, 20% vertical)
+# - "top-center"     (50% horizontal, 20% vertical)
+# - "top-right"      (80% horizontal, 20% vertical)
+# - "center-left"    (20% horizontal, 50% vertical)
+# - "center"         (50% horizontal, 50% vertical) - default if not specified
+# - "center-right"   (80% horizontal, 50% vertical)
+# - "bottom-left"    (20% horizontal, 80% vertical)
+# - "bottom-center"  (50% horizontal, 80% vertical)
+# - "bottom-right"   (80% horizontal, 80% vertical)
+#
+# EXAMPLES:
+#
+# For portrait.jpg with subject's face in upper portion:
+# Create portrait.toml with:
+focal_point = "top-center"
+
+# For landscape.jpg with interesting content on the left:
+# Create landscape.toml with:
+# focal_point = "center-left"
+
+# For sunset.jpg with main subject in bottom right:
+# Create sunset.toml with:
+# focal_point = "bottom-right"
+
+# For centered-photo.jpg with centered composition:
+# Create centered-photo.toml with:
+# focal_point = "center"
