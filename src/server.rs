@@ -80,7 +80,7 @@ fn generate_mosaic_layout_for_size(
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{generate_mosaic_with_images, MosaicConfig};
+    use crate::mosaic::{MosaicConfig, generate_mosaic_with_images};
 
     let num_images = photos.len();
     let image_aspects: Vec<(usize, f64)> = photos
@@ -191,9 +191,9 @@ pub async fn get_home_gallery_data() -> Result<GalleryData, ServerFnError> {
                     image_order.iter().map(|&idx| photos[idx].clone()).collect();
 
                 // Generate tablet layout (768px) using the SAME photo order as desktop
-                // Tablet needs more height since it's narrower (768px vs 1200px)
+                // Use proportional dimensions: 768/1200 = 0.64, so height = 600 * (1200/768) = 937.5
                 let (layout_tablet, _) =
-                    generate_mosaic_layout_for_size(&reordered_photos, 768.0, 800.0);
+                    generate_mosaic_layout_for_size(&reordered_photos, 768.0, 600.0);
 
                 let result = GalleryData {
                     photos: reordered_photos,
@@ -299,9 +299,9 @@ pub async fn get_gallery_data_by_name(gallery_name: String) -> Result<GalleryDat
                     image_order.iter().map(|&idx| photos[idx].clone()).collect();
 
                 // Generate tablet layout (768px) using the SAME photo order as desktop
-                // Tablet needs more height since it's narrower (768px vs 1200px)
+                // Use proportional dimensions: 768/1200 = 0.64, so height = 600 * (1200/768) = 937.5
                 let (layout_tablet, _) =
-                    generate_mosaic_layout_for_size(&reordered_photos, 768.0, 800.0);
+                    generate_mosaic_layout_for_size(&reordered_photos, 768.0, 600.0);
 
                 let result = GalleryData {
                     photos: reordered_photos,

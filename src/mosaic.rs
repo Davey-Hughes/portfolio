@@ -417,11 +417,11 @@ pub fn assign_images_to_layout(
 
             for (img_idx, (_, img_aspect)) in available_images.iter().enumerate() {
                 let img_orientation = categorize_orientation(*img_aspect);
-                
+
                 // Calculate base score from aspect ratio difference
                 let aspect_diff = (rect_aspect - img_aspect).abs();
                 let mut score = 1.0 / (1.0 + aspect_diff);
-                
+
                 // Apply VERY aggressive penalty for orientation mismatch
                 // Matching orientations get a 10x bonus, mismatches get 0.05x penalty
                 if rect_orientation == img_orientation {
@@ -511,7 +511,7 @@ pub fn generate_mosaic_with_images(
 ) -> (MosaicLayout, Vec<usize>) {
     // Store the container height from config
     let container_height = config.container_height;
-    
+
     // Generate the mosaic rectangles
     let rectangles = generate_mosaic_layout(num_images, config);
 
@@ -559,7 +559,7 @@ mod tests {
             max_aspect_ratio: 2.5,
         };
         let layout = generate_mosaic_layout(5, config);
-        
+
         // Should have at least 2 rectangles and attempt to get close to 5
         // The algorithm may not always achieve exactly 5 due to constraints
         assert!(layout.len() >= 2, "Should generate at least 2 rectangles");
@@ -591,9 +591,9 @@ mod tests {
 
         // Create some test images with different aspect ratios
         let images = vec![
-            (0, 1.5), // Landscape
+            (0, 1.5),  // Landscape
             (1, 0.75), // Portrait
-            (2, 1.0), // Square
+            (2, 1.0),  // Square
         ];
 
         let assignments = assign_images_to_layout(&layout, &images);

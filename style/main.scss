@@ -175,9 +175,32 @@ img {
   box-sizing: border-box;
   margin: 0;
   position: relative;
+  min-width: 0; // Allow grid to shrink below content size
 
   // Override grid-auto-flow - mosaic uses explicit placement
   grid-auto-flow: dense;
+
+  // Responsive gap that scales down on narrow viewports
+  // This uses !important to override inline styles from Rust
+  gap: 8px !important;
+
+  @media (max-width: 1400px) {
+    gap: 6px !important;
+  }
+
+  @media (max-width: 1200px) {
+    gap: 4px !important;
+  }
+
+  @media (max-width: 768px) {
+    gap: 2px !important;
+    padding: 1rem;
+  }
+
+  @media (max-width: 480px) {
+    gap: 1px !important;
+    padding: 0.5rem;
+  }
 
   .mosaic-cell {
     // Mosaic cells don't use the orientation classes
