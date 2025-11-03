@@ -6,12 +6,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -296,10 +296,7 @@ fn MobilePhotoItem(photo: PhotoInfo) -> impl IntoView {
     let photo_title = photo.title.clone();
 
     view! {
-        <a
-            href=format!("/gallery/{}/{}", photo_gallery, photo_slug)
-            class="photo-mobile-item"
-        >
+        <a href=format!("/gallery/{}/{}", photo_gallery, photo_slug) class="photo-mobile-item">
             <picture>
                 {photo_sources
                     .into_iter()
@@ -418,28 +415,38 @@ fn PhotoGrid(
                         .cells
                         .into_iter()
                         .zip(photos.into_iter())
-                        .map(|(cell, photo)| view! { <MosaicPhotoGridItem photo=photo cell=cell /> })
+                        .map(|(cell, photo)| {
+                            view! { <MosaicPhotoGridItem photo=photo cell=cell /> }
+                        })
                         .collect_view()}
                 </div>
 
                 // Tablet layout (hidden on desktop/mobile)
-                {mosaic_layout_tablet.map(|layout_tablet| {
-                    let aspect_ratio_tablet = layout_tablet.grid_cols as f64 / layout_tablet.grid_rows as f64;
-                    let grid_style_tablet = format!(
-                        "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); aspect-ratio: {}; gap: {}px;",
-                        layout_tablet.grid_cols, layout_tablet.grid_rows, aspect_ratio_tablet, gap
-                    );
-                    view! {
-                        <div class="photo-grid-mosaic photo-grid-mosaic-tablet" style=grid_style_tablet>
-                            {layout_tablet
-                                .cells
-                                .into_iter()
-                                .zip(photos_tablet.into_iter())
-                                .map(|(cell, photo)| view! { <MosaicPhotoGridItem photo=photo cell=cell /> })
-                                .collect_view()}
-                        </div>
-                    }
-                })}
+                {mosaic_layout_tablet
+                    .map(|layout_tablet| {
+                        let grid_style_tablet = format!(
+                            "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); height: {}px; gap: {}px;",
+                            layout_tablet.grid_cols,
+                            layout_tablet.grid_rows,
+                            layout_tablet.container_height,
+                            gap,
+                        );
+                        view! {
+                            <div
+                                class="photo-grid-mosaic photo-grid-mosaic-tablet"
+                                style=grid_style_tablet
+                            >
+                                {layout_tablet
+                                    .cells
+                                    .into_iter()
+                                    .zip(photos_tablet.into_iter())
+                                    .map(|(cell, photo)| {
+                                        view! { <MosaicPhotoGridItem photo=photo cell=cell /> }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        }
+                    })}
 
                 // Mobile fallback: single column (hidden on tablet/desktop)
                 <div class="photo-grid-mobile">
@@ -525,33 +532,45 @@ fn PhotoGridLoader() -> impl IntoView {
             view! { <div class="loading">"Loading photos..."</div> }
         }>
             {move || {
-                // Get the home gallery config
-                let gallery_config = home_config
-                    .get()
-                    .and_then(std::result::Result::ok)
-                    .flatten();
-
+                let gallery_config = home_config.get().and_then(std::result::Result::ok).flatten();
                 match gallery_data.get().and_then(std::result::Result::ok) {
                     Some(data) => {
                         let photos = data.photos;
                         let mosaic_layout = data.mosaic_layout;
                         let mosaic_layout_tablet = data.mosaic_layout_tablet;
-
                         match (gallery_config, mosaic_layout, mosaic_layout_tablet) {
                             (Some(cfg), Some(mosaic), Some(tablet)) => {
-                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                // Get the home gallery config
+
+                                view! {
+                                    <PhotoGrid
+                                        photos=photos
+                                        config=cfg
+                                        mosaic_layout=mosaic
+                                        mosaic_layout_tablet=tablet
+                                    />
+                                }
                                     .into_any()
                             }
                             (Some(cfg), Some(mosaic), None) => {
-                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }
+                                view! {
+                                    <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic />
+                                }
                                     .into_any()
                             }
                             (None, Some(mosaic), Some(tablet)) => {
-                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                view! {
+                                    <PhotoGrid
+                                        photos=photos
+                                        mosaic_layout=mosaic
+                                        mosaic_layout_tablet=tablet
+                                    />
+                                }
                                     .into_any()
                             }
                             (None, Some(mosaic), None) => {
-                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
+                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }
+                                    .into_any()
                             }
                             (Some(cfg), None, _) => {
                                 view! { <PhotoGrid photos=photos config=cfg /> }.into_any()
@@ -635,22 +654,38 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
                         let photos = data.photos;
                         let mosaic_layout = data.mosaic_layout;
                         let mosaic_layout_tablet = data.mosaic_layout_tablet;
-
                         match (gallery_config, mosaic_layout, mosaic_layout_tablet) {
                             (Some(cfg), Some(mosaic), Some(tablet)) => {
-                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+
+                                view! {
+                                    <PhotoGrid
+                                        photos=photos
+                                        config=cfg
+                                        mosaic_layout=mosaic
+                                        mosaic_layout_tablet=tablet
+                                    />
+                                }
                                     .into_any()
                             }
                             (Some(cfg), Some(mosaic), None) => {
-                                view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }
+                                view! {
+                                    <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic />
+                                }
                                     .into_any()
                             }
                             (None, Some(mosaic), Some(tablet)) => {
-                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
+                                view! {
+                                    <PhotoGrid
+                                        photos=photos
+                                        mosaic_layout=mosaic
+                                        mosaic_layout_tablet=tablet
+                                    />
+                                }
                                     .into_any()
                             }
                             (None, Some(mosaic), None) => {
-                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
+                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }
+                                    .into_any()
                             }
                             (Some(cfg), None, _) => {
                                 view! { <PhotoGrid photos=photos config=cfg /> }.into_any()
