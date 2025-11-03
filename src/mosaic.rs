@@ -262,15 +262,24 @@ fn try_split_rectangle_with_bias(
     rng: &mut impl Rng,
     tracker: Option<&OrientationTracker>,
 ) -> Option<(Rectangle, Rectangle, DivisionLine)> {
-    // Determine base preference from rectangle dimensions
-    let dimension_preference = rect.width > rect.height; // true = horizontal, false = vertical
+    // Add a general bias toward vertical splits (which create portrait/tall rectangles)
+    // Vertical splits create tall rectangles, which are less common but needed for portraits
+    let random_val: f64 = rng.gen();
+    let general_vertical_bias = 0.65; // 65% chance to prefer vertical split
 
-    // Check if we have orientation bias
+    // Determine base preference - favor vertical splits overall
+    let dimension_preference = if random_val < general_vertical_bias {
+        false // vertical split (creates tall rectangles)
+    } else {
+        rect.width > rect.height // horizontal split for very wide rectangles
+    };
+
+    // Check if we have orientation bias from tracker
     let prefer_horizontal = if let Some(tracker) = tracker {
         if let Some((bias_preference, strength)) = tracker.get_split_preference() {
             // Use random value to apply bias probabilistically
-            let random_val: f64 = rng.gen();
-            if random_val < strength {
+            let random_val_2: f64 = rng.gen();
+            if random_val_2 < strength {
                 bias_preference
             } else {
                 dimension_preference
@@ -319,12 +328,21 @@ fn try_horizontal_split(
     }
 
     // Try multiple random positions to find a valid split
-    // Bias toward center by using triangular distribution
+    // Bias AWAY from center to create more extreme aspect ratios
     for _ in 0..10 {
-        // Generate two random numbers and average them to bias toward center
-        let r1 = rng.gen_range(min_y..max_y);
-        let r2 = rng.gen_range(min_y..max_y);
-        let split_y = (r1 + r2) / 2.0;
+        // Pick position biased toward edges (creates one tall, one short rectangle)
+        let random_val = rng.gen::<f64>();
+        let split_y = if random_val < 0.5 {
+            // Bias toward top edge (creates tall bottom rectangle)
+            let bias = random_val * 2.0; // 0.0 to 1.0
+            let bias_squared = bias * bias; // Stronger bias toward edge
+            min_y + (max_y - min_y) * bias_squared * 0.4 // Split in top 40% of range
+        } else {
+            // Bias toward bottom edge (creates tall top rectangle)
+            let bias = (random_val - 0.5) * 2.0; // 0.0 to 1.0
+            let bias_squared = bias * bias;
+            max_y - (max_y - min_y) * bias_squared * 0.4 // Split in bottom 40% of range
+        };
 
         // Find where this horizontal line would intersect with existing vertical lines
         let (start_x, end_x) = find_line_extent_horizontal(rect, split_y, existing_lines);
@@ -376,12 +394,21 @@ fn try_vertical_split(
     }
 
     // Try multiple random positions to find a valid split
-    // Bias toward center by using triangular distribution
+    // Bias AWAY from center to create more extreme aspect ratios
     for _ in 0..10 {
-        // Generate two random numbers and average them to bias toward center
-        let r1 = rng.gen_range(min_x..max_x);
-        let r2 = rng.gen_range(min_x..max_x);
-        let split_x = (r1 + r2) / 2.0;
+        // Pick position biased toward edges (creates one wide, one narrow rectangle)
+        let random_val = rng.gen::<f64>();
+        let split_x = if random_val < 0.5 {
+            // Bias toward left edge (creates wide right rectangle)
+            let bias = random_val * 2.0; // 0.0 to 1.0
+            let bias_squared = bias * bias; // Stronger bias toward edge
+            min_x + (max_x - min_x) * bias_squared * 0.4 // Split in left 40% of range
+        } else {
+            // Bias toward right edge (creates wide left rectangle)
+            let bias = (random_val - 0.5) * 2.0; // 0.0 to 1.0
+            let bias_squared = bias * bias;
+            max_x - (max_x - min_x) * bias_squared * 0.4 // Split in right 40% of range
+        };
 
         // Find where this vertical line would intersect with existing horizontal lines
         let (start_y, end_y) = find_line_extent_vertical(rect, split_x, existing_lines);
@@ -540,54 +567,71 @@ pub fn assign_images_to_layout(
 
     let mut assignments: Vec<(Rectangle, usize)> = Vec::new();
 
-    // Greedily assign images to rectangles based on aspect ratio similarity
     // Process images in order of extremeness (least square first)
-    while !available_rects.is_empty() && !available_images.is_empty() {
-        // Find the best match
-        let mut best_match: Option<(usize, usize, f64)> = None; // (rect_idx, img_idx, score)
+    // For each image, find the best matching rectangle
+    for (original_img_idx, img_aspect) in available_images {
+        let img_orientation = categorize_orientation(img_aspect);
+
+        // Find the best rectangle for this specific image
+        let mut best_rect_match: Option<(usize, f64)> = None; // (rect_idx, score)
 
         for (rect_idx, (_rect_id, rect)) in available_rects.iter().enumerate() {
             let rect_aspect = rect.aspect_ratio();
             let rect_orientation = categorize_orientation(rect_aspect);
 
-            for (img_idx, (_, img_aspect)) in available_images.iter().enumerate() {
-                let img_orientation = categorize_orientation(*img_aspect);
+            // Calculate similarity score
+            let score = calculate_match_score(img_aspect, img_orientation, rect_aspect, rect_orientation);
 
-                // Calculate base score from aspect ratio difference
-                let aspect_diff = (rect_aspect - img_aspect).abs();
-                let mut score = 1.0 / (1.0 + aspect_diff);
-
-                // Apply VERY aggressive penalty for orientation mismatch
-                // Matching orientations get a 10x bonus, mismatches get 0.05x penalty
-                if rect_orientation == img_orientation {
-                    score *= 10.0; // Very strong bonus for matching orientation
-                } else if (rect_orientation == "square") || (img_orientation == "square") {
-                    score *= 0.8; // Slight penalty even for squares if not exact match
-                } else {
-                    score *= 0.05; // Extremely heavy penalty for portrait/landscape mismatch
+            if let Some((_, best_score)) = best_rect_match {
+                if score > best_score {
+                    best_rect_match = Some((rect_idx, score));
                 }
-
-                if let Some((_, _, best_score)) = best_match {
-                    if score > best_score {
-                        best_match = Some((rect_idx, img_idx, score));
-                    }
-                } else {
-                    best_match = Some((rect_idx, img_idx, score));
-                }
+            } else {
+                best_rect_match = Some((rect_idx, score));
             }
         }
 
-        // Assign the best match
-        if let Some((rect_idx, img_idx, _)) = best_match {
+        // Assign this image to its best rectangle
+        if let Some((rect_idx, _score)) = best_rect_match {
             let (_rect_id, rect) = available_rects.remove(rect_idx);
-            let (original_img_idx, _) = available_images.remove(img_idx);
             assignments.push((rect, original_img_idx));
-        } else {
-            break;
         }
     }
 
     assignments
+}
+
+/// Calculate how well an image matches a rectangle
+fn calculate_match_score(
+    img_aspect: f64,
+    img_orientation: &str,
+    rect_aspect: f64,
+    rect_orientation: &str,
+) -> f64 {
+    // Start with aspect ratio similarity
+    let aspect_diff = (rect_aspect - img_aspect).abs();
+    let mut score = 1.0 / (1.0 + aspect_diff);
+
+    // Apply orientation matching bonuses/penalties
+    if rect_orientation == img_orientation {
+        // Perfect orientation match - strong bonus
+        score *= 20.0;
+    } else if rect_orientation == "square" || img_orientation == "square" {
+        // One is square - moderate penalty
+        // Squares are flexible but not ideal
+        score *= 2.0;
+    } else {
+        // Portrait/landscape mismatch - very heavy penalty
+        // This should almost never happen unless there's no choice
+        score *= 0.01;
+    }
+
+    // Additional bonus for very close aspect ratio matches
+    if aspect_diff < 0.1 {
+        score *= 1.5; // Extra bonus for near-perfect aspect match
+    }
+
+    score
 }
 
 /// Convert mosaic rectangles to CSS Grid coordinates
@@ -811,5 +855,75 @@ mod tests {
         let mut assigned_images: Vec<usize> = assignments.iter().map(|(_, idx)| *idx).collect();
         assigned_images.sort();
         assert_eq!(assigned_images, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_orientation_matching_prevents_mismatches() {
+        // Create rectangles with clear orientations
+        let rectangles = vec![
+            Rectangle::new(0.0, 0.0, 100.0, 200.0), // Portrait (0.5)
+            Rectangle::new(0.0, 0.0, 200.0, 100.0), // Landscape (2.0)
+            Rectangle::new(0.0, 0.0, 150.0, 150.0), // Square (1.0)
+        ];
+
+        // Create images with matching orientations
+        let images = vec![
+            (0, 0.6),  // Portrait
+            (1, 1.8),  // Landscape
+            (2, 1.0),  // Square
+        ];
+
+        let assignments = assign_images_to_layout(&rectangles, &images);
+
+        // Verify all images are assigned
+        assert_eq!(assignments.len(), 3);
+
+        // Check that orientations match
+        for (rect, img_idx) in &assignments {
+            let rect_orientation = categorize_orientation(rect.aspect_ratio());
+            let img_aspect = images.iter().find(|(idx, _)| idx == img_idx).unwrap().1;
+            let img_orientation = categorize_orientation(img_aspect);
+
+            // Orientations should match or one should be square (which is flexible)
+            assert!(
+                rect_orientation == img_orientation
+                || rect_orientation == "square"
+                || img_orientation == "square",
+                "Mismatch: rect orientation {} (aspect {}) assigned to image orientation {} (aspect {})",
+                rect_orientation, rect.aspect_ratio(), img_orientation, img_aspect
+            );
+        }
+    }
+
+    #[test]
+    fn test_match_score_favors_orientation_match() {
+        // Portrait image
+        let portrait_img = 0.7;
+        let portrait_img_orient = categorize_orientation(portrait_img);
+
+        // Portrait rectangle (good match)
+        let portrait_rect = 0.75;
+        let portrait_rect_orient = categorize_orientation(portrait_rect);
+
+        // Landscape rectangle (bad match)
+        let landscape_rect = 1.8;
+        let landscape_rect_orient = categorize_orientation(landscape_rect);
+
+        let portrait_score = calculate_match_score(
+            portrait_img, portrait_img_orient,
+            portrait_rect, portrait_rect_orient
+        );
+
+        let landscape_score = calculate_match_score(
+            portrait_img, portrait_img_orient,
+            landscape_rect, landscape_rect_orient
+        );
+
+        // Portrait rectangle should score much higher for portrait image
+        assert!(
+            portrait_score > landscape_score * 10.0,
+            "Portrait match score {} should be much higher than landscape mismatch score {}",
+            portrait_score, landscape_score
+        );
     }
 }
