@@ -1,4 +1,4 @@
-use crate::types::{GalleryInfo, ImageSource, PhotoInfo};
+use crate::types::{GalleryInfo, ImageSource, PhotoFocalPointConfig, PhotoInfo};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -22,6 +22,29 @@ fn get_mime_type(extension: &str) -> &'static str {
         "avif" => "image/avif",
         _ => "application/octet-stream",
     }
+}
+
+/// Load focal point configuration for a specific photo
+/// Looks for photo-basename.toml next to the photo file
+/// Example: for "photo.jpg", looks for "photo.toml"
+fn load_photo_focal_point(photo_path: &Path) -> Option<crate::types::FocalPoint> {
+    // Get the file stem (filename without extension)
+    let stem = photo_path.file_stem()?.to_string_lossy();
+
+    // Check if there's a .toml file with the same base name
+    if let Some(parent) = photo_path.parent() {
+        let config_path = parent.join(format!("{}.toml", stem));
+
+        if config_path.exists() {
+            if let Ok(content) = fs::read_to_string(&config_path) {
+                if let Ok(config) = toml::from_str::<PhotoFocalPointConfig>(&content) {
+                    return Some(config.focal_point);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Get default image width and quality from environment variables
@@ -221,6 +244,9 @@ fn find_images_recursive_with_gallery(
             }
         });
 
+        // Load focal point from photo-specific TOML file
+        let focal_point = load_photo_focal_point(&primary_full_path);
+
         photos.push(PhotoInfo {
             url: compressed_url,
             original_url,
@@ -241,6 +267,7 @@ fn find_images_recursive_with_gallery(
             aperture,
             shutter_speed,
             iso,
+            focal_point,
         });
     }
 }
@@ -409,6 +436,9 @@ fn find_images_for_gallery_with_name(
             }
         });
 
+        // Load focal point from photo-specific TOML file
+        let focal_point = load_photo_focal_point(&primary_full_path);
+
         photos.push(PhotoInfo {
             url: compressed_url,
             original_url,
@@ -429,6 +459,7 @@ fn find_images_for_gallery_with_name(
             aperture,
             shutter_speed,
             iso,
+            focal_point,
         });
     }
 }

@@ -7,6 +7,57 @@ pub struct ImageSource {
     pub mime_type: String,
 }
 
+/// Focal point position using rule-of-thirds grid
+/// The grid divides the image into 9 sections:
+/// top-left, top-center, top-right,
+/// center-left, center, center-right,
+/// bottom-left, bottom-center, bottom-right
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub enum FocalPoint {
+    #[serde(rename = "top-left")]
+    TopLeft,
+    #[serde(rename = "top-center")]
+    TopCenter,
+    #[serde(rename = "top-right")]
+    TopRight,
+    #[serde(rename = "center-left")]
+    CenterLeft,
+    #[serde(rename = "center")]
+    Center,
+    #[serde(rename = "center-right")]
+    CenterRight,
+    #[serde(rename = "bottom-left")]
+    BottomLeft,
+    #[serde(rename = "bottom-center")]
+    BottomCenter,
+    #[serde(rename = "bottom-right")]
+    BottomRight,
+}
+
+impl FocalPoint {
+    /// Convert focal point to CSS object-position value
+    /// Using more extreme values to create stronger positioning toward focal areas
+    pub fn to_css_position(&self) -> &'static str {
+        match self {
+            FocalPoint::TopLeft => "20% 20%",
+            FocalPoint::TopCenter => "50% 20%",
+            FocalPoint::TopRight => "80% 20%",
+            FocalPoint::CenterLeft => "20% 50%",
+            FocalPoint::Center => "50% 50%",
+            FocalPoint::CenterRight => "80% 50%",
+            FocalPoint::BottomLeft => "20% 80%",
+            FocalPoint::BottomCenter => "50% 80%",
+            FocalPoint::BottomRight => "80% 80%",
+        }
+    }
+}
+
+/// Focal point configuration for a single photo, loaded from photo-name.toml
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PhotoFocalPointConfig {
+    pub focal_point: FocalPoint,
+}
+
 /// Represents metadata and information for a photo in the portfolio.
 ///
 /// # Examples
@@ -34,6 +85,7 @@ pub struct ImageSource {
 ///     aperture: Some("f/2.8".to_string()),
 ///     shutter_speed: Some("1/200 s".to_string()),
 ///     iso: Some("ISO 100".to_string()),
+///     focal_point: None,
 /// };
 ///
 /// assert_eq!(photo.title, "Sunset");
@@ -60,6 +112,7 @@ pub struct PhotoInfo {
     pub aperture: Option<String>,
     pub shutter_speed: Option<String>,
     pub iso: Option<String>,
+    pub focal_point: Option<FocalPoint>, // Optional focal point for thumbnail cropping
 }
 
 /// Represents information about a photo gallery.
@@ -199,6 +252,7 @@ mod tests {
             aperture: Some("f/2.8".to_string()),
             shutter_speed: Some("1/200 s".to_string()),
             iso: Some("ISO 100".to_string()),
+            focal_point: None,
         };
 
         let json = leptos::serde_json::to_string(&photo).unwrap();
@@ -232,6 +286,7 @@ mod tests {
             aperture: None,
             shutter_speed: None,
             iso: None,
+            focal_point: None,
         };
 
         let json = leptos::serde_json::to_string(&photo).unwrap();
@@ -312,6 +367,7 @@ mod tests {
             aperture: None,
             shutter_speed: None,
             iso: None,
+            focal_point: None,
         };
 
         let cloned = photo.clone();

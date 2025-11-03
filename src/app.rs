@@ -255,11 +255,18 @@ fn MosaicPhotoGridItem(photo: PhotoInfo, cell: crate::types::MosaicCell) -> impl
     let photo_url = photo.url.clone();
     let photo_sources = photo.sources.clone();
     let photo_title = photo.title.clone();
+    let focal_point = photo.focal_point.clone();
 
     let grid_style = format!(
         "grid-row: {} / {}; grid-column: {} / {};",
         cell.row_start, cell.row_end, cell.col_start, cell.col_end
     );
+
+    // Build image style with focal point if available
+    let img_style = focal_point
+        .as_ref()
+        .map(|fp| format!("object-position: {};", fp.to_css_position()))
+        .unwrap_or_default();
 
     view! {
         <a
@@ -275,7 +282,8 @@ fn MosaicPhotoGridItem(photo: PhotoInfo, cell: crate::types::MosaicCell) -> impl
                             .map(|source| {
                                 view! { <source srcset=source.url type=source.mime_type /> }
                             })
-                            .collect_view()} <img src=photo_url alt=photo_title.clone() />
+                            .collect_view()}
+                        <img src=photo_url alt=photo_title.clone() style=img_style />
                     </picture>
                 </div>
                 <div class="photo-hero-caption">
