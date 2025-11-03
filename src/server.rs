@@ -80,7 +80,7 @@ fn generate_mosaic_layout_for_size(
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{MosaicConfig, generate_mosaic_with_images};
+    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
 
     let num_images = photos.len();
     let image_aspects: Vec<(usize, f64)> = photos
@@ -99,12 +99,16 @@ fn generate_mosaic_layout_for_size(
     let photos_sqrt = (num_images as f64).sqrt();
     let container_height = base_height * photos_sqrt.max(2.0);
 
+    // Calculate orientation bias from the actual images
+    let orientation_bias = calculate_orientation_bias(&image_aspects);
+
     let mosaic_config = MosaicConfig {
         container_width,
         container_height,
         min_cell_dimension: 180.0,
         min_aspect_ratio: 0.4,
         max_aspect_ratio: 3.0,
+        orientation_bias: Some(orientation_bias),
     };
 
     generate_mosaic_with_images(num_images, &image_aspects, mosaic_config, 100)

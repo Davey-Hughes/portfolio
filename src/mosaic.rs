@@ -50,6 +50,80 @@ struct DivisionLine {
     is_horizontal: bool,
 }
 
+/// Orientation bias for mosaic generation
+#[derive(Debug, Clone, Default)]
+pub struct OrientationBias {
+    pub num_portrait: usize,  // Number of portrait images
+    pub num_landscape: usize, // Number of landscape images
+    pub num_square: usize,    // Number of square-ish images
+}
+
+/// Tracks how many rectangles of each orientation have been created
+#[derive(Debug, Clone)]
+struct OrientationTracker {
+    target_portrait: usize,
+    target_landscape: usize,
+    target_square: usize,
+    current_portrait: usize,
+    current_landscape: usize,
+    current_square: usize,
+}
+
+impl OrientationTracker {
+    fn new(bias: &OrientationBias) -> Self {
+        Self {
+            target_portrait: bias.num_portrait,
+            target_landscape: bias.num_landscape,
+            target_square: bias.num_square,
+            current_portrait: 0,
+            current_landscape: 0,
+            current_square: 0,
+        }
+    }
+
+    fn update_from_rectangles(&mut self, rectangles: &[&Rectangle]) {
+        for rect in rectangles {
+            let orientation = categorize_orientation(rect.aspect_ratio());
+            match orientation {
+                "portrait" => self.current_portrait += 1,
+                "landscape" => self.current_landscape += 1,
+                "square" => self.current_square += 1,
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns a preference for which orientation to create next
+    /// Returns None if no strong preference, or Some((prefer_horizontal, strength))
+    /// where strength is 0.0-1.0
+    fn get_split_preference(&self) -> Option<(bool, f64)> {
+        let portrait_deficit = self.target_portrait.saturating_sub(self.current_portrait);
+        let landscape_deficit = self.target_landscape.saturating_sub(self.current_landscape);
+        let square_deficit = self.target_square.saturating_sub(self.current_square);
+
+        let total_deficit = portrait_deficit + landscape_deficit + square_deficit;
+        if total_deficit == 0 {
+            return None;
+        }
+
+        // If we need more portrait images, prefer vertical splits
+        // If we need more landscape images, prefer horizontal splits
+        // Squares have no preference
+
+        if portrait_deficit > landscape_deficit && portrait_deficit > square_deficit {
+            // Prefer vertical splits to create tall rectangles
+            let strength = (portrait_deficit as f64) / (total_deficit as f64);
+            Some((false, strength * 0.7)) // false = prefer vertical split
+        } else if landscape_deficit > portrait_deficit && landscape_deficit > square_deficit {
+            // Prefer horizontal splits to create wide rectangles
+            let strength = (landscape_deficit as f64) / (total_deficit as f64);
+            Some((true, strength * 0.7)) // true = prefer horizontal split
+        } else {
+            None
+        }
+    }
+}
+
 /// Configuration for the mosaic layout generator
 #[derive(Debug, Clone)]
 pub struct MosaicConfig {
@@ -58,6 +132,7 @@ pub struct MosaicConfig {
     pub min_cell_dimension: f64, // Minimum width or height for a cell
     pub min_aspect_ratio: f64,   // e.g., 0.4 (very portrait)
     pub max_aspect_ratio: f64,   // e.g., 2.5 (very landscape)
+    pub orientation_bias: Option<OrientationBias>, // Bias toward creating certain orientations
 }
 
 impl Default for MosaicConfig {
@@ -68,6 +143,7 @@ impl Default for MosaicConfig {
             min_cell_dimension: 150.0,
             min_aspect_ratio: 0.4,
             max_aspect_ratio: 2.5,
+            orientation_bias: None,
         }
     }
 }
@@ -100,6 +176,13 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
     // Keep track of division lines
     let mut lines: Vec<DivisionLine> = Vec::new();
 
+    // Track orientation counts if bias is provided
+    let mut orientation_tracker = if let Some(ref bias) = config.orientation_bias {
+        Some(OrientationTracker::new(bias))
+    } else {
+        None
+    };
+
     // We need n-1 splits to get n rectangles
     let num_splits = num_images - 1;
 
@@ -113,11 +196,21 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
         let rect_to_split = rectangles[rect_index].clone();
 
         // Try to split this rectangle
-        if let Some((rect1, rect2, new_line)) =
-            try_split_rectangle(&rect_to_split, &lines, &config, &mut rng)
-        {
+        if let Some((rect1, rect2, new_line)) = try_split_rectangle_with_bias(
+            &rect_to_split,
+            &lines,
+            &config,
+            &mut rng,
+            orientation_tracker.as_ref(),
+        ) {
             // Remove the old rectangle and add the two new ones
             rectangles.remove(rect_index);
+
+            // Update orientation tracker
+            if let Some(ref mut tracker) = orientation_tracker {
+                tracker.update_from_rectangles(&[&rect1, &rect2]);
+            }
+
             rectangles.push(rect1);
             rectangles.push(rect2);
             lines.push(new_line);
@@ -129,10 +222,20 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
                 if i == rect_index {
                     continue;
                 }
-                if let Some((rect1, rect2, new_line)) =
-                    try_split_rectangle(rect, &lines, &config, &mut rng)
-                {
+                if let Some((rect1, rect2, new_line)) = try_split_rectangle_with_bias(
+                    rect,
+                    &lines,
+                    &config,
+                    &mut rng,
+                    orientation_tracker.as_ref(),
+                ) {
                     rectangles.remove(i);
+
+                    // Update orientation tracker
+                    if let Some(ref mut tracker) = orientation_tracker {
+                        tracker.update_from_rectangles(&[&rect1, &rect2]);
+                    }
+
                     rectangles.push(rect1);
                     rectangles.push(rect2);
                     lines.push(new_line);
@@ -151,16 +254,33 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
     rectangles
 }
 
-/// Try to split a rectangle into two rectangles
-fn try_split_rectangle(
+/// Try to split a rectangle into two rectangles with orientation bias
+fn try_split_rectangle_with_bias(
     rect: &Rectangle,
     existing_lines: &[DivisionLine],
     config: &MosaicConfig,
     rng: &mut impl Rng,
+    tracker: Option<&OrientationTracker>,
 ) -> Option<(Rectangle, Rectangle, DivisionLine)> {
-    // Determine if we should split horizontally or vertically
-    // Prefer splitting the longer dimension
-    let prefer_horizontal = rect.width > rect.height;
+    // Determine base preference from rectangle dimensions
+    let dimension_preference = rect.width > rect.height; // true = horizontal, false = vertical
+
+    // Check if we have orientation bias
+    let prefer_horizontal = if let Some(tracker) = tracker {
+        if let Some((bias_preference, strength)) = tracker.get_split_preference() {
+            // Use random value to apply bias probabilistically
+            let random_val: f64 = rng.gen();
+            if random_val < strength {
+                bias_preference
+            } else {
+                dimension_preference
+            }
+        } else {
+            dimension_preference
+        }
+    } else {
+        dimension_preference
+    };
 
     // Try preferred direction first, then try the other direction
     for try_horizontal in [prefer_horizontal, !prefer_horizontal] {
@@ -394,6 +514,12 @@ fn categorize_orientation(aspect_ratio: f64) -> &'static str {
     }
 }
 
+/// Calculate how far an aspect ratio is from being square (1.0)
+/// Higher values mean more extreme (less square)
+fn aspect_extremeness(aspect: f64) -> f64 {
+    (aspect.ln()).abs() // log scale distance from 1.0
+}
+
 /// Assign images to mosaic rectangles based on aspect ratio matching
 pub fn assign_images_to_layout(
     rectangles: &[Rectangle],
@@ -402,11 +528,20 @@ pub fn assign_images_to_layout(
     // Create a copy of rectangles and images so we can match them
     let mut available_rects: Vec<(usize, Rectangle)> =
         rectangles.iter().cloned().enumerate().collect();
+
+    // Sort images by extremeness (least square first)
+    // This prioritizes portrait and landscape images over square ones
     let mut available_images: Vec<(usize, f64)> = image_aspects.to_vec();
+    available_images.sort_by(|a, b| {
+        let extremeness_a = aspect_extremeness(a.1);
+        let extremeness_b = aspect_extremeness(b.1);
+        extremeness_b.partial_cmp(&extremeness_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut assignments: Vec<(Rectangle, usize)> = Vec::new();
 
     // Greedily assign images to rectangles based on aspect ratio similarity
+    // Process images in order of extremeness (least square first)
     while !available_rects.is_empty() && !available_images.is_empty() {
         // Find the best match
         let mut best_match: Option<(usize, usize, f64)> = None; // (rect_idx, img_idx, score)
@@ -527,6 +662,29 @@ pub fn generate_mosaic_with_images(
     (layout, image_order)
 }
 
+/// Calculate orientation bias from image aspect ratios
+pub fn calculate_orientation_bias(image_aspects: &[(usize, f64)]) -> OrientationBias {
+    let mut num_portrait = 0;
+    let mut num_landscape = 0;
+    let mut num_square = 0;
+
+    for (_, aspect) in image_aspects {
+        let orientation = categorize_orientation(*aspect);
+        match orientation {
+            "portrait" => num_portrait += 1,
+            "landscape" => num_landscape += 1,
+            "square" => num_square += 1,
+            _ => {}
+        }
+    }
+
+    OrientationBias {
+        num_portrait,
+        num_landscape,
+        num_square,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +715,7 @@ mod tests {
             min_cell_dimension: 80.0, // Smaller minimum to allow more splits
             min_aspect_ratio: 0.5,
             max_aspect_ratio: 2.5,
+            orientation_bias: None,
         };
         let layout = generate_mosaic_layout(5, config);
 
@@ -605,5 +764,52 @@ mod tests {
         let mut assigned_images: Vec<usize> = assignments.iter().map(|(_, idx)| *idx).collect();
         assigned_images.sort();
         assert_eq!(assigned_images, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_aspect_extremeness() {
+        // Square should have lowest extremeness (close to 0)
+        assert!(aspect_extremeness(1.0) < 0.01);
+
+        // More extreme aspect ratios should have higher values
+        let square_extremeness = aspect_extremeness(1.0);
+        let slightly_wide = aspect_extremeness(1.3);
+        let wide = aspect_extremeness(2.0);
+        let very_wide = aspect_extremeness(3.0);
+        let tall = aspect_extremeness(0.5);
+        let very_tall = aspect_extremeness(0.33);
+
+        assert!(slightly_wide > square_extremeness);
+        assert!(wide > slightly_wide);
+        assert!(very_wide > wide);
+        assert!(tall > square_extremeness);
+        assert!(very_tall > tall);
+
+        // Portrait and landscape with same distance from 1.0 should have similar extremeness
+        assert!((aspect_extremeness(2.0) - aspect_extremeness(0.5)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_image_assignment_prioritizes_extreme_aspects() {
+        let config = MosaicConfig::default();
+        let layout = generate_mosaic_layout(4, config);
+
+        // Create images: one very extreme, one somewhat extreme, two nearly square
+        let images = vec![
+            (0, 0.4),  // Very tall portrait (most extreme)
+            (1, 1.05), // Nearly square
+            (2, 1.8),  // Landscape (somewhat extreme)
+            (3, 0.95), // Nearly square
+        ];
+
+        let assignments = assign_images_to_layout(&layout, &images);
+
+        // All images should be assigned
+        assert_eq!(assignments.len(), 4);
+
+        // Verify all images are present
+        let mut assigned_images: Vec<usize> = assignments.iter().map(|(_, idx)| *idx).collect();
+        assigned_images.sort();
+        assert_eq!(assigned_images, vec![0, 1, 2, 3]);
     }
 }
