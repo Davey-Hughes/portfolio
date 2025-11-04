@@ -413,13 +413,12 @@ async fn main() {
         }
     });
 
-    // Clean up orphaned cache files on startup
-    cleanup_cache(&images_dir, &cache_dir);
-
-    // Pre-generate cache for default size only (async, non-blocking)
+    // Clean up orphaned cache files and pre-generate cache in background (async, non-blocking)
     let images_dir_clone = images_dir.clone();
     let cache_dir_clone = cache_dir.clone();
     tokio::spawn(async move {
+        // Run cleanup first, then prewarming
+        cleanup_cache(&images_dir_clone, &cache_dir_clone);
         prewarm_cache(&images_dir_clone, &cache_dir_clone);
     });
 
