@@ -556,6 +556,39 @@ fn HeroSection() -> impl IntoView {
     }
 }
 
+// Helper component to render PhotoGrid with optional config and layouts
+#[component]
+fn PhotoGridRenderer(
+    photos: Vec<PhotoInfo>,
+    config: Option<crate::types::GalleryConfig>,
+    mosaic_layout: Option<crate::types::MosaicLayout>,
+    mosaic_layout_tablet: Option<crate::types::MosaicLayout>,
+) -> impl IntoView {
+    match (config, mosaic_layout, mosaic_layout_tablet) {
+        (Some(cfg), Some(mosaic), Some(tablet)) => view! {
+            <PhotoGrid
+                photos=photos
+                config=cfg
+                mosaic_layout=mosaic
+                mosaic_layout_tablet=tablet
+            />
+        }
+        .into_any(),
+        (Some(cfg), Some(mosaic), None) => {
+            view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }.into_any()
+        }
+        (None, Some(mosaic), Some(tablet)) => view! {
+            <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet />
+        }
+        .into_any(),
+        (None, Some(mosaic), None) => {
+            view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
+        }
+        (Some(cfg), None, _) => view! { <PhotoGrid photos=photos config=cfg /> }.into_any(),
+        (None, None, _) => view! { <PhotoGrid photos=photos /> }.into_any(),
+    }
+}
+
 // Helper component for photo grid loading
 #[component]
 fn PhotoGridLoader() -> impl IntoView {
@@ -570,48 +603,15 @@ fn PhotoGridLoader() -> impl IntoView {
                 let gallery_config = home_config.get().and_then(std::result::Result::ok).flatten();
                 match gallery_data.get().and_then(std::result::Result::ok) {
                     Some(data) => {
-                        let photos = data.photos;
-                        let mosaic_layout = data.mosaic_layout;
-                        let mosaic_layout_tablet = data.mosaic_layout_tablet;
-                        match (gallery_config, mosaic_layout, mosaic_layout_tablet) {
-                            (Some(cfg), Some(mosaic), Some(tablet)) => {
-                                // Get the home gallery config
-
-                                view! {
-                                    <PhotoGrid
-                                        photos=photos
-                                        config=cfg
-                                        mosaic_layout=mosaic
-                                        mosaic_layout_tablet=tablet
-                                    />
-                                }
-                                    .into_any()
-                            }
-                            (Some(cfg), Some(mosaic), None) => {
-                                view! {
-                                    <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic />
-                                }
-                                    .into_any()
-                            }
-                            (None, Some(mosaic), Some(tablet)) => {
-                                view! {
-                                    <PhotoGrid
-                                        photos=photos
-                                        mosaic_layout=mosaic
-                                        mosaic_layout_tablet=tablet
-                                    />
-                                }
-                                    .into_any()
-                            }
-                            (None, Some(mosaic), None) => {
-                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }
-                                    .into_any()
-                            }
-                            (Some(cfg), None, _) => {
-                                view! { <PhotoGrid photos=photos config=cfg /> }.into_any()
-                            }
-                            (None, None, _) => view! { <PhotoGrid photos=photos /> }.into_any(),
+                        view! {
+                            <PhotoGridRenderer
+                                photos=data.photos
+                                config=gallery_config
+                                mosaic_layout=data.mosaic_layout
+                                mosaic_layout_tablet=data.mosaic_layout_tablet
+                            />
                         }
+                        .into_any()
                     }
                     None => view! { <div class="error">"Failed to load photos"</div> }.into_any(),
                 }
@@ -686,47 +686,15 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
                     });
                 match gallery_data.get().and_then(std::result::Result::ok) {
                     Some(data) if !data.photos.is_empty() => {
-                        let photos = data.photos;
-                        let mosaic_layout = data.mosaic_layout;
-                        let mosaic_layout_tablet = data.mosaic_layout_tablet;
-                        match (gallery_config, mosaic_layout, mosaic_layout_tablet) {
-                            (Some(cfg), Some(mosaic), Some(tablet)) => {
-
-                                view! {
-                                    <PhotoGrid
-                                        photos=photos
-                                        config=cfg
-                                        mosaic_layout=mosaic
-                                        mosaic_layout_tablet=tablet
-                                    />
-                                }
-                                    .into_any()
-                            }
-                            (Some(cfg), Some(mosaic), None) => {
-                                view! {
-                                    <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic />
-                                }
-                                    .into_any()
-                            }
-                            (None, Some(mosaic), Some(tablet)) => {
-                                view! {
-                                    <PhotoGrid
-                                        photos=photos
-                                        mosaic_layout=mosaic
-                                        mosaic_layout_tablet=tablet
-                                    />
-                                }
-                                    .into_any()
-                            }
-                            (None, Some(mosaic), None) => {
-                                view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }
-                                    .into_any()
-                            }
-                            (Some(cfg), None, _) => {
-                                view! { <PhotoGrid photos=photos config=cfg /> }.into_any()
-                            }
-                            (None, None, _) => view! { <PhotoGrid photos=photos /> }.into_any(),
+                        view! {
+                            <PhotoGridRenderer
+                                photos=data.photos
+                                config=gallery_config
+                                mosaic_layout=data.mosaic_layout
+                                mosaic_layout_tablet=data.mosaic_layout_tablet
+                            />
                         }
+                        .into_any()
                     }
                     Some(_) => {
                         view! {
