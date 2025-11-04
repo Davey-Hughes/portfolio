@@ -50,29 +50,33 @@ fn load_photo_focal_point(photo_path: &Path) -> Option<crate::types::FocalPoint>
 /// Get default image width and quality from environment variables
 /// Returns (width, quality) tuple with defaults of (3600, 100)
 fn get_default_image_params() -> (u32, u8) {
-    // Use the first preset from ImageParams - this matches what prewarm_cache uses
-    // This ensures frontend requests match prewarmed cache files
+    // Use 3600px at 100 quality for mobile photo detail pages
+    // This provides high quality while still being significantly smaller than originals
     #[cfg(feature = "ssr")]
     {
         use crate::image_params::ImageParams;
-        ImageParams::get_valid_presets()
-            .first()
+        let presets = ImageParams::get_valid_presets();
+        // Find the 3600px preset, or fall back to the largest preset, or default
+        presets
+            .iter()
+            .find(|(w, _)| *w == 3600)
             .copied()
-            .unwrap_or((1200, 80))
+            .or_else(|| presets.last().copied())
+            .unwrap_or((3600, 100))
     }
 
     #[cfg(not(feature = "ssr"))]
     {
-        // For client-side, use environment variables or default to first preset
+        // For client-side, use environment variables or default to 3600/100
         let width = std::env::var("DEFAULT_IMAGE_WIDTH")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(1200);
+            .unwrap_or(3600);
 
         let quality = std::env::var("DEFAULT_IMAGE_QUALITY")
             .ok()
             .and_then(|s| s.parse::<u8>().ok())
-            .unwrap_or(80);
+            .unwrap_or(100);
 
         (width, quality)
     }
@@ -823,8 +827,11 @@ mod tests {
         // Ensure env vars are not set
         std::env::remove_var("DEFAULT_IMAGE_WIDTH");
         std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+        // Also ensure IMAGE_PRESETS doesn't override
+        std::env::remove_var("IMAGE_PRESETS");
 
         let (width, quality) = get_default_image_params();
+        // Should use 3600px at 100 quality (the third preset in default list)
         assert_eq!(width, 3600);
         assert_eq!(quality, 100);
     }
@@ -839,8 +846,18 @@ mod tests {
 
         std::env::remove_var("DEFAULT_IMAGE_WIDTH");
 
-        assert_eq!(width, 2400);
-        assert_eq!(quality, 100);
+        // On SSR builds, env vars don't affect get_default_image_params (it uses presets)
+        // On client builds, env vars override defaults
+        #[cfg(feature = "ssr")]
+        {
+            assert_eq!(width, 3600);
+            assert_eq!(quality, 100);
+        }
+        #[cfg(not(feature = "ssr"))]
+        {
+            assert_eq!(width, 2400);
+            assert_eq!(quality, 100);
+        }
     }
 
     #[test]
@@ -853,8 +870,18 @@ mod tests {
 
         std::env::remove_var("DEFAULT_IMAGE_QUALITY");
 
-        assert_eq!(width, 3600);
-        assert_eq!(quality, 80);
+        // On SSR builds, env vars don't affect get_default_image_params (it uses presets)
+        // On client builds, env vars override defaults
+        #[cfg(feature = "ssr")]
+        {
+            assert_eq!(width, 3600);
+            assert_eq!(quality, 100);
+        }
+        #[cfg(not(feature = "ssr"))]
+        {
+            assert_eq!(width, 3600);
+            assert_eq!(quality, 80);
+        }
     }
 
     #[test]
@@ -868,8 +895,18 @@ mod tests {
         std::env::remove_var("DEFAULT_IMAGE_WIDTH");
         std::env::remove_var("DEFAULT_IMAGE_QUALITY");
 
-        assert_eq!(width, 1200);
-        assert_eq!(quality, 85);
+        // On SSR builds, env vars don't affect get_default_image_params (it uses presets)
+        // On client builds, env vars override defaults
+        #[cfg(feature = "ssr")]
+        {
+            assert_eq!(width, 3600);
+            assert_eq!(quality, 100);
+        }
+        #[cfg(not(feature = "ssr"))]
+        {
+            assert_eq!(width, 1200);
+            assert_eq!(quality, 85);
+        }
     }
 
     #[test]
