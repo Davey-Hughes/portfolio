@@ -10,6 +10,9 @@ pub mod gallery;
 #[cfg(feature = "ssr")]
 pub mod image_params;
 
+#[cfg(feature = "ssr")]
+pub mod image_cache;
+
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
