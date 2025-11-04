@@ -2,14 +2,14 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        extract::{Path, Query},
-        http::{header, StatusCode},
-        response::{IntoResponse, Response},
         Router,
+        extract::{Path, Query},
+        http::{StatusCode, header},
+        response::{IntoResponse, Response},
     };
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
     use portfolio::image_cache::{cleanup_cache, prewarm_cache, process_and_cache_image};
     use portfolio::image_params::ImageParams;
@@ -121,6 +121,9 @@ async fn main() {
         // Run cleanup first, then prewarming
         cleanup_cache(&images_dir_clone, &cache_dir_clone);
         prewarm_cache(&images_dir_clone, &cache_dir_clone);
+
+        // Pre-warm the all-photos cache for faster photo detail page loads
+        portfolio::server::prewarm_all_photos_cache();
     });
 
     let app = Router::new()
@@ -150,15 +153,6 @@ async fn main() {
                     header::HeaderValue::from_static("public, max-age=31536000, immutable"),
                 ))
                 .service(ServeDir::new(&content_dir)),
-        )
-        .nest_service(
-            "/pkg",
-            ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
-                ))
-                .service(ServeDir::new("target/site/pkg")),
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options)
