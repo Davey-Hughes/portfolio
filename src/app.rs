@@ -6,12 +6,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{A, Route, Router, Routes},
+    components::{Route, Router, Routes, A},
     hooks::{use_location, use_params},
     params::Params,
+    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -23,6 +23,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
                 <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
+                <link rel="preload" r#as="style" href="/pkg/portfolio.css" />
                 <AutoReload options=options.clone() />
                 <HydrationScripts options />
                 <MetaTags />
@@ -249,7 +250,11 @@ fn orientation_class_from_dimensions(width: Option<u32>, height: Option<u32>) ->
 
 // Helper component for mosaic photo grid item
 #[component]
-fn MosaicPhotoGridItem(photo: PhotoInfo, cell: crate::types::MosaicCell) -> impl IntoView {
+fn MosaicPhotoGridItem(
+    photo: PhotoInfo,
+    cell: crate::types::MosaicCell,
+    #[prop(optional)] index: Option<usize>,
+) -> impl IntoView {
     let photo_slug = photo.slug.clone();
     let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
@@ -268,6 +273,9 @@ fn MosaicPhotoGridItem(photo: PhotoInfo, cell: crate::types::MosaicCell) -> impl
         .map(|fp| format!("object-position: {};", fp.to_css_position()))
         .unwrap_or_default();
 
+    // First 3 images get high priority
+    let is_priority = index.map_or(false, |idx| idx < 3);
+
     view! {
         <a
             href=format!("/gallery/{}/{}", photo_gallery, photo_slug)
@@ -283,7 +291,16 @@ fn MosaicPhotoGridItem(photo: PhotoInfo, cell: crate::types::MosaicCell) -> impl
                                 view! { <source srcset=source.url type=source.mime_type /> }
                             })
                             .collect_view()}
-                        <img src=photo_url alt=photo_title.clone() style=img_style />
+                        <img
+                            src=photo_url
+                            alt=photo_title.clone()
+                            style=img_style
+                            width=photo.width.unwrap_or(1200)
+                            height=photo.height.unwrap_or(800)
+                            loading=move || if is_priority { "eager" } else { "lazy" }
+                            fetchpriority=move || if is_priority { "high" } else { "auto" }
+                            decoding="async"
+                        />
                     </picture>
                 </div>
                 <div class="photo-hero-caption">
@@ -305,7 +322,14 @@ fn MobilePhotoItem(photo: PhotoInfo) -> impl IntoView {
     view! {
         <a href=format!("/gallery/{}/{}", photo_gallery, photo_slug) class="photo-mobile-item">
             // On mobile, use only the compressed WebP image (no sources needed)
-            <img src=photo_url alt=photo_title />
+            <img
+                src=photo_url
+                alt=photo_title
+                width=photo.width.unwrap_or(1200)
+                height=photo.height.unwrap_or(800)
+                loading="lazy"
+                decoding="async"
+            />
         </a>
     }
 }
@@ -364,7 +388,15 @@ fn PhotoGridItem(photo: PhotoInfo, #[prop(optional)] index: Option<usize>) -> im
                             .map(|source| {
                                 view! { <source srcset=source.url type=source.mime_type /> }
                             })
-                            .collect_view()} <img src=photo_url alt=photo_title.clone() />
+                            .collect_view()}
+                        <img
+                            src=photo_url
+                            alt=photo_title.clone()
+                            width=photo.width.unwrap_or(1200)
+                            height=photo.height.unwrap_or(800)
+                            loading="lazy"
+                            decoding="async"
+                        />
                     </picture>
                 </div>
                 <div class="photo-hero-caption">
@@ -416,8 +448,9 @@ fn PhotoGrid(
                         .cells
                         .into_iter()
                         .zip(photos.into_iter())
-                        .map(|(cell, photo)| {
-                            view! { <MosaicPhotoGridItem photo=photo cell=cell /> }
+                        .enumerate()
+                        .map(|(idx, (cell, photo))| {
+                            view! { <MosaicPhotoGridItem photo=photo cell=cell index=idx /> }
                         })
                         .collect_view()}
                 </div>
@@ -441,8 +474,9 @@ fn PhotoGrid(
                                     .cells
                                     .into_iter()
                                     .zip(photos_tablet.into_iter())
-                                    .map(|(cell, photo)| {
-                                        view! { <MosaicPhotoGridItem photo=photo cell=cell /> }
+                                    .enumerate()
+                                    .map(|(idx, (cell, photo))| {
+                                        view! { <MosaicPhotoGridItem photo=photo cell=cell index=idx /> }
                                     })
                                     .collect_view()}
                             </div>
@@ -1216,7 +1250,8 @@ fn PhotoDetailPage() -> impl IntoView {
                     let Some((idx, photo)) = photo_list
                         .iter()
                         .enumerate()
-                        .find(|(_, p)| p.slug == slug_val) else {
+                        .find(|(_, p)| p.slug == slug_val)
+                        .map(|(i, p)| (i, p.clone())) else {
                         return // Find the photo and its index
                         view! { <PhotoNotFound /> }
                             .into_any();
@@ -1282,6 +1317,9 @@ fn PhotoDetailPage() -> impl IntoView {
                                                 }
                                             }
                                             alt=photo_title.clone()
+                                            width=photo.width.unwrap_or(3600)
+                                            height=photo.height.unwrap_or(2400)
+                                            decoding="async"
                                         />
                                     </picture>
                                 </div>
@@ -1440,6 +1478,8 @@ fn PhotoDetailPage() -> impl IntoView {
                                                         }
                                                     }
                                                     alt=photo_title_fs.clone()
+                                                    width=photo.width.unwrap_or(3600)
+                                                    height=photo.height.unwrap_or(2400)
                                                     class="fullscreen-image"
                                                     style=transform_style
                                                     on:click=on_image_click
@@ -1498,7 +1538,14 @@ fn AboutContent() -> impl IntoView {
                                     .map(|url| {
                                         view! {
                                             <div class="about-image">
-                                                <img src=url alt="Photographer" />
+                                                <img
+                                                    src=url
+                                                    alt="Photographer"
+                                                    width="800"
+                                                    height="800"
+                                                    loading="lazy"
+                                                    decoding="async"
+                                                />
                                             </div>
                                         }
                                     })} <div class="about-content">
