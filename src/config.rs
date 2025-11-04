@@ -1,6 +1,27 @@
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[cfg(feature = "ssr")]
+use chrono::Datelike;
+
+/// Get the current year for copyright notice
+/// Uses JavaScript Date API on client, chrono on server
+fn get_current_year() -> i32 {
+    #[cfg(feature = "hydrate")]
+    {
+        js_sys::Date::new_0().get_full_year() as i32
+    }
+
+    #[cfg(feature = "ssr")]
+    {
+        chrono::Local::now().year()
+    }
+
+    #[cfg(not(any(feature = "hydrate", feature = "ssr")))]
+    {
+        2025 // Fallback for tests
+    }
+}
 
 /// A section value can be either a simple string or a structured link with display text and URL
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -14,7 +35,7 @@ pub enum SectionValue {
 
 impl SectionValue {
     /// Get the display text for this value
-    #[must_use] 
+    #[must_use]
     pub fn display(&self) -> &str {
         match self {
             SectionValue::Simple(s) => s,
@@ -23,7 +44,7 @@ impl SectionValue {
     }
 
     /// Get the URL if this is a Link variant
-    #[must_use] 
+    #[must_use]
     pub fn url(&self) -> Option<&str> {
         match self {
             SectionValue::Simple(_) => None,
@@ -32,7 +53,7 @@ impl SectionValue {
     }
 
     /// Check if this is a simple string value
-    #[must_use] 
+    #[must_use]
     pub fn is_simple(&self) -> bool {
         matches!(self, SectionValue::Simple(_))
     }
@@ -80,7 +101,7 @@ pub struct SiteConfig {
 
 impl SiteConfig {
     /// Get the page title, defaulting to `site_name` if not explicitly set
-    #[must_use] 
+    #[must_use]
     pub fn title(&self) -> String {
         self.site_title
             .clone()
@@ -88,10 +109,10 @@ impl SiteConfig {
     }
 
     /// Get the copyright text, generating it if not explicitly set
-    #[must_use] 
+    #[must_use]
     pub fn copyright(&self) -> String {
         self.site_copyright.clone().unwrap_or_else(|| {
-            let current_year = chrono::Local::now().year();
+            let current_year = get_current_year();
             format!(
                 "© {} {}. All rights reserved.",
                 current_year, self.site_name
@@ -137,7 +158,7 @@ pub fn load_config() -> SiteConfig {
 }
 
 #[cfg(not(feature = "ssr"))]
-#[must_use] 
+#[must_use]
 pub fn load_config() -> SiteConfig {
     SiteConfig::default()
 }
@@ -161,7 +182,7 @@ mod tests {
     #[test]
     fn test_site_config_default_copyright_has_current_year() {
         let config = SiteConfig::default();
-        let current_year = chrono::Local::now().year();
+        let current_year = get_current_year();
 
         assert!(config.copyright().contains(&current_year.to_string()));
     }
@@ -408,7 +429,7 @@ test_field = "test value"
         assert!(copyright.contains("©"));
         assert!(copyright.contains("All rights reserved"));
 
-        let current_year = chrono::Local::now().year();
+        let current_year = get_current_year();
         assert!(copyright.contains(&current_year.to_string()));
 
         // Cleanup
