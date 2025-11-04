@@ -6,12 +6,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -213,10 +213,10 @@ fn Footer() -> impl IntoView {
                     let copyright = config
                         .get()
                         .and_then(std::result::Result::ok)
-                        .map(|cfg| cfg.copyright())
-                        .unwrap_or_else(|| {
-                            "© 2025 Your Photography. All rights reserved.".to_string()
-                        });
+                        .map_or_else(
+                            || { "© 2025 Your Photography. All rights reserved.".to_string() },
+                            |cfg| cfg.copyright(),
+                        );
                     view! { <p>{copyright}</p> }
                 }}
             </Suspense>
@@ -274,7 +274,7 @@ fn MosaicPhotoGridItem(
         .unwrap_or_default();
 
     // First 3 images get high priority
-    let is_priority = index.map_or(false, |idx| idx < 3);
+    let is_priority = index.is_none_or(|idx| idx < 3);
 
     view! {
         <a
@@ -476,7 +476,9 @@ fn PhotoGrid(
                                     .zip(photos_tablet.into_iter())
                                     .enumerate()
                                     .map(|(idx, (cell, photo))| {
-                                        view! { <MosaicPhotoGridItem photo=photo cell=cell index=idx /> }
+                                        view! {
+                                            <MosaicPhotoGridItem photo=photo cell=cell index=idx />
+                                        }
                                     })
                                     .collect_view()}
                             </div>
@@ -539,11 +541,10 @@ fn HeroSection() -> impl IntoView {
                         let (name, tagline) = config
                             .get()
                             .and_then(std::result::Result::ok)
-                            .map(|cfg| (cfg.site_name.to_uppercase(), cfg.site_tagline))
-                            .unwrap_or_else(|| (
-                                "YOUR NAME".to_string(),
-                                "Photography".to_string(),
-                            ));
+                            .map_or_else(
+                                || ("YOUR NAME".to_string(), "Photography".to_string()),
+                                |cfg| (cfg.site_name.to_uppercase(), cfg.site_tagline),
+                            );
 
                         view! {
                             <h1>{name}</h1>
@@ -565,21 +566,12 @@ fn PhotoGridRenderer(
     mosaic_layout_tablet: Option<crate::types::MosaicLayout>,
 ) -> impl IntoView {
     match (config, mosaic_layout, mosaic_layout_tablet) {
-        (Some(cfg), Some(mosaic), Some(tablet)) => view! {
-            <PhotoGrid
-                photos=photos
-                config=cfg
-                mosaic_layout=mosaic
-                mosaic_layout_tablet=tablet
-            />
-        }
+        (Some(cfg), Some(mosaic), Some(tablet)) => view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
         .into_any(),
         (Some(cfg), Some(mosaic), None) => {
             view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }.into_any()
         }
-        (None, Some(mosaic), Some(tablet)) => view! {
-            <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet />
-        }
+        (None, Some(mosaic), Some(tablet)) => view! { <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
         .into_any(),
         (None, Some(mosaic), None) => {
             view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
@@ -611,7 +603,7 @@ fn PhotoGridLoader() -> impl IntoView {
                                 mosaic_layout_tablet=data.mosaic_layout_tablet
                             />
                         }
-                        .into_any()
+                            .into_any()
                     }
                     None => view! { <div class="error">"Failed to load photos"</div> }.into_any(),
                 }
@@ -694,7 +686,7 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
                                 mosaic_layout_tablet=data.mosaic_layout_tablet
                             />
                         }
-                        .into_any()
+                            .into_any()
                     }
                     Some(_) => {
                         view! {
