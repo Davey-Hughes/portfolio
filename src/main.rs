@@ -2,19 +2,21 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        Router,
         extract::{Path, Query},
-        http::{StatusCode, header},
+        http::{header, StatusCode},
         response::{IntoResponse, Response},
+        Router,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_axum::{generate_route_list, LeptosRoutes};
     use portfolio::app::*;
     use portfolio::image_params::ImageParams;
     use std::path::PathBuf;
     use tower::ServiceBuilder;
-    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+    use tower_http::{
+        compression::CompressionLayer, services::ServeDir, set_header::SetResponseHeaderLayer,
+    };
 
     /// Process and cache a single image with the given parameters
     /// Returns the WebP data or None if processing failed
@@ -449,8 +451,18 @@ async fn main() {
                 ))
                 .service(ServeDir::new(&content_dir)),
         )
+        .nest_service(
+            "/pkg",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(ServeDir::new("target/site/pkg")),
+        )
         .fallback(leptos_axum::file_and_error_handler(shell))
-        .with_state(leptos_options);
+        .with_state(leptos_options)
+        .layer(CompressionLayer::new());
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
