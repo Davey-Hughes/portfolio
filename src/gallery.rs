@@ -221,7 +221,7 @@ fn find_images_recursive_with_gallery(
 
                 sources.push(ImageSource {
                     url: compressed_url,
-                    mime_type: mime_type.clone(),
+                    mime_type: "image/webp".to_string(), // Compressed endpoint always returns WebP
                 });
                 original_sources.push(ImageSource {
                     url: original_url,
@@ -413,7 +413,7 @@ fn find_images_for_gallery_with_name(
 
                 sources.push(ImageSource {
                     url: compressed_url,
-                    mime_type: mime_type.clone(),
+                    mime_type: "image/webp".to_string(), // Compressed endpoint always returns WebP
                 });
                 original_sources.push(ImageSource {
                     url: original_url,

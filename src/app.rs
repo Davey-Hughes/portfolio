@@ -300,19 +300,12 @@ fn MobilePhotoItem(photo: PhotoInfo) -> impl IntoView {
     let photo_slug = photo.slug.clone();
     let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
-    let photo_sources = photo.sources.clone();
     let photo_title = photo.title.clone();
 
     view! {
         <a href=format!("/gallery/{}/{}", photo_gallery, photo_slug) class="photo-mobile-item">
-            <picture>
-                {photo_sources
-                    .into_iter()
-                    .map(|source| {
-                        view! { <source srcset=source.url type=source.mime_type /> }
-                    })
-                    .collect_view()} <img src=photo_url alt=photo_title />
-            </picture>
+            // On mobile, use only the compressed WebP image (no sources needed)
+            <img src=photo_url alt=photo_title />
         </a>
     }
 }
@@ -1239,7 +1232,6 @@ fn PhotoDetailPage() -> impl IntoView {
                     };
                     let photo_url_cached = StoredValue::new(photo.url.clone());
                     let photo_url_original = StoredValue::new(photo.original_url.clone());
-                    let photo_sources_cached = StoredValue::new(photo.sources.clone());
                     let photo_sources_original = StoredValue::new(photo.original_sources.clone());
                     let photo_title = photo.title.clone();
                     let photo_title_fs = photo.title.clone();
@@ -1268,17 +1260,18 @@ fn PhotoDetailPage() -> impl IntoView {
                                 >
                                     <picture>
                                         {move || {
-                                            let sources = if is_mobile() {
-                                                photo_sources_cached.get_value()
+                                            if is_mobile() {
+                                                Vec::new()
                                             } else {
-                                                photo_sources_original.get_value()
-                                            };
-                                            sources
-                                                .into_iter()
-                                                .map(|source| {
-                                                    view! { <source srcset=source.url type=source.mime_type /> }
-                                                })
-                                                .collect_view()
+                                                let sources = photo_sources_original.get_value();
+                                                sources
+                                                    .into_iter()
+                                                    .map(|source| {
+                                                        // On mobile, skip sources to avoid loading multiple images
+                                                        view! { <source srcset=source.url type=source.mime_type /> }
+                                                    })
+                                                    .collect()
+                                            }
                                         }}
                                         <img
                                             src=move || {
@@ -1425,17 +1418,18 @@ fn PhotoDetailPage() -> impl IntoView {
                                             </div>
                                             <picture>
                                                 {move || {
-                                                    let sources = if is_mobile() {
-                                                        photo_sources_cached.get_value()
+                                                    if is_mobile() {
+                                                        Vec::new()
                                                     } else {
-                                                        photo_sources_original.get_value()
-                                                    };
-                                                    sources
-                                                        .into_iter()
-                                                        .map(|source| {
-                                                            view! { <source srcset=source.url type=source.mime_type /> }
-                                                        })
-                                                        .collect_view()
+                                                        let sources = photo_sources_original.get_value();
+                                                        sources
+                                                            .into_iter()
+                                                            .map(|source| {
+                                                                // On mobile, skip sources to avoid loading multiple images
+                                                                view! { <source srcset=source.url type=source.mime_type /> }
+                                                            })
+                                                            .collect()
+                                                    }
                                                 }}
                                                 <img
                                                     src=move || {
