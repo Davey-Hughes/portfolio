@@ -41,10 +41,10 @@ impl MosaicCache {
         if let Some(cached) = self.entries.get(key) {
             if cached.expires_at > now {
                 return Some(cached.data.clone());
-            } else {
-                // Expired, remove it
-                self.entries.remove(key);
             }
+
+            // Expired, remove it
+            self.entries.remove(key);
         }
         None
     }

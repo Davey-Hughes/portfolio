@@ -37,6 +37,7 @@ pub enum FocalPoint {
 impl FocalPoint {
     /// Convert focal point to CSS object-position value
     /// Using more extreme values to create stronger positioning toward focal areas
+    #[must_use]
     pub fn to_css_position(&self) -> &'static str {
         match self {
             FocalPoint::TopLeft => "20% 20%",
