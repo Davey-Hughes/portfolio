@@ -741,13 +741,63 @@ struct PhotoParams {
     photo: String,
 }
 
+/// Strip surrounding quotes from a string
+fn strip_quotes(s: &str) -> String {
+    s.trim_matches('"').to_string()
+}
+
+/// Format aperture value by replacing 'f' with hooked f (ƒ)
+fn format_aperture(aperture: &str) -> String {
+    aperture.replace("f/", "ƒ/")
+}
+
+/// Convert uppercase strings to Title Case, leave mixed case unchanged
+/// Preserves acronyms (2-4 letter words) and words with numbers
+fn to_title_case_if_uppercase(s: &str) -> String {
+    // Check if the string is entirely uppercase (ignoring whitespace and punctuation)
+    let has_letters = s.chars().any(|c| c.is_alphabetic());
+    let all_uppercase = s
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .all(|c| c.is_uppercase());
+
+    if has_letters && all_uppercase {
+        // Convert to smart title case
+        s.split_whitespace()
+            .map(|word| {
+                let letter_count = word.chars().filter(|c| c.is_alphabetic()).count();
+                let has_digit = word.chars().any(|c| c.is_numeric());
+
+                // Keep acronyms (2-4 letters) and words with numbers in uppercase
+                if (letter_count >= 2 && letter_count <= 4 && !has_digit) || has_digit {
+                    word.to_string()
+                } else {
+                    // Convert longer words to title case
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => {
+                            first.to_uppercase().collect::<String>()
+                                + &chars.as_str().to_lowercase()
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        s.to_string()
+    }
+}
+
 // Helper component for EXIF field display
 #[component]
 fn ExifField(heading: &'static str, value: String) -> impl IntoView {
+    let cleaned_value = strip_quotes(&value);
     view! {
         <div class="exif-section">
             <h3 class="exif-heading">{heading}</h3>
-            <p class="exif-value">{value}</p>
+            <p class="exif-value">{cleaned_value}</p>
         </div>
     }
 }
@@ -759,12 +809,15 @@ fn CameraInfo(camera_make: Option<String>, camera_model: Option<String>) -> impl
         return view! { <div></div> }.into_any();
     }
 
+    let make_cleaned = camera_make.map(|s| to_title_case_if_uppercase(&strip_quotes(&s)));
+    let model_cleaned = camera_model.map(|s| to_title_case_if_uppercase(&strip_quotes(&s)));
+
     view! {
         <div class="exif-section">
             <h3 class="exif-heading">"Camera"</h3>
-            {match (camera_make, camera_model) {
+            {match (make_cleaned, model_cleaned) {
                 (Some(make), Some(model)) => {
-                    view! { <p class="exif-value">{format!("{make} {model}")}</p> }.into_any()
+                    view! { <p class="exif-value">{format!("{make}, {model}")}</p> }.into_any()
                 }
                 (None, Some(model)) => view! { <p class="exif-value">{model}</p> }.into_any(),
                 (Some(make), None) => view! { <p class="exif-value">{make}</p> }.into_any(),
@@ -787,14 +840,19 @@ fn PhotoSettings(
         return view! { <div></div> }.into_any();
     }
 
+    let focal_cleaned = focal_length.map(|s| strip_quotes(&s));
+    let aperture_formatted = aperture.map(|s| format_aperture(&strip_quotes(&s)));
+    let shutter_cleaned = shutter_speed.map(|s| strip_quotes(&s));
+    let iso_cleaned = iso.map(|s| strip_quotes(&s));
+
     view! {
         <div class="exif-section">
             <h3 class="exif-heading">"Settings"</h3>
             <div class="exif-settings">
-                {focal_length.map(|fl| view! { <span class="exif-setting">{fl}</span> })}
-                {aperture.map(|ap| view! { <span class="exif-setting">{ap}</span> })}
-                {shutter_speed.map(|ss| view! { <span class="exif-setting">{ss}</span> })}
-                {iso.map(|iso_val| view! { <span class="exif-setting">{iso_val}</span> })}
+                {focal_cleaned.map(|fl| view! { <span class="exif-setting">{fl}</span> })}
+                {aperture_formatted.map(|ap| view! { <span class="exif-setting">{ap}</span> })}
+                {shutter_cleaned.map(|ss| view! { <span class="exif-setting">{ss}</span> })}
+                {iso_cleaned.map(|iso_val| view! { <span class="exif-setting">{iso_val}</span> })}
             </div>
         </div>
     }
@@ -1324,7 +1382,8 @@ fn PhotoDetailPage() -> impl IntoView {
                                             .lens_model
                                             .as_ref()
                                             .map(|lens| {
-                                                view! { <ExifField heading="Lens" value=lens.clone() /> }
+                                                let formatted_lens = format_aperture(&strip_quotes(lens));
+                                                view! { <ExifField heading="Lens" value=formatted_lens /> }
                                             })}
                                         <PhotoSettings
                                             focal_length=photo.focal_length.clone()
@@ -1332,6 +1391,14 @@ fn PhotoDetailPage() -> impl IntoView {
                                             shutter_speed=photo.shutter_speed.clone()
                                             iso=photo.iso.clone()
                                         />
+                                        {photo
+                                            .copyright
+                                            .as_ref()
+                                            .map(|copyright| {
+                                                view! {
+                                                    <ExifField heading="Copyright" value=copyright.clone() />
+                                                }
+                                            })}
                                     </div>
                                 </div>
                             </div>
