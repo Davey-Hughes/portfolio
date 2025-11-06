@@ -86,6 +86,7 @@ pub struct PhotoFocalPointConfig {
 ///     aperture: Some("f/2.8".to_string()),
 ///     shutter_speed: Some("1/200 s".to_string()),
 ///     iso: Some("ISO 100".to_string()),
+///     copyright: None,
 ///     focal_point: None,
 /// };
 ///
@@ -113,6 +114,7 @@ pub struct PhotoInfo {
     pub aperture: Option<String>,
     pub shutter_speed: Option<String>,
     pub iso: Option<String>,
+    pub copyright: Option<String>,
     pub focal_point: Option<FocalPoint>, // Optional focal point for thumbnail cropping
 }
 
@@ -253,6 +255,7 @@ mod tests {
             aperture: Some("f/2.8".to_string()),
             shutter_speed: Some("1/200 s".to_string()),
             iso: Some("ISO 100".to_string()),
+            copyright: None,
             focal_point: None,
         };
 
@@ -287,6 +290,7 @@ mod tests {
             aperture: None,
             shutter_speed: None,
             iso: None,
+            copyright: None,
             focal_point: None,
         };
 
@@ -368,6 +372,7 @@ mod tests {
             aperture: None,
             shutter_speed: None,
             iso: None,
+            copyright: None,
             focal_point: None,
         };
 

@@ -14,6 +14,10 @@ static MOSAIC_CACHE: Lazy<Arc<Mutex<MosaicCache>>> =
     Lazy::new(|| Arc::new(Mutex::new(MosaicCache::new())));
 
 #[cfg(feature = "ssr")]
+static ALL_PHOTOS_CACHE: Lazy<Arc<Mutex<AllPhotosCache>>> =
+    Lazy::new(|| Arc::new(Mutex::new(AllPhotosCache::new())));
+
+#[cfg(feature = "ssr")]
 struct CachedMosaic {
     data: GalleryData,
     expires_at: u64, // Unix timestamp
@@ -22,6 +26,17 @@ struct CachedMosaic {
 #[cfg(feature = "ssr")]
 struct MosaicCache {
     entries: std::collections::HashMap<String, CachedMosaic>,
+}
+
+#[cfg(feature = "ssr")]
+struct CachedAllPhotos {
+    photos: Vec<PhotoInfo>,
+    expires_at: u64, // Unix timestamp
+}
+
+#[cfg(feature = "ssr")]
+struct AllPhotosCache {
+    cached_data: Option<CachedAllPhotos>,
 }
 
 #[cfg(feature = "ssr")]
@@ -75,12 +90,48 @@ impl MosaicCache {
 }
 
 #[cfg(feature = "ssr")]
+impl AllPhotosCache {
+    fn new() -> Self {
+        Self { cached_data: None }
+    }
+
+    fn get(&mut self) -> Option<Vec<PhotoInfo>> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        if let Some(cached) = &self.cached_data {
+            if cached.expires_at > now {
+                return Some(cached.photos.clone());
+            }
+
+            // Expired, remove it
+            self.cached_data = None;
+        }
+        None
+    }
+
+    fn set(&mut self, photos: Vec<PhotoInfo>, duration_secs: u64) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        self.cached_data = Some(CachedAllPhotos {
+            photos,
+            expires_at: now + duration_secs,
+        });
+    }
+}
+
+#[cfg(feature = "ssr")]
 fn generate_mosaic_layout_for_size(
     photos: &[crate::types::PhotoInfo],
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
+    use crate::mosaic::{calculate_orientation_bias, generate_mosaic_with_images, MosaicConfig};
 
     let num_images = photos.len();
     let image_aspects: Vec<(usize, f64)> = photos
@@ -243,7 +294,24 @@ pub async fn get_home_gallery_data() -> Result<GalleryData, ServerFnError> {
 pub async fn get_all_gallery_photos() -> Result<Vec<PhotoInfo>, ServerFnError> {
     #[cfg(feature = "ssr")]
     {
-        Ok(crate::gallery::load_all_gallery_photos())
+        // Check cache first
+        if let Ok(mut cache) = ALL_PHOTOS_CACHE.lock() {
+            if let Some(cached_photos) = cache.get() {
+                return Ok(cached_photos);
+            }
+        }
+
+        // Load all photos (expensive operation)
+        let photos = crate::gallery::load_all_gallery_photos();
+
+        // Cache the result for 10 minutes (600 seconds)
+        // This is shorter than gallery caches since photo detail pages
+        // might be visited frequently and we want fresh data
+        if let Ok(mut cache) = ALL_PHOTOS_CACHE.lock() {
+            cache.set(photos.clone(), 600);
+        }
+
+        Ok(photos)
     }
     #[cfg(not(feature = "ssr"))]
     {
@@ -361,5 +429,24 @@ pub async fn get_about_content() -> Result<AboutContent, ServerFnError> {
             content: String::new(),
             is_html: false,
         })
+    }
+}
+
+/// Pre-warm the all-photos cache on server startup
+#[cfg(feature = "ssr")]
+pub fn prewarm_all_photos_cache() {
+    use leptos::logging::log;
+
+    log!("Pre-warming all-photos cache...");
+
+    // Load all photos (expensive operation)
+    let photos = crate::gallery::load_all_gallery_photos();
+
+    // Cache the result for 10 minutes (600 seconds)
+    if let Ok(mut cache) = ALL_PHOTOS_CACHE.lock() {
+        cache.set(photos, 600);
+        log!("All-photos cache pre-warmed successfully");
+    } else {
+        log!("Failed to acquire lock for all-photos cache pre-warming");
     }
 }

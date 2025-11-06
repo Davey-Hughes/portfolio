@@ -201,6 +201,7 @@ fn find_images_recursive_with_gallery(
             aperture,
             shutter_speed,
             iso,
+            copyright,
         ) = extract_exif_data(&primary_full_path);
 
         // Build sources for compressed versions
@@ -271,6 +272,7 @@ fn find_images_recursive_with_gallery(
             aperture,
             shutter_speed,
             iso,
+            copyright,
             focal_point,
         });
     }
@@ -393,6 +395,7 @@ fn find_images_for_gallery_with_name(
             aperture,
             shutter_speed,
             iso,
+            copyright,
         ) = extract_exif_data(&primary_full_path);
 
         // Build sources for compressed versions
@@ -463,6 +466,7 @@ fn find_images_for_gallery_with_name(
             aperture,
             shutter_speed,
             iso,
+            copyright,
             focal_point,
         });
     }
@@ -479,6 +483,7 @@ type ExifData = (
     Option<String>, // aperture
     Option<String>, // shutter_speed
     Option<String>, // iso
+    Option<String>, // copyright
 );
 
 /// Extract EXIF metadata from an image file
@@ -487,12 +492,16 @@ fn extract_exif_data(path: &Path) -> ExifData {
     use std::io::BufReader;
 
     let Ok(file) = File::open(path) else {
-        return (None, None, None, None, None, None, None, None, None, None);
+        return (
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
     };
 
     let mut reader = BufReader::new(file);
     let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut reader) else {
-        return (None, None, None, None, None, None, None, None, None, None);
+        return (
+            None, None, None, None, None, None, None, None, None, None, None,
+        );
     };
 
     let mut width = exif_reader
@@ -572,6 +581,17 @@ fn extract_exif_data(path: &Path) -> ExifData {
         .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
         .map(|f| format!("ISO {}", f.display_value()));
 
+    let copyright = exif_reader
+        .get_field(exif::Tag::Copyright, exif::In::PRIMARY)
+        .and_then(|f| match &f.value {
+            exif::Value::Ascii(vec) => {
+                // Concatenate all ASCII strings and decode as UTF-8
+                let bytes: Vec<u8> = vec.iter().flat_map(|s| s.iter().copied()).collect();
+                String::from_utf8(bytes).ok()
+            }
+            _ => Some(f.display_value().to_string()),
+        });
+
     (
         width,
         height,
@@ -583,6 +603,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
         aperture,
         shutter_speed,
         iso,
+        copyright,
     )
 }
 
@@ -1118,7 +1139,7 @@ mod tests {
     #[test]
     fn test_extract_exif_data_nonexistent_file() {
         let nonexistent = Path::new("/tmp/nonexistent_image_12345.jpg");
-        let (width, height, date, make, model, lens, focal, aperture, shutter, iso) =
+        let (width, height, date, make, model, lens, focal, aperture, shutter, iso, copyright) =
             extract_exif_data(nonexistent);
 
         assert_eq!(width, None);
@@ -1131,6 +1152,7 @@ mod tests {
         assert_eq!(aperture, None);
         assert_eq!(shutter, None);
         assert_eq!(iso, None);
+        assert_eq!(copyright, None);
     }
 
     #[test]
