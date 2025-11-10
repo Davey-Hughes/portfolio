@@ -48,35 +48,35 @@ fn load_photo_focal_point(photo_path: &Path) -> Option<crate::types::FocalPoint>
 }
 
 /// Get default image width and quality from environment variables
-/// Returns (width, quality) tuple with defaults of (3600, 100)
+/// Returns (width, quality) tuple with defaults of (2400, 80)
 fn get_default_image_params() -> (u32, u8) {
-    // Use 3600px at 100 quality for mobile photo detail pages
-    // This provides high quality while still being significantly smaller than originals
+    // Use 2400px at 80 quality for photo detail pages
+    // This provides good quality while keeping file sizes reasonable
     #[cfg(feature = "ssr")]
     {
         use crate::image_params::ImageParams;
         let presets = ImageParams::get_valid_presets();
-        // Find the 3600px preset, or fall back to the largest preset, or default
+        // Find the 2400px/80 quality preset, or fall back to default
         presets
             .iter()
-            .find(|(w, _)| *w == 3600)
+            .find(|(w, q)| *w == 2400 && *q == 80)
             .copied()
-            .or_else(|| presets.last().copied())
-            .unwrap_or((3600, 100))
+            .or_else(|| presets.iter().find(|(w, _)| *w == 2400).copied())
+            .unwrap_or((2400, 80))
     }
 
     #[cfg(not(feature = "ssr"))]
     {
-        // For client-side, use environment variables or default to 3600/100
+        // For client-side, use environment variables or default to 2400/80
         let width = std::env::var("DEFAULT_IMAGE_WIDTH")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(3600);
+            .unwrap_or(2400);
 
         let quality = std::env::var("DEFAULT_IMAGE_QUALITY")
             .ok()
             .and_then(|s| s.parse::<u8>().ok())
-            .unwrap_or(100);
+            .unwrap_or(80);
 
         (width, quality)
     }
@@ -852,15 +852,15 @@ mod tests {
         std::env::remove_var("IMAGE_PRESETS");
 
         let (width, quality) = get_default_image_params();
-        // Should use 3600px at 100 quality (the third preset in default list)
-        assert_eq!(width, 3600);
-        assert_eq!(quality, 100);
+        // Should use 2400px at 80 quality (the new default)
+        assert_eq!(width, 2400);
+        assert_eq!(quality, 80);
     }
 
     #[test]
     #[serial]
     fn test_get_default_image_params_custom_width() {
-        std::env::set_var("DEFAULT_IMAGE_WIDTH", "2400");
+        std::env::set_var("DEFAULT_IMAGE_WIDTH", "1200");
         std::env::remove_var("DEFAULT_IMAGE_QUALITY");
 
         let (width, quality) = get_default_image_params();
@@ -871,13 +871,13 @@ mod tests {
         // On client builds, env vars override defaults
         #[cfg(feature = "ssr")]
         {
-            assert_eq!(width, 3600);
-            assert_eq!(quality, 100);
+            assert_eq!(width, 2400);
+            assert_eq!(quality, 80);
         }
         #[cfg(not(feature = "ssr"))]
         {
-            assert_eq!(width, 2400);
-            assert_eq!(quality, 100);
+            assert_eq!(width, 1200);
+            assert_eq!(quality, 80);
         }
     }
 
@@ -885,7 +885,7 @@ mod tests {
     #[serial]
     fn test_get_default_image_params_custom_quality() {
         std::env::remove_var("DEFAULT_IMAGE_WIDTH");
-        std::env::set_var("DEFAULT_IMAGE_QUALITY", "80");
+        std::env::set_var("DEFAULT_IMAGE_QUALITY", "90");
 
         let (width, quality) = get_default_image_params();
 
@@ -895,13 +895,13 @@ mod tests {
         // On client builds, env vars override defaults
         #[cfg(feature = "ssr")]
         {
-            assert_eq!(width, 3600);
-            assert_eq!(quality, 100);
+            assert_eq!(width, 2400);
+            assert_eq!(quality, 80);
         }
         #[cfg(not(feature = "ssr"))]
         {
-            assert_eq!(width, 3600);
-            assert_eq!(quality, 80);
+            assert_eq!(width, 2400);
+            assert_eq!(quality, 90);
         }
     }
 
@@ -920,8 +920,8 @@ mod tests {
         // On client builds, env vars override defaults
         #[cfg(feature = "ssr")]
         {
-            assert_eq!(width, 3600);
-            assert_eq!(quality, 100);
+            assert_eq!(width, 2400);
+            assert_eq!(quality, 80);
         }
         #[cfg(not(feature = "ssr"))]
         {
@@ -942,8 +942,8 @@ mod tests {
         std::env::remove_var("DEFAULT_IMAGE_QUALITY");
 
         // Should fall back to defaults
-        assert_eq!(width, 3600);
-        assert_eq!(quality, 100);
+        assert_eq!(width, 2400);
+        assert_eq!(quality, 80);
     }
 
     #[test]
