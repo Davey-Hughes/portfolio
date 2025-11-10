@@ -34,7 +34,7 @@ impl ImageParams {
         }
 
         // Default valid combinations: (width, quality)
-        vec![(1200, 80), (2400, 100), (3600, 100)]
+        vec![(1200, 80), (2400, 80), (2400, 100), (3600, 100)]
     }
 
     pub fn validate(&self) -> Result<(u32, u8), &'static str> {
@@ -47,7 +47,7 @@ impl ImageParams {
                     Ok((w, q))
                 } else {
                     Err(
-                        "Invalid width/quality combination. Check IMAGE_PRESETS environment variable or use defaults: 1200px/80, 2400px/100, 3600px/100",
+                        "Invalid width/quality combination. Check IMAGE_PRESETS environment variable or use defaults: 1200px/80, 2400px/80, 2400px/100, 3600px/100",
                     )
                 }
             }
@@ -57,7 +57,7 @@ impl ImageParams {
                     .iter()
                     .find(|(width, _)| *width == w)
                     .map(|(w, q)| (*w, *q))
-                    .ok_or("Invalid width. Check IMAGE_PRESETS environment variable or use defaults: 1200, 2400, 3600")
+                    .ok_or("Invalid width. Check IMAGE_PRESETS environment variable or use defaults: 1200, 2400, 3600. Note: 2400 has both quality 80 and 100 presets.")
             }
             (None, Some(_)) => Err("Quality must be specified with a width"),
             (None, None) => {
@@ -95,7 +95,8 @@ mod tests {
         };
         let result = params.validate();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (2400, 100));
+        // Should return the first matching preset for 2400, which is now (2400, 80)
+        assert_eq!(result.unwrap(), (2400, 80));
     }
 
     #[test]
@@ -127,6 +128,28 @@ mod tests {
         let result = params.validate();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), (3600, 100));
+    }
+
+    #[test]
+    fn test_validate_with_2400_80_combination() {
+        let params = ImageParams {
+            width: Some(2400),
+            quality: Some(80),
+        };
+        let result = params.validate();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (2400, 80));
+    }
+
+    #[test]
+    fn test_validate_with_2400_100_combination() {
+        let params = ImageParams {
+            width: Some(2400),
+            quality: Some(100),
+        };
+        let result = params.validate();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (2400, 100));
     }
 
     #[test]
@@ -170,9 +193,10 @@ mod tests {
         let presets = ImageParams::get_valid_presets();
         std::env::remove_var("IMAGE_PRESETS");
 
-        // Should fall back to defaults
-        assert_eq!(presets.len(), 3);
+        // Should fall back to defaults (now 4 presets)
+        assert_eq!(presets.len(), 4);
         assert!(presets.contains(&(1200, 80)));
+        assert!(presets.contains(&(2400, 80)));
         assert!(presets.contains(&(2400, 100)));
         assert!(presets.contains(&(3600, 100)));
     }
