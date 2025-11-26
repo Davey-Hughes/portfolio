@@ -1385,6 +1385,12 @@ fn PhotoDetailPage() -> impl IntoView {
                                                 let formatted_lens = format_aperture(&strip_quotes(lens));
                                                 view! { <ExifField heading="Lens" value=formatted_lens /> }
                                             })}
+                                        {photo
+                                            .film_stock
+                                            .as_ref()
+                                            .map(|film| {
+                                                view! { <ExifField heading="Film Stock" value=film.clone() /> }
+                                            })}
                                         <PhotoSettings
                                             focal_length=photo.focal_length.clone()
                                             aperture=photo.aperture.clone()
