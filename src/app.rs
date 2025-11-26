@@ -919,6 +919,83 @@ fn PhotoDetailPage() -> impl IntoView {
     let is_details_expanded = RwSignal::new(false);
     let show_zoom_controls = RwSignal::new(true);
 
+    // Set up keyboard navigation
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::prelude::Effect;
+        use leptos_router::hooks::use_navigate;
+
+        Effect::new(move |_| {
+            let navigate = use_navigate();
+
+            let handle_keydown = leptos::wasm_bindgen::closure::Closure::wrap(Box::new(
+                move |event: web_sys::KeyboardEvent| {
+                    let key = event.key();
+
+                    // Handle Escape key to close fullscreen
+                    if key == "Escape" && is_fullscreen.get() {
+                        is_fullscreen.set(false);
+                        zoom_level.set(1.0);
+                        pan_x.set(0.0);
+                        pan_y.set(0.0);
+                        return;
+                    }
+
+                    // Get current photo list and params
+                    if let (Some(photo_list), Ok(current_params)) =
+                        (photos.get().and_then(std::result::Result::ok), params.get())
+                    {
+                        if let Some((idx, _)) = photo_list
+                            .iter()
+                            .enumerate()
+                            .find(|(_, p)| p.slug == current_params.photo)
+                        {
+                            match key.as_str() {
+                                "ArrowLeft" => {
+                                    // Navigate to previous photo
+                                    if idx > 0 {
+                                        if let Some(prev) = photo_list.get(idx - 1) {
+                                            let url = format!(
+                                                "/gallery/{}/{}",
+                                                prev.gallery_name, prev.slug
+                                            );
+                                            navigate(&url, Default::default());
+                                        }
+                                    }
+                                }
+                                "ArrowRight" => {
+                                    // Navigate to next photo
+                                    if idx < photo_list.len() - 1 {
+                                        if let Some(next) = photo_list.get(idx + 1) {
+                                            let url = format!(
+                                                "/gallery/{}/{}",
+                                                next.gallery_name, next.slug
+                                            );
+                                            navigate(&url, Default::default());
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                },
+            )
+                as Box<dyn FnMut(web_sys::KeyboardEvent)>);
+
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                let _ = document.add_event_listener_with_callback(
+                    "keydown",
+                    handle_keydown.as_ref().unchecked_ref(),
+                );
+            }
+
+            // Forget the closure to prevent it from being dropped
+            // The event listener will remain active for the lifetime of the component
+            handle_keydown.forget();
+        });
+    }
+
     // Create a signal to track viewport width for mobile detection
     // Initialize viewport_width with a reasonable default to avoid hydration mismatch
     // We'll use original (full quality) images by default during SSR
@@ -1389,7 +1466,9 @@ fn PhotoDetailPage() -> impl IntoView {
                                             .film_stock
                                             .as_ref()
                                             .map(|film| {
-                                                view! { <ExifField heading="Film Stock" value=film.clone() /> }
+                                                view! {
+                                                    <ExifField heading="Film Stock" value=film.clone() />
+                                                }
                                             })}
                                         <PhotoSettings
                                             focal_length=photo.focal_length.clone()
