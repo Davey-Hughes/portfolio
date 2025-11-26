@@ -201,6 +201,7 @@ fn find_images_recursive_with_gallery(
             aperture,
             shutter_speed,
             iso,
+            film_stock,
             copyright,
         ) = extract_exif_data(&primary_full_path);
 
@@ -272,6 +273,7 @@ fn find_images_recursive_with_gallery(
             aperture,
             shutter_speed,
             iso,
+            film_stock,
             copyright,
             focal_point,
         });
@@ -395,6 +397,7 @@ fn find_images_for_gallery_with_name(
             aperture,
             shutter_speed,
             iso,
+            film_stock,
             copyright,
         ) = extract_exif_data(&primary_full_path);
 
@@ -466,6 +469,7 @@ fn find_images_for_gallery_with_name(
             aperture,
             shutter_speed,
             iso,
+            film_stock,
             copyright,
             focal_point,
         });
@@ -483,6 +487,7 @@ type ExifData = (
     Option<String>, // aperture
     Option<String>, // shutter_speed
     Option<String>, // iso
+    Option<String>, // film_stock
     Option<String>, // copyright
 );
 
@@ -493,14 +498,14 @@ fn extract_exif_data(path: &Path) -> ExifData {
 
     let Ok(file) = File::open(path) else {
         return (
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
         );
     };
 
     let mut reader = BufReader::new(file);
     let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut reader) else {
         return (
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
         );
     };
 
@@ -581,6 +586,75 @@ fn extract_exif_data(path: &Path) -> ExifData {
         .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
         .map(|f| format!("ISO {}", f.display_value()));
 
+    // Extract film stock from ImageDescription or UserComment tags
+    // These are commonly used for film stock information in scanned film photos
+    let film_stock = exif_reader
+        .get_field(exif::Tag::ImageDescription, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::UserComment, exif::In::PRIMARY))
+        .and_then(|f| match &f.value {
+            exif::Value::Ascii(vec) => {
+                // Concatenate all ASCII strings and decode as UTF-8
+                let bytes: Vec<u8> = vec.iter().flat_map(|s| s.iter().copied()).collect();
+                String::from_utf8(bytes)
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            }
+            exif::Value::Undefined(bytes, _) => {
+                // UserComment has an 8-byte character code followed by the actual text
+                // The character code is typically "ASCII\0\0\0" or "UNICODE\0"
+                if bytes.len() > 8 {
+                    let text = String::from_utf8_lossy(&bytes[8..]).trim().to_string();
+                    if !text.is_empty() {
+                        // Try to extract film stock information from the metadata
+                        let mut film_make: Option<&str> = None;
+                        let mut film_type: Option<&str> = None;
+                        let mut film_iso: Option<&str> = None;
+
+                        for line in text.lines() {
+                            let line_lower = line.to_lowercase();
+                            if line_lower.contains("film make:") {
+                                film_make = line.split_once(':').map(|(_, v)| v.trim());
+                            } else if line_lower.contains("film type:") {
+                                film_type = line.split_once(':').map(|(_, v)| v.trim());
+                            } else if line_lower.starts_with("-iso=")
+                                || line_lower.starts_with("iso=")
+                            {
+                                // Handle formats like "-ISO=200" or "ISO=400"
+                                film_iso = line.split_once('=').map(|(_, v)| v.trim());
+                            }
+                        }
+
+                        // Combine film make, type, and ISO if present
+                        let film_stock = match (film_make, film_type) {
+                            (Some(make), Some(typ)) => format!("{} {}", make, typ),
+                            (Some(make), None) => make.to_string(),
+                            (None, Some(typ)) => typ.to_string(),
+                            (None, None) => text.clone(), // Return full text if no specific fields found
+                        };
+
+                        // Add ISO if found (format: "Kodak Gold 200")
+                        if let Some(iso_value) = film_iso {
+                            Some(format!("{} {}", film_stock, iso_value))
+                        } else {
+                            Some(film_stock)
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => {
+                let display = f.display_value().to_string();
+                if display.trim().is_empty() {
+                    None
+                } else {
+                    Some(display)
+                }
+            }
+        });
+
     let copyright = exif_reader
         .get_field(exif::Tag::Copyright, exif::In::PRIMARY)
         .and_then(|f| match &f.value {
@@ -603,6 +677,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
         aperture,
         shutter_speed,
         iso,
+        film_stock,
         copyright,
     )
 }
@@ -1139,8 +1214,20 @@ mod tests {
     #[test]
     fn test_extract_exif_data_nonexistent_file() {
         let nonexistent = Path::new("/tmp/nonexistent_image_12345.jpg");
-        let (width, height, date, make, model, lens, focal, aperture, shutter, iso, copyright) =
-            extract_exif_data(nonexistent);
+        let (
+            width,
+            height,
+            date,
+            make,
+            model,
+            lens,
+            focal,
+            aperture,
+            shutter,
+            iso,
+            film_stock,
+            copyright,
+        ) = extract_exif_data(nonexistent);
 
         assert_eq!(width, None);
         assert_eq!(height, None);
@@ -1152,6 +1239,7 @@ mod tests {
         assert_eq!(aperture, None);
         assert_eq!(shutter, None);
         assert_eq!(iso, None);
+        assert_eq!(film_stock, None);
         assert_eq!(copyright, None);
     }
 
