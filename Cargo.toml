@@ -20,7 +20,7 @@ tower-http = { version = "0.6", features = [
   "set-header",
   "compression-gzip",
 ], optional = true }
-wasm-bindgen = { version = "=0.2.105", optional = true }
+wasm-bindgen = { version = "=0.2.104", optional = true }
 js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", features = [
   "Touch",
