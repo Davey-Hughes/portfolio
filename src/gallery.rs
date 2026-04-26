@@ -491,6 +491,70 @@ type ExifData = (
     Option<String>, // copyright
 );
 
+/// Read the XMP packet from a JPEG file, scanning at most the first ~1MB.
+/// XMP lives in an APP1 segment near the start of the file, so a partial
+/// read is sufficient and avoids loading multi-MB photos in full.
+fn read_xmp_packet(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take(1024 * 1024).read_to_end(&mut buf).ok()?;
+    let start = find_subsequence(&buf, b"<x:xmpmeta")?;
+    let end_marker = b"</x:xmpmeta>";
+    let end_rel = find_subsequence(&buf[start..], end_marker)?;
+    let end = start + end_rel + end_marker.len();
+    std::str::from_utf8(&buf[start..end]).ok().map(String::from)
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Extract the value of an XML attribute like `name="value"` from an XMP string.
+fn xmp_attr_value<'a>(xmp: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!("{name}=\"");
+    let start = xmp.find(&key)? + key.len();
+    let rest = &xmp[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// Try to recover a human-readable lens name from XMP metadata. Lightroom
+/// often strips the camera maker note, but writes the matched lens profile
+/// as `crs:LensProfileName="Adobe (<lens name>) v<n>"` and `aux:Lens` (which
+/// for tools like LensTagger contains the name directly). Returns `None`
+/// when XMP holds only a focal-range string that the EXIF `LensModel` tag
+/// already exposes.
+fn extract_lens_name_from_xmp(path: &Path) -> Option<String> {
+    let xmp = read_xmp_packet(path)?;
+
+    if let Some(raw) = xmp_attr_value(&xmp, "crs:LensProfileName") {
+        let trimmed = raw.trim();
+        let inner = trimmed
+            .strip_prefix("Adobe (")
+            .and_then(|s| {
+                // Drop the matching ')' and any trailing version like " v2".
+                let close = s.rfind(')')?;
+                Some(s[..close].trim())
+            })
+            .unwrap_or(trimmed);
+        if !inner.is_empty() {
+            return Some(inner.to_string());
+        }
+    }
+
+    if let Some(raw) = xmp_attr_value(&xmp, "aux:Lens") {
+        let trimmed = raw.trim();
+        // Only accept it as a real name when it doesn't start with a digit
+        // (e.g. "Nikon AF NIKKOR 50mm f/1.8" — yes; "50.0 mm f/1.8" — no).
+        if trimmed.chars().next().is_some_and(char::is_alphabetic) {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
+}
+
 /// Extract EXIF metadata from an image file
 fn extract_exif_data(path: &Path) -> ExifData {
     use std::fs::File;
@@ -552,9 +616,10 @@ fn extract_exif_data(path: &Path) -> ExifData {
         .get_field(exif::Tag::Model, exif::In::PRIMARY)
         .and_then(|f| f.display_value().to_string().into());
 
-    let lens_model = exif_reader
+    let exif_lens_model = exif_reader
         .get_field(exif::Tag::LensModel, exif::In::PRIMARY)
-        .and_then(|f| f.display_value().to_string().into());
+        .map(|f| f.display_value().to_string());
+    let lens_model = extract_lens_name_from_xmp(path).or(exif_lens_model);
 
     let focal_length = exif_reader
         .get_field(exif::Tag::FocalLength, exif::In::PRIMARY)
