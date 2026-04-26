@@ -595,6 +595,7 @@ fn PhotoGridLoader() -> impl IntoView {
                 let gallery_config = home_config.get().and_then(std::result::Result::ok).flatten();
                 match gallery_data.get().and_then(std::result::Result::ok) {
                     Some(data) => {
+                        let data = std::sync::Arc::unwrap_or_clone(data);
                         view! {
                             <PhotoGridRenderer
                                 photos=data.photos
@@ -678,6 +679,7 @@ fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
                     });
                 match gallery_data.get().and_then(std::result::Result::ok) {
                     Some(data) if !data.photos.is_empty() => {
+                        let data = std::sync::Arc::unwrap_or_clone(data);
                         view! {
                             <PhotoGridRenderer
                                 photos=data.photos
@@ -904,142 +906,196 @@ fn InvalidPhotoId() -> impl IntoView {
     }
 }
 
+/// Bundle of signals shared between the zoom/pan event handlers and the
+/// fullscreen view. Held by value (RwSignal is Copy).
+#[derive(Clone, Copy)]
+struct ZoomPanState {
+    zoom_level: RwSignal<f64>,
+    max_zoom: RwSignal<f64>,
+    pan_x: RwSignal<f64>,
+    pan_y: RwSignal<f64>,
+    is_panning: RwSignal<bool>,
+    start_x: RwSignal<f64>,
+    start_y: RwSignal<f64>,
+    show_zoom_controls: RwSignal<bool>,
+    is_fullscreen: RwSignal<bool>,
+    // Pinch-zoom anchors (only used in hydrate).
+    initial_pinch_distance: RwSignal<f64>,
+    initial_zoom: RwSignal<f64>,
+    initial_pinch_center_x: RwSignal<f64>,
+    initial_pinch_center_y: RwSignal<f64>,
+    initial_pan_x: RwSignal<f64>,
+    initial_pan_y: RwSignal<f64>,
+}
+
+impl ZoomPanState {
+    fn new() -> Self {
+        Self {
+            zoom_level: RwSignal::new(1.0),
+            max_zoom: RwSignal::new(10.0),
+            pan_x: RwSignal::new(0.0),
+            pan_y: RwSignal::new(0.0),
+            is_panning: RwSignal::new(false),
+            start_x: RwSignal::new(0.0),
+            start_y: RwSignal::new(0.0),
+            show_zoom_controls: RwSignal::new(true),
+            is_fullscreen: RwSignal::new(false),
+            initial_pinch_distance: RwSignal::new(0.0),
+            initial_zoom: RwSignal::new(1.0),
+            initial_pinch_center_x: RwSignal::new(0.0),
+            initial_pinch_center_y: RwSignal::new(0.0),
+            initial_pan_x: RwSignal::new(0.0),
+            initial_pan_y: RwSignal::new(0.0),
+        }
+    }
+
+    fn reset_zoom(&self) {
+        self.zoom_level.set(1.0);
+        self.pan_x.set(0.0);
+        self.pan_y.set(0.0);
+    }
+}
+
+/// EXIF panel rendered next to the photo title. Pure presentation; the
+/// outer page only needs to pass the photo and an expand/collapse signal.
 #[component]
-fn PhotoDetailPage() -> impl IntoView {
-    let params = use_params::<PhotoParams>();
-    let photos = Resource::new(|| (), |()| async { get_all_gallery_photos().await });
-    let is_fullscreen = RwSignal::new(false);
-    let zoom_level = RwSignal::new(1.0);
-    let max_zoom = RwSignal::new(10.0); // Default 10x, will be updated based on image resolution
-    let pan_x = RwSignal::new(0.0);
-    let pan_y = RwSignal::new(0.0);
-    let is_panning = RwSignal::new(false);
-    let start_x = RwSignal::new(0.0);
-    let start_y = RwSignal::new(0.0);
-    let is_details_expanded = RwSignal::new(false);
-    let show_zoom_controls = RwSignal::new(true);
+fn PhotoExifPanel(photo: PhotoInfo, is_expanded: RwSignal<bool>) -> impl IntoView {
+    let dimensions_view = match (photo.width, photo.height) {
+        (Some(w), Some(h)) => view! {
+            <ExifField heading="Dimensions" value=format!("{w} × {h} px") />
+        }
+        .into_any(),
+        _ => view! { <div></div> }.into_any(),
+    };
 
-    // Set up keyboard navigation
-    #[cfg(feature = "hydrate")]
-    {
-        use leptos::prelude::Effect;
-        use leptos_router::hooks::use_navigate;
-
-        Effect::new(move |_| {
-            let navigate = use_navigate();
-
-            let handle_keydown = leptos::wasm_bindgen::closure::Closure::wrap(Box::new(
-                move |event: web_sys::KeyboardEvent| {
-                    let key = event.key();
-
-                    // Handle Escape key to close fullscreen
-                    if key == "Escape" && is_fullscreen.get() {
-                        is_fullscreen.set(false);
-                        zoom_level.set(1.0);
-                        pan_x.set(0.0);
-                        pan_y.set(0.0);
-                        return;
-                    }
-
-                    // Get current photo list and params
-                    if let (Some(photo_list), Ok(current_params)) =
-                        (photos.get().and_then(std::result::Result::ok), params.get())
-                    {
-                        if let Some((idx, _)) = photo_list
-                            .iter()
-                            .enumerate()
-                            .find(|(_, p)| p.slug == current_params.photo)
-                        {
-                            match key.as_str() {
-                                "ArrowLeft" => {
-                                    // Navigate to previous photo
-                                    if idx > 0 {
-                                        if let Some(prev) = photo_list.get(idx - 1) {
-                                            let url = format!(
-                                                "/gallery/{}/{}",
-                                                prev.gallery_name, prev.slug
-                                            );
-                                            navigate(&url, Default::default());
-                                        }
-                                    }
-                                }
-                                "ArrowRight" => {
-                                    // Navigate to next photo
-                                    if idx < photo_list.len() - 1 {
-                                        if let Some(next) = photo_list.get(idx + 1) {
-                                            let url = format!(
-                                                "/gallery/{}/{}",
-                                                next.gallery_name, next.slug
-                                            );
-                                            navigate(&url, Default::default());
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                },
-            )
-                as Box<dyn FnMut(web_sys::KeyboardEvent)>);
-
-            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-                let _ = document.add_event_listener_with_callback(
-                    "keydown",
-                    handle_keydown.as_ref().unchecked_ref(),
-                );
-            }
-
-            // Forget the closure to prevent it from being dropped
-            // The event listener will remain active for the lifetime of the component
-            handle_keydown.forget();
-        });
+    view! {
+        <div class="photo-exif" class:expanded=move || is_expanded.get()>
+            {photo
+                .date_taken
+                .as_ref()
+                .map(|date| view! { <ExifField heading="Date" value=date.clone() /> })}
+            {dimensions_view}
+            <CameraInfo
+                camera_make=photo.camera_make.clone()
+                camera_model=photo.camera_model.clone()
+            />
+            {photo
+                .lens_model
+                .as_ref()
+                .map(|lens| {
+                    let formatted = format_aperture(&strip_quotes(lens));
+                    view! { <ExifField heading="Lens" value=formatted /> }
+                })}
+            {photo
+                .film_stock
+                .as_ref()
+                .map(|film| view! { <ExifField heading="Film Stock" value=film.clone() /> })}
+            <PhotoSettings
+                focal_length=photo.focal_length.clone()
+                aperture=photo.aperture.clone()
+                shutter_speed=photo.shutter_speed.clone()
+                iso=photo.iso.clone()
+            />
+            {photo
+                .copyright
+                .as_ref()
+                .map(|c| view! { <ExifField heading="Copyright" value=c.clone() /> })}
+        </div>
     }
+}
 
-    // Create a signal to track viewport width for mobile detection
-    // Initialize viewport_width with a reasonable default to avoid hydration mismatch
-    // We'll use original (full quality) images by default during SSR
-    let viewport_width = RwSignal::new(1920.0); // Default to desktop width for SSR
-
-    #[cfg(feature = "hydrate")]
-    {
-        use leptos::prelude::Effect;
-        // Update viewport width on mount - but only affects future renders, not hydration
-        Effect::new(move |_| {
-            if let Some(window) = web_sys::window() {
-                if let Ok(width) = window.inner_width() {
-                    if let Some(width_f64) = width.as_f64() {
-                        viewport_width.set(width_f64);
+/// Prev/Next navigation row with the copyright sandwiched between, so that
+/// links collapse cleanly when there is no neighbour in either direction.
+#[component]
+fn PhotoNavigationButtons(
+    prev_photo: Option<PhotoInfo>,
+    next_photo: Option<PhotoInfo>,
+) -> impl IntoView {
+    view! {
+        <div class="photo-navigation">
+            {prev_photo
+                .map(|prev| {
+                    view! {
+                        <A
+                            href=format!("/gallery/{}/{}", prev.gallery_name, prev.slug)
+                            attr:class="nav-button nav-prev"
+                        >
+                            "← Previous"
+                        </A>
                     }
-                }
-            }
-        });
+                })}
+            <div class="photo-nav-copyright">
+                <CopyrightFooter />
+            </div>
+            {next_photo
+                .map(|next| {
+                    view! {
+                        <A
+                            href=format!("/gallery/{}/{}", next.gallery_name, next.slug)
+                            attr:class="nav-button nav-next"
+                        >
+                            "Next →"
+                        </A>
+                    }
+                })}
+        </div>
     }
+}
 
-    // Define these signals unconditionally to avoid hydration errors
-    // Prefixed with underscore as they're only used in #[cfg(feature = "hydrate")] blocks
-    let _initial_pinch_distance = RwSignal::new(0.0);
-    let _initial_zoom = RwSignal::new(1.0);
-    let _initial_pinch_center_x = RwSignal::new(0.0);
-    let _initial_pinch_center_y = RwSignal::new(0.0);
-    let _initial_pan_x = RwSignal::new(0.0);
-    let _initial_pan_y = RwSignal::new(0.0);
+/// Fullscreen image viewer with zoom/pan/pinch controls. Owns all the
+/// browser-event closures so the parent `PhotoDetailPage` doesn't have to
+/// thread state through ~14 separate handlers.
+#[component]
+fn FullscreenViewer(
+    photo: PhotoInfo,
+    state: ZoomPanState,
+    viewport_width: RwSignal<f64>,
+) -> impl IntoView {
+    // Calibrate max zoom for very-high-resolution photos.
+    let calculated_max_zoom = match (photo.width, photo.height) {
+        (Some(w), Some(h)) if w > 8000 || h > 8000 => 20.0,
+        _ => 10.0,
+    };
+    state.max_zoom.set(calculated_max_zoom);
+
+    let is_mobile = move || viewport_width.get() <= 768.0 && viewport_width.get() > 0.0;
+    let photo_url_cached = StoredValue::new(photo.url.clone());
+    let photo_url_original = StoredValue::new(photo.original_url.clone());
+    let photo_sources_original = StoredValue::new(photo.original_sources.clone());
+    let photo_title_fs = photo.title.clone();
+    let photo_width = photo.width;
+    let photo_height = photo.height;
+
     let _hide_controls_timeout: StoredValue<Option<i32>> = StoredValue::new(None);
 
-    // Define reset_hide_timer unconditionally, but only execute browser code on hydrate
+    let zoom_level = state.zoom_level;
+    let max_zoom = state.max_zoom;
+    let pan_x = state.pan_x;
+    let pan_y = state.pan_y;
+    let is_panning = state.is_panning;
+    let start_x = state.start_x;
+    let start_y = state.start_y;
+    let show_zoom_controls = state.show_zoom_controls;
+    let is_fullscreen = state.is_fullscreen;
+    // Pinch-zoom anchors. Only read inside the `cfg(feature = "hydrate")`
+    // blocks below; the underscore prefix mirrors the SSR-side suppression
+    // already used in this module.
+    let _initial_pinch_distance = state.initial_pinch_distance;
+    let _initial_zoom = state.initial_zoom;
+    let _initial_pinch_center_x = state.initial_pinch_center_x;
+    let _initial_pinch_center_y = state.initial_pinch_center_y;
+    let _initial_pan_x = state.initial_pan_x;
+    let _initial_pan_y = state.initial_pan_y;
+
     let reset_hide_timer = move || {
         show_zoom_controls.set(true);
-
         #[cfg(feature = "hydrate")]
         {
-            // Clear existing timeout
             if let Some(timeout_id) = _hide_controls_timeout.get_value() {
                 if let Some(window) = web_sys::window() {
                     window.clear_timeout_with_handle(timeout_id);
                 }
             }
-
-            // Set new timeout
             if let Some(window) = web_sys::window() {
                 let timeout_id = window
                     .set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -1051,41 +1107,52 @@ fn PhotoDetailPage() -> impl IntoView {
                         1000,
                     )
                     .ok();
-
                 _hide_controls_timeout.set_value(timeout_id);
             }
         }
     };
 
-    let toggle_fullscreen = move |_| {
-        is_fullscreen.update(|val| *val = !*val);
-        // Reset zoom and pan when closing
-        if !is_fullscreen.get() {
-            zoom_level.set(1.0);
-            pan_x.set(0.0);
-            pan_y.set(0.0);
-        }
+    // When the user enters fullscreen, kick the auto-hide timer so controls
+    // briefly show then fade — mirroring the previous behaviour.
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::prelude::Effect;
+        Effect::new(move |_| {
+            if is_fullscreen.get() {
+                reset_hide_timer();
+            }
+        });
+    }
+
+    let exit_fullscreen = move || {
+        is_fullscreen.set(false);
+        state.reset_zoom();
         show_zoom_controls.set(true);
-        reset_hide_timer();
     };
 
     let close_fullscreen = move |ev: leptos::ev::MouseEvent| {
-        // Only close if clicking the background, not the image
+        // Only close when clicking the backdrop, not the image itself.
         let target = ev.target();
         if let Some(element) =
             target.and_then(|t: web_sys::EventTarget| t.dyn_into::<web_sys::Element>().ok())
         {
             if element.class_name().contains("fullscreen-overlay") {
-                toggle_fullscreen(ev);
+                exit_fullscreen();
             }
         }
     };
 
+    let on_close_button = move |_ev: leptos::ev::MouseEvent| {
+        exit_fullscreen();
+    };
+
     let on_zoom_change = move |ev: leptos::ev::Event| {
         ev.stop_propagation();
-        let target = ev.target().unwrap();
-        let input = target.dyn_into::<web_sys::HtmlInputElement>().unwrap();
-        let new_zoom = input.value().parse::<f64>().unwrap_or(1.0);
+        let new_zoom = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .and_then(|input| input.value().parse::<f64>().ok())
+            .unwrap_or(1.0);
         zoom_level.set(new_zoom);
         if (new_zoom - 1.0).abs() < 0.01 {
             pan_x.set(0.0);
@@ -1096,35 +1163,24 @@ fn PhotoDetailPage() -> impl IntoView {
 
     let on_image_click = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
-        // Clicking doesn't zoom when already zoomed (for panning)
-        // Use the zoom slider to zoom in/out
     };
 
     let on_image_dblclick = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
         ev.prevent_default();
-        // Toggle between 1x and 2x zoom
         if (zoom_level.get() - 1.0).abs() < 0.1 {
             #[cfg(feature = "hydrate")]
             {
-                // Get the click position relative to the viewport center
                 let mouse_event = ev.unchecked_ref::<web_sys::MouseEvent>();
                 if let Some(target) = mouse_event.target() {
                     if let Some(element) = target.dyn_ref::<web_sys::Element>() {
                         let rect = element.get_bounding_client_rect();
                         let img_center_x = rect.left() + rect.width() / 2.0;
                         let img_center_y = rect.top() + rect.height() / 2.0;
-
-                        // Calculate offset from center to click point
                         let click_x = f64::from(mouse_event.client_x());
                         let click_y = f64::from(mouse_event.client_y());
-
-                        // Pan to center the clicked point (negated because we're moving the image)
-                        let offset_x = (img_center_x - click_x) * 2.0;
-                        let offset_y = (img_center_y - click_y) * 2.0;
-
-                        pan_x.set(offset_x);
-                        pan_y.set(offset_y);
+                        pan_x.set((img_center_x - click_x) * 2.0);
+                        pan_y.set((img_center_y - click_y) * 2.0);
                     }
                 }
             }
@@ -1161,7 +1217,6 @@ fn PhotoDetailPage() -> impl IntoView {
 
     let on_wheel = move |ev: leptos::ev::WheelEvent| {
         ev.prevent_default();
-
         #[cfg(feature = "hydrate")]
         {
             let delta = ev.delta_y();
@@ -1171,39 +1226,23 @@ fn PhotoDetailPage() -> impl IntoView {
             } else {
                 (old_zoom / 1.1_f64).max(1.0)
             };
-
             if (new_zoom - 1.0).abs() < 0.01 {
                 zoom_level.set(1.0);
                 pan_x.set(0.0);
                 pan_y.set(0.0);
             } else {
-                // Get mouse position relative to viewport
                 let mouse_x = f64::from(ev.client_x());
                 let mouse_y = f64::from(ev.client_y());
-
-                // Get the image element to calculate position relative to it
                 if let Some(target) = ev.target() {
                     if let Some(img) = target.dyn_ref::<web_sys::Element>() {
                         let rect = img.get_bounding_client_rect();
-
-                        // Calculate mouse position relative to the image center
                         let img_center_x = rect.left() + (rect.width() / 2.0);
                         let img_center_y = rect.top() + (rect.height() / 2.0);
-
-                        // Offset from mouse to current image center
                         let offset_x = mouse_x - img_center_x;
                         let offset_y = mouse_y - img_center_y;
-
-                        // Calculate the zoom ratio
                         let zoom_ratio = new_zoom / old_zoom;
-
-                        // Adjust pan to zoom towards cursor
-                        let current_pan_x = pan_x.get();
-                        let current_pan_y = pan_y.get();
-
-                        let new_pan_x = current_pan_x + offset_x * (1.0 - zoom_ratio);
-                        let new_pan_y = current_pan_y + offset_y * (1.0 - zoom_ratio);
-
+                        let new_pan_x = pan_x.get() + offset_x * (1.0 - zoom_ratio);
+                        let new_pan_y = pan_y.get() + offset_y * (1.0 - zoom_ratio);
                         zoom_level.set(new_zoom);
                         pan_x.set(new_pan_x);
                         pan_y.set(new_pan_y);
@@ -1214,12 +1253,11 @@ fn PhotoDetailPage() -> impl IntoView {
                     zoom_level.set(new_zoom);
                 }
             }
-
             reset_hide_timer();
         }
         #[cfg(not(feature = "hydrate"))]
         {
-            let _ = ev; // Suppress unused variable warning on SSR
+            let _ = ev;
         }
     };
 
@@ -1230,18 +1268,16 @@ fn PhotoDetailPage() -> impl IntoView {
             let touch_event = _ev.unchecked_ref::<web_sys::TouchEvent>();
             let touches = touch_event.touches();
             if touches.length() == 2 {
-                // Pinch zoom starting
                 touch_event.prevent_default();
                 let touch0 = touches.get(0).unwrap();
                 let touch1 = touches.get(1).unwrap();
                 let dx = f64::from(touch1.client_x() - touch0.client_x());
                 let dy = f64::from(touch1.client_y() - touch0.client_y());
                 let distance = (dx * dx + dy * dy).sqrt();
-
-                // Calculate the center point between the two touches
-                let center_x = (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
-                let center_y = (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
-
+                let center_x =
+                    (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
+                let center_y =
+                    (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
                 _initial_pinch_distance.set(distance);
                 _initial_zoom.set(zoom_level.get());
                 _initial_pinch_center_x.set(center_x);
@@ -1249,13 +1285,16 @@ fn PhotoDetailPage() -> impl IntoView {
                 _initial_pan_x.set(pan_x.get());
                 _initial_pan_y.set(pan_y.get());
             } else if touches.length() == 1 && zoom_level.get() > 1.0 {
-                // Single finger panning
                 touch_event.prevent_default();
                 let touch = touches.get(0).unwrap();
                 is_panning.set(true);
                 start_x.set(f64::from(touch.client_x()) - pan_x.get());
                 start_y.set(f64::from(touch.client_y()) - pan_y.get());
             }
+        }
+        #[cfg(not(feature = "hydrate"))]
+        {
+            let _ = _ev;
         }
     };
 
@@ -1266,23 +1305,19 @@ fn PhotoDetailPage() -> impl IntoView {
             let touch_event = _ev.unchecked_ref::<web_sys::TouchEvent>();
             let touches = touch_event.touches();
             if touches.length() == 2 {
-                // Pinch zoom
                 touch_event.prevent_default();
                 let touch0 = touches.get(0).unwrap();
                 let touch1 = touches.get(1).unwrap();
                 let dx = f64::from(touch1.client_x() - touch0.client_x());
                 let dy = f64::from(touch1.client_y() - touch0.client_y());
                 let distance = (dx * dx + dy * dy).sqrt();
-
                 let scale = distance / _initial_pinch_distance.get();
                 let new_zoom = (_initial_zoom.get() * scale).clamp(1.0, max_zoom.get());
-
                 if (new_zoom - 1.0).abs() < 0.01 {
                     zoom_level.set(1.0);
                     pan_x.set(0.0);
                     pan_y.set(0.0);
                 } else {
-                    // Get viewport center
                     let viewport_center_x = web_sys::window()
                         .and_then(|w| w.inner_width().ok())
                         .and_then(|w| w.as_f64())
@@ -1293,26 +1328,18 @@ fn PhotoDetailPage() -> impl IntoView {
                         .and_then(|h| h.as_f64())
                         .unwrap_or(0.0)
                         / 2.0;
-
-                    // Calculate offset from viewport center to pinch center
                     let offset_x = _initial_pinch_center_x.get() - viewport_center_x;
                     let offset_y = _initial_pinch_center_y.get() - viewport_center_y;
-
-                    // Calculate zoom ratio
                     let zoom_ratio = new_zoom / _initial_zoom.get();
-
-                    // Adjust pan to keep the pinch point stationary
                     let new_pan_x =
                         _initial_pan_x.get() * zoom_ratio - offset_x * (zoom_ratio - 1.0);
                     let new_pan_y =
                         _initial_pan_y.get() * zoom_ratio - offset_y * (zoom_ratio - 1.0);
-
                     zoom_level.set(new_zoom);
                     pan_x.set(new_pan_x);
                     pan_y.set(new_pan_y);
                 }
             } else if touches.length() == 1 && is_panning.get() && zoom_level.get() > 1.0 {
-                // Single finger panning
                 touch_event.prevent_default();
                 let touch = touches.get(0).unwrap();
                 pan_x.set(f64::from(touch.client_x()) - start_x.get());
@@ -1320,10 +1347,218 @@ fn PhotoDetailPage() -> impl IntoView {
             }
             reset_hide_timer();
         }
+        #[cfg(not(feature = "hydrate"))]
+        {
+            let _ = _ev;
+        }
     };
 
     let on_touch_end = move |_ev: leptos::ev::TouchEvent| {
         is_panning.set(false);
+    };
+
+    let transform_style = move || {
+        format!(
+            "transform: translate({}px, {}px) scale({}); cursor: {};",
+            pan_x.get(),
+            pan_y.get(),
+            zoom_level.get(),
+            if zoom_level.get() > 1.0 {
+                if is_panning.get() { "grabbing" } else { "grab" }
+            } else {
+                "default"
+            },
+        )
+    };
+
+    view! {
+        {move || {
+            if !is_fullscreen.get() {
+                return view! { <div></div> }.into_any();
+            }
+            view! {
+                <div
+                    class="fullscreen-overlay"
+                    on:click=close_fullscreen
+                    on:wheel=on_wheel
+                >
+                    <div
+                        class="fullscreen-close"
+                        class:hidden=move || !show_zoom_controls.get()
+                        on:click=on_close_button
+                    >
+                        "✕"
+                    </div>
+                    <div
+                        class="fullscreen-controls"
+                        class:hidden=move || !show_zoom_controls.get()
+                    >
+                        <div class="zoom-slider-container">
+                            <label class="zoom-label">"1×"</label>
+                            <input
+                                type="range"
+                                class="zoom-slider"
+                                min="1.0"
+                                prop:max=move || max_zoom.get()
+                                step="0.1"
+                                prop:value=move || zoom_level.get()
+                                on:input=on_zoom_change
+                            />
+                            <label class="zoom-label">
+                                {move || {
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    let zoom_int = max_zoom.get() as i32;
+                                    format!("{zoom_int}×")
+                                }}
+                            </label>
+                        </div>
+                    </div>
+                    <picture>
+                        {move || {
+                            if is_mobile() {
+                                Vec::new()
+                            } else {
+                                photo_sources_original
+                                    .get_value()
+                                    .into_iter()
+                                    .map(|source| {
+                                        view! { <source srcset=source.url type=source.mime_type /> }
+                                    })
+                                    .collect()
+                            }
+                        }}
+                        <img
+                            src=move || {
+                                if is_mobile() {
+                                    photo_url_cached.get_value()
+                                } else {
+                                    photo_url_original.get_value()
+                                }
+                            }
+                            alt=photo_title_fs.clone()
+                            width=photo_width.unwrap_or(3600)
+                            height=photo_height.unwrap_or(2400)
+                            class="fullscreen-image"
+                            style=transform_style
+                            on:click=on_image_click
+                            on:dblclick=on_image_dblclick
+                            on:mousedown=on_mouse_down
+                            on:mousemove=on_mouse_move
+                            on:mouseup=on_mouse_up
+                            on:mouseleave=on_mouse_up
+                            on:touchstart=on_touch_start
+                            on:touchmove=on_touch_move
+                            on:touchend=on_touch_end
+                        />
+                    </picture>
+                </div>
+            }
+                .into_any()
+        }}
+    }
+}
+
+#[component]
+fn PhotoDetailPage() -> impl IntoView {
+    let params = use_params::<PhotoParams>();
+    let photos = Resource::new(|| (), |()| async { get_all_gallery_photos().await });
+    let state = ZoomPanState::new();
+    let is_details_expanded = RwSignal::new(false);
+
+    // Set up keyboard navigation
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::prelude::Effect;
+        use leptos_router::hooks::use_navigate;
+
+        Effect::new(move |_| {
+            let navigate = use_navigate();
+
+            let handle_keydown = leptos::wasm_bindgen::closure::Closure::wrap(Box::new(
+                move |event: web_sys::KeyboardEvent| {
+                    let key = event.key();
+
+                    // Handle Escape key to close fullscreen
+                    if key == "Escape" && state.is_fullscreen.get() {
+                        state.is_fullscreen.set(false);
+                        state.reset_zoom();
+                        return;
+                    }
+
+                    // Get current photo list and params
+                    if let (Some(photo_list), Ok(current_params)) =
+                        (photos.get().and_then(std::result::Result::ok), params.get())
+                    {
+                        if let Some((idx, _)) = photo_list
+                            .iter()
+                            .enumerate()
+                            .find(|(_, p)| p.slug == current_params.photo)
+                        {
+                            match key.as_str() {
+                                "ArrowLeft" => {
+                                    if idx > 0 {
+                                        if let Some(prev) = photo_list.get(idx - 1) {
+                                            let url = format!(
+                                                "/gallery/{}/{}",
+                                                prev.gallery_name, prev.slug
+                                            );
+                                            navigate(&url, Default::default());
+                                        }
+                                    }
+                                }
+                                "ArrowRight" => {
+                                    if idx < photo_list.len() - 1 {
+                                        if let Some(next) = photo_list.get(idx + 1) {
+                                            let url = format!(
+                                                "/gallery/{}/{}",
+                                                next.gallery_name, next.slug
+                                            );
+                                            navigate(&url, Default::default());
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                },
+            )
+                as Box<dyn FnMut(web_sys::KeyboardEvent)>);
+
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                let _ = document.add_event_listener_with_callback(
+                    "keydown",
+                    handle_keydown.as_ref().unchecked_ref(),
+                );
+            }
+
+            // Forget the closure to keep it alive for the lifetime of the
+            // component (the listener stays registered).
+            handle_keydown.forget();
+        });
+    }
+
+    // Track viewport width for mobile detection. Initialized to a desktop
+    // default so SSR matches the first hydration paint.
+    let viewport_width = RwSignal::new(1920.0);
+
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::prelude::Effect;
+        Effect::new(move |_| {
+            if let Some(window) = web_sys::window() {
+                if let Ok(width) = window.inner_width() {
+                    if let Some(width_f64) = width.as_f64() {
+                        viewport_width.set(width_f64);
+                    }
+                }
+            }
+        });
+    }
+
+    let enter_fullscreen = move |_| {
+        state.is_fullscreen.set(true);
+        state.show_zoom_controls.set(true);
     };
 
     view! {
@@ -1364,12 +1599,6 @@ fn PhotoDetailPage() -> impl IntoView {
                     let photo_url_original = StoredValue::new(photo.original_url.clone());
                     let photo_sources_original = StoredValue::new(photo.original_sources.clone());
                     let photo_title = photo.title.clone();
-                    let photo_title_fs = photo.title.clone();
-                    let calculated_max_zoom = match (photo.width, photo.height) {
-                        (Some(w), Some(h)) if w > 8000 || h > 8000 => 20.0,
-                        _ => 10.0,
-                    };
-                    max_zoom.set(calculated_max_zoom);
                     let back_link = if photo.gallery_name == "home" {
                         "/".to_string()
                     } else {
@@ -1385,7 +1614,7 @@ fn PhotoDetailPage() -> impl IntoView {
                             <div class="photo-detail-content">
                                 <div
                                     class="photo-detail-image"
-                                    on:click=toggle_fullscreen
+                                    on:click=enter_fullscreen
                                     style="cursor: pointer;"
                                 >
                                     <picture>
@@ -1393,11 +1622,10 @@ fn PhotoDetailPage() -> impl IntoView {
                                             if is_mobile() {
                                                 Vec::new()
                                             } else {
-                                                let sources = photo_sources_original.get_value();
-                                                sources
+                                                photo_sources_original
+                                                    .get_value()
                                                     .into_iter()
                                                     .map(|source| {
-                                                        // On mobile, skip sources to avoid loading multiple images
                                                         view! { <source srcset=source.url type=source.mime_type /> }
                                                     })
                                                     .collect()
@@ -1429,189 +1657,18 @@ fn PhotoDetailPage() -> impl IntoView {
                                     >
                                         {photo_title}
                                     </h1>
-                                    <div
-                                        class="photo-exif"
-                                        class:expanded=move || is_details_expanded.get()
-                                    >
-                                        {photo
-                                            .date_taken
-                                            .as_ref()
-                                            .map(|date| {
-                                                view! { <ExifField heading="Date" value=date.clone() /> }
-                                            })}
-                                        {if let (Some(width), Some(height)) = (
-                                            photo.width,
-                                            photo.height,
-                                        ) {
-                                            let dimensions = format!("{width} × {height} px");
-                                            view! {
-                                                <ExifField heading="Dimensions" value=dimensions />
-                                            }
-                                                .into_any()
-                                        } else {
-                                            view! { <div></div> }.into_any()
-                                        }}
-                                        <CameraInfo
-                                            camera_make=photo.camera_make.clone()
-                                            camera_model=photo.camera_model.clone()
-                                        />
-                                        {photo
-                                            .lens_model
-                                            .as_ref()
-                                            .map(|lens| {
-                                                let formatted_lens = format_aperture(&strip_quotes(lens));
-                                                view! { <ExifField heading="Lens" value=formatted_lens /> }
-                                            })}
-                                        {photo
-                                            .film_stock
-                                            .as_ref()
-                                            .map(|film| {
-                                                view! {
-                                                    <ExifField heading="Film Stock" value=film.clone() />
-                                                }
-                                            })}
-                                        <PhotoSettings
-                                            focal_length=photo.focal_length.clone()
-                                            aperture=photo.aperture.clone()
-                                            shutter_speed=photo.shutter_speed.clone()
-                                            iso=photo.iso.clone()
-                                        />
-                                        {photo
-                                            .copyright
-                                            .as_ref()
-                                            .map(|copyright| {
-                                                view! {
-                                                    <ExifField heading="Copyright" value=copyright.clone() />
-                                                }
-                                            })}
-                                    </div>
+                                    <PhotoExifPanel
+                                        photo=photo.clone()
+                                        is_expanded=is_details_expanded
+                                    />
                                 </div>
                             </div>
-                            <div class="photo-navigation">
-                                {prev_photo
-                                    .map(|prev| {
-                                        view! {
-                                            <A
-                                                href=format!("/gallery/{}/{}", prev.gallery_name, prev.slug)
-                                                attr:class="nav-button nav-prev"
-                                            >
-                                                "← Previous"
-                                            </A>
-                                        }
-                                    })} <div class="photo-nav-copyright">
-                                    <CopyrightFooter />
-                                </div>
-                                {next_photo
-                                    .map(|next| {
-                                        view! {
-                                            <A
-                                                href=format!("/gallery/{}/{}", next.gallery_name, next.slug)
-                                                attr:class="nav-button nav-next"
-                                            >
-                                                "Next →"
-                                            </A>
-                                        }
-                                    })}
-                            </div>
-
-                            {move || {
-                                if is_fullscreen.get() {
-                                    let transform_style = move || {
-                                        format!(
-                                            "transform: translate({}px, {}px) scale({}); cursor: {};",
-                                            pan_x.get(),
-                                            pan_y.get(),
-                                            zoom_level.get(),
-                                            if zoom_level.get() > 1.0 {
-                                                if is_panning.get() { "grabbing" } else { "grab" }
-                                            } else {
-                                                "default"
-                                            },
-                                        )
-                                    };
-                                    view! {
-                                        <div
-                                            class="fullscreen-overlay"
-                                            on:click=close_fullscreen
-                                            on:wheel=on_wheel
-                                        >
-                                            <div
-                                                class="fullscreen-close"
-                                                class:hidden=move || !show_zoom_controls.get()
-                                                on:click=toggle_fullscreen
-                                            >
-                                                "✕"
-                                            </div>
-                                            <div
-                                                class="fullscreen-controls"
-                                                class:hidden=move || !show_zoom_controls.get()
-                                            >
-                                                <div class="zoom-slider-container">
-                                                    <label class="zoom-label">"1×"</label>
-                                                    <input
-                                                        type="range"
-                                                        class="zoom-slider"
-                                                        min="1.0"
-                                                        prop:max=move || max_zoom.get()
-                                                        step="0.1"
-                                                        prop:value=move || zoom_level.get()
-                                                        on:input=on_zoom_change
-                                                    />
-                                                    <label class="zoom-label">
-                                                        {move || {
-                                                            #[allow(clippy::cast_possible_truncation)]
-                                                            let zoom_int = max_zoom.get() as i32;
-                                                            format!("{zoom_int}×")
-                                                        }}
-                                                    </label>
-                                                </div>
-                                            </div>
-                                            <picture>
-                                                {move || {
-                                                    if is_mobile() {
-                                                        Vec::new()
-                                                    } else {
-                                                        let sources = photo_sources_original.get_value();
-                                                        sources
-                                                            .into_iter()
-                                                            .map(|source| {
-                                                                // On mobile, skip sources to avoid loading multiple images
-                                                                view! { <source srcset=source.url type=source.mime_type /> }
-                                                            })
-                                                            .collect()
-                                                    }
-                                                }}
-                                                <img
-                                                    src=move || {
-                                                        if is_mobile() {
-                                                            photo_url_cached.get_value()
-                                                        } else {
-                                                            photo_url_original.get_value()
-                                                        }
-                                                    }
-                                                    alt=photo_title_fs.clone()
-                                                    width=photo.width.unwrap_or(3600)
-                                                    height=photo.height.unwrap_or(2400)
-                                                    class="fullscreen-image"
-                                                    style=transform_style
-                                                    on:click=on_image_click
-                                                    on:dblclick=on_image_dblclick
-                                                    on:mousedown=on_mouse_down
-                                                    on:mousemove=on_mouse_move
-                                                    on:mouseup=on_mouse_up
-                                                    on:mouseleave=on_mouse_up
-                                                    on:touchstart=on_touch_start
-                                                    on:touchmove=on_touch_move
-                                                    on:touchend=on_touch_end
-                                                />
-                                            </picture>
-                                        </div>
-                                    }
-                                        .into_any()
-                                } else {
-                                    view! { <div></div> }.into_any()
-                                }
-                            }}
+                            <PhotoNavigationButtons prev_photo=prev_photo next_photo=next_photo />
+                            <FullscreenViewer
+                                photo=photo
+                                state=state
+                                viewport_width=viewport_width
+                            />
                         </div>
                     }
                         .into_any()

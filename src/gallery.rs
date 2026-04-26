@@ -1,7 +1,12 @@
 use crate::types::{GalleryInfo, ImageSource, PhotoFocalPointConfig, PhotoInfo};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+static LEADING_NUMBER_DASH: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[\d.]+\s*-\s*").expect("valid regex"));
 
 /// URL-encode a path component, preserving forward slashes
 fn url_encode_path(path: &str) -> String {
@@ -116,10 +121,7 @@ pub fn discover_gallery_directories() -> Vec<String> {
 ///          "42-mountain.jpg" -> "mountain.jpg"
 ///          "1.5 - photo.jpg" -> "photo.jpg"
 fn strip_leading_number_and_dash(filename: &str) -> String {
-    // Match patterns like "1 - ", "42-", "003 - ", "1.5-", "2.3.4 - ", etc.
-    // Allows digits with optional periods in between
-    let re = regex::Regex::new(r"^[\d.]+\s*-\s*").unwrap();
-    re.replace(filename, "").to_string()
+    LEADING_NUMBER_DASH.replace(filename, "").into_owned()
 }
 
 /// Count images recursively in a directory
@@ -190,20 +192,7 @@ fn find_images_recursive_with_gallery(
             .replace(['-', '_'], " ");
 
         // Extract EXIF data from primary image
-        let (
-            width,
-            height,
-            date_taken,
-            camera_make,
-            camera_model,
-            lens_model,
-            focal_length,
-            aperture,
-            shutter_speed,
-            iso,
-            film_stock,
-            copyright,
-        ) = extract_exif_data(&primary_full_path);
+        let exif = extract_exif_data(&primary_full_path);
 
         // Build sources for compressed versions
         let (img_width, img_quality) = get_default_image_params();
@@ -263,18 +252,18 @@ fn find_images_recursive_with_gallery(
             slug,
             gallery_name: gallery_name.to_string(),
             subfolder,
-            width,
-            height,
-            date_taken,
-            camera_make,
-            camera_model,
-            lens_model,
-            focal_length,
-            aperture,
-            shutter_speed,
-            iso,
-            film_stock,
-            copyright,
+            width: exif.width,
+            height: exif.height,
+            date_taken: exif.date_taken,
+            camera_make: exif.camera_make,
+            camera_model: exif.camera_model,
+            lens_model: exif.lens_model,
+            focal_length: exif.focal_length,
+            aperture: exif.aperture,
+            shutter_speed: exif.shutter_speed,
+            iso: exif.iso,
+            film_stock: exif.film_stock,
+            copyright: exif.copyright,
             focal_point,
         });
     }
@@ -340,158 +329,26 @@ pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<Ph
         .map(|n| n.to_string_lossy().to_lowercase().replace(' ', "-"))
         .unwrap_or_else(|| "unknown".to_string());
 
-    find_images_for_gallery_with_name(dir, base_root, photos, &gallery_name);
+    find_images_recursive_with_gallery(dir, base_root, photos, &gallery_name);
 }
 
-/// Find images for a specific gallery with explicit gallery name
-fn find_images_for_gallery_with_name(
-    dir: &Path,
-    base_root: &Path,
-    photos: &mut Vec<PhotoInfo>,
-    gallery_name: &str,
-) {
-    // First pass: collect all image files and group by basename
-    let mut image_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    collect_image_files(dir, base_root, &mut image_groups);
-
-    // Second pass: create PhotoInfo for each group
-    for (_base_path, variants) in image_groups {
-        // Sort variants by priority (modern formats first for sources)
-        let mut sorted_variants = variants.clone();
-        sorted_variants.sort_by(|a, b| {
-            let priority_a = format_priority(&a.1);
-            let priority_b = format_priority(&b.1);
-            priority_a.cmp(&priority_b)
-        });
-
-        // Use the first variant as the primary image (fallback)
-        let (primary_relative_path, primary_ext) = &sorted_variants[0];
-        let primary_full_path = base_root.join(primary_relative_path);
-
-        // Extract metadata from the primary image
-        let filename_str = primary_full_path
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        // Create slug from filename (without extension), stripping leading numbers
-        let slug = strip_leading_number_and_dash(&filename_str)
-            .trim_end_matches(&format!(".{}", primary_ext))
-            .to_lowercase()
-            .replace([' ', '_'], "-");
-
-        // Strip leading numbers and dashes, then convert to title
-        let title = strip_leading_number_and_dash(&filename_str)
-            .trim_end_matches(&format!(".{}", primary_ext))
-            .replace(['-', '_'], " ");
-
-        // Extract EXIF data from primary image
-        let (
-            width,
-            height,
-            date_taken,
-            camera_make,
-            camera_model,
-            lens_model,
-            focal_length,
-            aperture,
-            shutter_speed,
-            iso,
-            film_stock,
-            copyright,
-        ) = extract_exif_data(&primary_full_path);
-
-        // Build sources for compressed versions
-        let (img_width, img_quality) = get_default_image_params();
-        let mut sources = Vec::new();
-        let mut original_sources = Vec::new();
-
-        for (relative_path, ext) in &sorted_variants {
-            if relative_path != primary_relative_path {
-                // Add as alternative source (URL-encode the path)
-                let encoded_path = url_encode_path(relative_path);
-                let compressed_url = format!(
-                    "/images/compressed/{}?width={}&quality={}",
-                    encoded_path, img_width, img_quality
-                );
-                let original_url = format!("/images/{}", encoded_path);
-                let mime_type = get_mime_type(ext).to_string();
-
-                sources.push(ImageSource {
-                    url: compressed_url,
-                    mime_type: "image/webp".to_string(), // Compressed endpoint always returns WebP
-                });
-                original_sources.push(ImageSource {
-                    url: original_url,
-                    mime_type,
-                });
-            }
-        }
-
-        // Primary image URLs (URL-encode the path)
-        let encoded_primary_path = url_encode_path(primary_relative_path);
-        let compressed_url = format!(
-            "/images/compressed/{}?width={}&quality={}",
-            encoded_primary_path, img_width, img_quality
-        );
-        let original_url = format!("/images/{}", encoded_primary_path);
-
-        // Extract subfolder from relative path
-        let subfolder = Path::new(primary_relative_path).parent().and_then(|p| {
-            let path_str = p.to_string_lossy().to_string();
-            if path_str.is_empty() || path_str == "." {
-                None
-            } else {
-                Some(path_str)
-            }
-        });
-
-        // Load focal point from photo-specific TOML file
-        let focal_point = load_photo_focal_point(&primary_full_path);
-
-        photos.push(PhotoInfo {
-            url: compressed_url,
-            original_url,
-            sources,
-            original_sources,
-            title,
-            filename: filename_str,
-            slug,
-            gallery_name: gallery_name.to_string(),
-            subfolder,
-            width,
-            height,
-            date_taken,
-            camera_make,
-            camera_model,
-            lens_model,
-            focal_length,
-            aperture,
-            shutter_speed,
-            iso,
-            film_stock,
-            copyright,
-            focal_point,
-        });
-    }
+#[derive(Default)]
+struct ExifData {
+    width: Option<u32>,
+    height: Option<u32>,
+    date_taken: Option<String>,
+    camera_make: Option<String>,
+    camera_model: Option<String>,
+    lens_model: Option<String>,
+    focal_length: Option<String>,
+    aperture: Option<String>,
+    shutter_speed: Option<String>,
+    iso: Option<String>,
+    film_stock: Option<String>,
+    copyright: Option<String>,
 }
 
-type ExifData = (
-    Option<u32>,    // width
-    Option<u32>,    // height
-    Option<String>, // date_taken
-    Option<String>, // camera_make
-    Option<String>, // camera_model
-    Option<String>, // lens_model
-    Option<String>, // focal_length
-    Option<String>, // aperture
-    Option<String>, // shutter_speed
-    Option<String>, // iso
-    Option<String>, // film_stock
-    Option<String>, // copyright
-);
-
-/// Read the XMP packet from a JPEG file, scanning at most the first ~1MB.
+/// Read the XMP packet from a JPEG/TIFF file, scanning at most the first ~1MB.
 /// XMP lives in an APP1 segment near the start of the file, so a partial
 /// read is sufficient and avoids loading multi-MB photos in full.
 fn read_xmp_packet(path: &Path) -> Option<String> {
@@ -510,13 +367,41 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Extract the value of an XML attribute like `name="value"` from an XMP string.
-fn xmp_attr_value<'a>(xmp: &'a str, name: &str) -> Option<&'a str> {
+/// Decode the five predefined XML entities. Numeric character references
+/// (`&#nn;`, `&#xnn;`) are not used by XMP attribute writers we care about,
+/// so we don't bother.
+fn decode_xml_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Extract the value of an XML attribute like `name="value"` from an XMP
+/// string and decode XML entities. Returns `None` if absent.
+fn xmp_attr_value(xmp: &str, name: &str) -> Option<String> {
     let key = format!("{name}=\"");
     let start = xmp.find(&key)? + key.len();
     let rest = &xmp[start..];
     let end = rest.find('"')?;
-    Some(&rest[..end])
+    Some(decode_xml_entities(&rest[..end]))
+}
+
+/// Returns true for file extensions that can carry an XMP packet inline.
+/// Other formats (AVIF, WebP, PNG, JXL, GIF) either don't or use a separate
+/// container; skipping them avoids reading the file altogether.
+fn extension_supports_xmp(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("jpg" | "jpeg" | "tif" | "tiff")
+    )
 }
 
 /// Try to recover a human-readable lens name from XMP metadata. Lightroom
@@ -526,6 +411,9 @@ fn xmp_attr_value<'a>(xmp: &'a str, name: &str) -> Option<&'a str> {
 /// when XMP holds only a focal-range string that the EXIF `LensModel` tag
 /// already exposes.
 fn extract_lens_name_from_xmp(path: &Path) -> Option<String> {
+    if !extension_supports_xmp(path) {
+        return None;
+    }
     let xmp = read_xmp_packet(path)?;
 
     if let Some(raw) = xmp_attr_value(&xmp, "crs:LensProfileName") {
@@ -561,16 +449,12 @@ fn extract_exif_data(path: &Path) -> ExifData {
     use std::io::BufReader;
 
     let Ok(file) = File::open(path) else {
-        return (
-            None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        return ExifData::default();
     };
 
     let mut reader = BufReader::new(file);
     let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut reader) else {
-        return (
-            None, None, None, None, None, None, None, None, None, None, None, None,
-        );
+        return ExifData::default();
     };
 
     let mut width = exif_reader
@@ -731,7 +615,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
             _ => Some(f.display_value().to_string()),
         });
 
-    (
+    ExifData {
         width,
         height,
         date_taken,
@@ -744,7 +628,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
         iso,
         film_stock,
         copyright,
-    )
+    }
 }
 
 /// Load gallery configuration from a TOML file
@@ -1279,33 +1163,48 @@ mod tests {
     #[test]
     fn test_extract_exif_data_nonexistent_file() {
         let nonexistent = Path::new("/tmp/nonexistent_image_12345.jpg");
-        let (
-            width,
-            height,
-            date,
-            make,
-            model,
-            lens,
-            focal,
-            aperture,
-            shutter,
-            iso,
-            film_stock,
-            copyright,
-        ) = extract_exif_data(nonexistent);
+        let exif = extract_exif_data(nonexistent);
 
-        assert_eq!(width, None);
-        assert_eq!(height, None);
-        assert_eq!(date, None);
-        assert_eq!(make, None);
-        assert_eq!(model, None);
-        assert_eq!(lens, None);
-        assert_eq!(focal, None);
-        assert_eq!(aperture, None);
-        assert_eq!(shutter, None);
-        assert_eq!(iso, None);
-        assert_eq!(film_stock, None);
-        assert_eq!(copyright, None);
+        assert_eq!(exif.width, None);
+        assert_eq!(exif.height, None);
+        assert_eq!(exif.date_taken, None);
+        assert_eq!(exif.camera_make, None);
+        assert_eq!(exif.camera_model, None);
+        assert_eq!(exif.lens_model, None);
+        assert_eq!(exif.focal_length, None);
+        assert_eq!(exif.aperture, None);
+        assert_eq!(exif.shutter_speed, None);
+        assert_eq!(exif.iso, None);
+        assert_eq!(exif.film_stock, None);
+        assert_eq!(exif.copyright, None);
+    }
+
+    #[test]
+    fn test_xmp_attr_value_decodes_entities() {
+        let xmp = r#"<x:xmpmeta>foo:Bar="hello &amp; world &quot;ok&quot;" baz:Q="x"</x:xmpmeta>"#;
+        assert_eq!(
+            xmp_attr_value(xmp, "foo:Bar").as_deref(),
+            Some(r#"hello & world "ok""#)
+        );
+        assert_eq!(xmp_attr_value(xmp, "baz:Q").as_deref(), Some("x"));
+        assert_eq!(xmp_attr_value(xmp, "missing"), None);
+    }
+
+    #[test]
+    fn test_extension_supports_xmp_filters_non_jpeg() {
+        assert!(extension_supports_xmp(Path::new("a.jpg")));
+        assert!(extension_supports_xmp(Path::new("a.JPEG")));
+        assert!(extension_supports_xmp(Path::new("a.tif")));
+        assert!(!extension_supports_xmp(Path::new("a.webp")));
+        assert!(!extension_supports_xmp(Path::new("a.avif")));
+        assert!(!extension_supports_xmp(Path::new("a.png")));
+        assert!(!extension_supports_xmp(Path::new("noext")));
+    }
+
+    #[test]
+    fn test_decode_xml_entities_no_entities_passthrough() {
+        let s = "no entities here";
+        assert_eq!(decode_xml_entities(s), s);
     }
 
     #[test]
@@ -1458,5 +1357,144 @@ mod tests {
         assert_eq!(gallery.name, "Test Gallery");
         assert_eq!(gallery.slug, "test-gallery");
         assert_eq!(gallery.photo_count, 10);
+    }
+
+    // -- Synthetic JPEG fixtures for EXIF/XMP extraction tests ---------
+
+    /// Build a JPEG-shaped byte stream with optional EXIF and/or XMP APP1
+    /// segments. kamadak-exif and our XMP scanner only parse markers near
+    /// the start of the file, so no compressed image body is needed.
+    fn build_synth_jpeg(exif: Option<&[u8]>, xmp: Option<&[u8]>) -> Vec<u8> {
+        let mut out = vec![0xff, 0xd8]; // SOI
+        if let Some(exif_bytes) = exif {
+            out.extend_from_slice(&[0xff, 0xe1]);
+            let header = b"Exif\0\0";
+            // length field includes itself (2) + header + payload
+            let len = u16::try_from(2 + header.len() + exif_bytes.len()).unwrap();
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(header);
+            out.extend_from_slice(exif_bytes);
+        }
+        if let Some(xmp_bytes) = xmp {
+            out.extend_from_slice(&[0xff, 0xe1]);
+            let id = b"http://ns.adobe.com/xap/1.0/\0";
+            let len = u16::try_from(2 + id.len() + xmp_bytes.len()).unwrap();
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(id);
+            out.extend_from_slice(xmp_bytes);
+        }
+        out.extend_from_slice(&[0xff, 0xd9]); // EOI
+        out
+    }
+
+    fn write_ifd_entry(buf: &mut Vec<u8>, tag: u16, ty: u16, count: u32, value: u32) {
+        buf.extend_from_slice(&tag.to_le_bytes());
+        buf.extend_from_slice(&ty.to_le_bytes());
+        buf.extend_from_slice(&count.to_le_bytes());
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+
+    /// Minimal little-endian TIFF block with `Make` and `Model` strings in
+    /// IFD0. Both ASCII values live in a data pool just past the IFD.
+    fn build_tiff_make_model(make: &str, model: &str) -> Vec<u8> {
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II\x2a\x00");
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at offset 8
+
+        let entry_count: u16 = 2;
+        // Header (8) + count (2) + 2 entries × 12 + next-IFD ptr (4) = 38
+        let data_pool_start: u32 = 8 + 2 + 24 + 4;
+
+        let make_bytes: Vec<u8> = format!("{}\0", make).into_bytes();
+        let model_bytes: Vec<u8> = format!("{}\0", model).into_bytes();
+        let make_off = data_pool_start;
+        let model_off = data_pool_start + u32::try_from(make_bytes.len()).unwrap();
+
+        tiff.extend_from_slice(&entry_count.to_le_bytes());
+        write_ifd_entry(&mut tiff, 0x010f, 2, make_bytes.len() as u32, make_off); // Make
+        write_ifd_entry(&mut tiff, 0x0110, 2, model_bytes.len() as u32, model_off); // Model
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+        tiff.extend_from_slice(&make_bytes);
+        tiff.extend_from_slice(&model_bytes);
+        tiff
+    }
+
+    #[test]
+    fn extract_exif_data_reads_make_and_model_from_synth_jpeg() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        let tiff = build_tiff_make_model("ACME", "X100");
+        let jpeg = build_synth_jpeg(Some(&tiff), None);
+        fs::write(&path, &jpeg).unwrap();
+
+        let exif = extract_exif_data(&path);
+        // kamadak-exif wraps ASCII values in surrounding quotes via
+        // display_value(); strip_quotes() in app.rs handles that. Here we
+        // just check the inner string is present.
+        let make = exif.camera_make.expect("Make should parse");
+        let model = exif.camera_model.expect("Model should parse");
+        assert!(make.contains("ACME"), "got: {make}");
+        assert!(model.contains("X100"), "got: {model}");
+    }
+
+    #[test]
+    fn extract_lens_name_from_xmp_strips_adobe_lens_profile_wrapper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:crs="x">
+            <rdf:Description crs:LensProfileName="Adobe (Test 35mm f/1.4) v3"/>
+            </x:xmpmeta>"#;
+        let jpeg = build_synth_jpeg(None, Some(xmp));
+        fs::write(&path, &jpeg).unwrap();
+
+        let name = extract_lens_name_from_xmp(&path);
+        assert_eq!(name.as_deref(), Some("Test 35mm f/1.4"));
+    }
+
+    #[test]
+    fn extract_lens_name_from_xmp_uses_aux_lens_when_letter_prefixed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        let xmp = br#"<x:xmpmeta>aux:Lens="Acme 50mm f/2"</x:xmpmeta>"#;
+        let jpeg = build_synth_jpeg(None, Some(xmp));
+        fs::write(&path, &jpeg).unwrap();
+
+        let name = extract_lens_name_from_xmp(&path);
+        assert_eq!(name.as_deref(), Some("Acme 50mm f/2"));
+    }
+
+    #[test]
+    fn extract_lens_name_from_xmp_skips_aux_lens_when_focal_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        let xmp = br#"<x:xmpmeta>aux:Lens="50.0 mm f/1.8"</x:xmpmeta>"#;
+        let jpeg = build_synth_jpeg(None, Some(xmp));
+        fs::write(&path, &jpeg).unwrap();
+
+        assert!(extract_lens_name_from_xmp(&path).is_none());
+    }
+
+    #[test]
+    fn extract_lens_name_from_xmp_skips_non_jpeg_extensions() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.webp");
+        let xmp = br#"<x:xmpmeta>aux:Lens="Acme 50mm"</x:xmpmeta>"#;
+        let jpeg = build_synth_jpeg(None, Some(xmp));
+        fs::write(&path, &jpeg).unwrap();
+
+        assert!(
+            extract_lens_name_from_xmp(&path).is_none(),
+            "should not read XMP from non-JPEG"
+        );
+    }
+
+    #[test]
+    fn extract_lens_name_from_xmp_returns_none_when_packet_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        let jpeg = build_synth_jpeg(None, None);
+        fs::write(&path, &jpeg).unwrap();
+        assert!(extract_lens_name_from_xmp(&path).is_none());
     }
 }

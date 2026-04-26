@@ -1,3 +1,8 @@
+// `#![recursion_limit]` is per-crate; the bin target needs its own bump
+// because main.rs references the deeply-nested view tree types from the
+// lib via `portfolio::app::*`.
+#![recursion_limit = "512"]
+
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
@@ -5,7 +10,7 @@ async fn main() {
         Router,
         extract::{Path, Query},
         http::{StatusCode, header},
-        response::{IntoResponse, Response},
+        response::IntoResponse,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
@@ -13,106 +18,111 @@ async fn main() {
     use portfolio::app::*;
     use portfolio::image_cache::{cleanup_cache, prewarm_cache, process_and_cache_image};
     use portfolio::image_params::ImageParams;
+    use std::sync::Arc;
     use tower::ServiceBuilder;
     use tower_http::{
         compression::CompressionLayer, services::ServeDir, set_header::SetResponseHeaderLayer,
     };
 
-    async fn serve_compressed_image(
-        Path(image_path): Path<String>,
-        Query(params): Query<ImageParams>,
-    ) -> Response {
-        // Validate parameters
-        let (width, quality) = match params.validate() {
-            Ok(values) => values,
-            Err(err_msg) => {
-                return (StatusCode::BAD_REQUEST, err_msg).into_response();
-            }
-        };
-
-        let images_dir = std::env::var("IMAGES_DIR").unwrap_or_else(|_| {
-            if std::path::Path::new("public/images").exists() {
-                "public/images".to_string()
-            } else {
-                "./images".to_string()
-            }
-        });
-
-        let cache_dir = std::env::var("IMAGE_CACHE_DIR").unwrap_or_else(|_| {
-            if std::path::Path::new("public/cache").exists() {
-                "public/cache".to_string()
-            } else {
-                "./cache".to_string()
-            }
-        });
-
-        // Strip extension from image_path to find any matching source file
-        let path_without_ext = if let Some(dot_pos) = image_path.rfind('.') {
-            &image_path[..dot_pos]
-        } else {
-            &image_path
-        };
-
-        // Use the shared processing function
-        match process_and_cache_image(&images_dir, &cache_dir, path_without_ext, width, quality) {
-            Some(webp_data) => {
-                log!("Serving image: {}", image_path);
-                (
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, "image/webp"),
-                        (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                    ],
-                    webp_data,
-                )
-                    .into_response()
-            }
-            None => {
-                log!("Failed to process image: {}", image_path);
-                (
-                    StatusCode::NOT_FOUND,
-                    "Image not found or failed to process",
-                )
-                    .into_response()
+    /// Resolve a directory path from an env var, falling back to the first
+    /// existing path in `fallbacks` (last entry is used if none exist).
+    fn resolve_dir(env_var: &str, fallbacks: &[&str]) -> String {
+        if let Ok(val) = std::env::var(env_var) {
+            return val;
+        }
+        for candidate in fallbacks {
+            if std::path::Path::new(candidate).exists() {
+                return (*candidate).to_string();
             }
         }
+        fallbacks
+            .last()
+            .copied()
+            .unwrap_or(".")
+            .to_string()
     }
 
     let conf = get_configuration(None).unwrap();
     let addr = conf.leptos_options.site_addr;
     let leptos_options = conf.leptos_options;
-    // Generate the list of routes in your Leptos App
     let routes = generate_route_list(App);
 
-    // Get images directory path from environment or use default
-    let images_dir = std::env::var("IMAGES_DIR").unwrap_or_else(|_| {
-        if std::path::Path::new("public/images").exists() {
-            "public/images".to_string()
-        } else {
-            "./images".to_string()
-        }
-    });
-
-    // Get content directory path from environment or use default
-    let content_dir = std::env::var("ABOUT_CONTENT_PATH").unwrap_or_else(|_| {
-        if std::path::Path::new("public/content").exists() {
-            "public/content".to_string()
-        } else {
-            "./content".to_string()
-        }
-    });
+    let images_dir = resolve_dir("IMAGES_DIR", &["public/images", "./images"]);
+    let content_dir = resolve_dir("ABOUT_CONTENT_PATH", &["public/content", "./content"]);
+    let cache_dir = resolve_dir("IMAGE_CACHE_DIR", &["public/cache", "./cache"]);
 
     log!("Serving images from: {}", images_dir);
     log!("Serving content from: {}", content_dir);
 
-    // Get cache directory path
-    let cache_dir = std::env::var("IMAGE_CACHE_DIR").unwrap_or_else(|_| {
-        if std::path::Path::new("public/cache").exists() {
-            "public/cache".to_string()
-        } else {
-            "./cache".to_string()
+    // Closure captures the Arc'd dirs so the handler doesn't re-resolve them
+    // on every request. Image processing is CPU/IO heavy; offload to the
+    // blocking pool so it doesn't tie up tokio worker threads.
+    let images_dir_arc: Arc<str> = Arc::from(images_dir.as_str());
+    let cache_dir_arc: Arc<str> = Arc::from(cache_dir.as_str());
+
+    let serve_compressed_image = {
+        let images_dir = Arc::clone(&images_dir_arc);
+        let cache_dir = Arc::clone(&cache_dir_arc);
+        move |Path(image_path): Path<String>, Query(params): Query<ImageParams>| {
+            let images_dir = Arc::clone(&images_dir);
+            let cache_dir = Arc::clone(&cache_dir);
+            async move {
+                let (width, quality) = match params.validate() {
+                    Ok(values) => values,
+                    Err(err_msg) => {
+                        return (StatusCode::BAD_REQUEST, err_msg).into_response();
+                    }
+                };
+
+                let path_without_ext = match image_path.rfind('.') {
+                    Some(dot) => image_path[..dot].to_string(),
+                    None => image_path.clone(),
+                };
+
+                let result = tokio::task::spawn_blocking(move || {
+                    process_and_cache_image(
+                        &images_dir,
+                        &cache_dir,
+                        &path_without_ext,
+                        width,
+                        quality,
+                    )
+                })
+                .await;
+
+                match result {
+                    Ok(Some(webp_data)) => {
+                        log!("Serving image: {}", image_path);
+                        (
+                            StatusCode::OK,
+                            [
+                                (header::CONTENT_TYPE, "image/webp"),
+                                (
+                                    header::CACHE_CONTROL,
+                                    "public, max-age=31536000, immutable",
+                                ),
+                            ],
+                            webp_data,
+                        )
+                            .into_response()
+                    }
+                    Ok(None) => {
+                        log!("Failed to process image: {}", image_path);
+                        (
+                            StatusCode::NOT_FOUND,
+                            "Image not found or failed to process",
+                        )
+                            .into_response()
+                    }
+                    Err(err) => {
+                        log!("Image worker panicked: {err}");
+                        (StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed")
+                            .into_response()
+                    }
+                }
+            }
         }
-    });
+    };
 
     // Clean up orphaned cache files and pre-generate cache in background (async, non-blocking)
     let images_dir_clone = images_dir.clone();
@@ -125,6 +135,9 @@ async fn main() {
         // Pre-warm the all-photos cache for faster photo detail page loads
         portfolio::server::prewarm_all_photos_cache();
     });
+
+    // Periodic in-memory cache sweep (mosaic + gallery TTLs). Off the request path.
+    portfolio::server::spawn_cache_sweeper();
 
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {

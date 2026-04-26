@@ -23,9 +23,13 @@ pub fn process_and_cache_image(
     // Find the actual file with any supported extension
     let full_path = find_image_file(images_dir, path_without_ext, &supported_extensions)?;
 
-    // Cache filename without timestamp - makes cache persistent
+    // Cache filename without timestamp - makes cache persistent. The `_l1`
+    // suffix is an encoder-version tag: it changed when we switched from
+    // the `image` crate's lossless WebP encoder to libwebp lossy. Bumping
+    // this string invalidates older cache entries automatically (they
+    // don't match the new name; the orphan sweep removes them in time).
     let cache_filename = format!(
-        "{}_w{}_q{}.webp",
+        "{}_w{}_q{}_l1.webp",
         path_without_ext.replace(['/', '\\'], "_"),
         width,
         quality
@@ -39,7 +43,7 @@ pub fn process_and_cache_image(
     }
 
     // Process the image
-    let webp_data = process_image(&full_path, width)?;
+    let webp_data = process_image(&full_path, width, quality)?;
 
     // Save to cache
     save_to_cache(cache_dir, &cache_path, &webp_data);
@@ -47,18 +51,25 @@ pub fn process_and_cache_image(
     Some(webp_data)
 }
 
-/// Find an image file with any of the supported extensions
+/// Find an image file with any of the supported extensions, refusing any
+/// path that resolves outside `images_dir` (defends against `..`-style
+/// traversal in the URL path).
 fn find_image_file(
     images_dir: &str,
     path_without_ext: &str,
     extensions: &[&str],
 ) -> Option<PathBuf> {
+    let images_root = std::path::PathBuf::from(images_dir).canonicalize().ok()?;
     extensions
         .iter()
-        .map(|ext| {
-            std::path::PathBuf::from(images_dir).join(format!("{}.{}", path_without_ext, ext))
+        .filter_map(|ext| {
+            let candidate = images_root.join(format!("{}.{}", path_without_ext, ext));
+            // canonicalize() requires the file to exist; that doubles as an
+            // existence check.
+            let resolved = candidate.canonicalize().ok()?;
+            resolved.starts_with(&images_root).then_some(resolved)
         })
-        .find(|path| path.exists())
+        .next()
 }
 
 /// Try to use a cached image if it exists and is up-to-date
@@ -87,7 +98,7 @@ fn try_use_cached_image(source_path: &PathBuf, cache_path: &PathBuf) -> Option<V
 }
 
 /// Process an image: load, resize, and convert to WebP
-fn process_image(full_path: &PathBuf, width: u32) -> Option<Vec<u8>> {
+fn process_image(full_path: &PathBuf, width: u32, quality: u8) -> Option<Vec<u8>> {
     // Load the image (handle JXL specially)
     let img = if full_path.extension().and_then(|e| e.to_str()) == Some("jxl") {
         load_jxl_image(full_path)?
@@ -103,7 +114,7 @@ fn process_image(full_path: &PathBuf, width: u32) -> Option<Vec<u8>> {
     };
 
     // Convert to WebP
-    convert_to_webp(&img)
+    convert_to_webp(&img, quality)
 }
 
 /// Load a JXL image using jxl-oxide
@@ -128,26 +139,42 @@ fn load_standard_image(path: &PathBuf) -> Option<image::DynamicImage> {
         .and_then(|r| r.ok())
 }
 
-/// Convert an image to WebP format
-fn convert_to_webp(img: &image::DynamicImage) -> Option<Vec<u8>> {
-    let mut webp_data = Vec::new();
-    img.write_to(
-        &mut std::io::Cursor::new(&mut webp_data),
-        image::ImageFormat::WebP,
-    )
-    .ok()?;
-    Some(webp_data)
+/// Convert an image to lossy WebP at the given quality (0-100). Uses
+/// libwebp via the `webp` crate because the `image` crate's built-in
+/// WebP encoder is lossless-only.
+fn convert_to_webp(img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
+    // libwebp expects RGB or RGBA; convert to RGB8 for opaque images and
+    // RGBA8 only when there's an alpha channel.
+    let encoder = if img.color().has_alpha() {
+        let rgba = img.to_rgba8();
+        webp::Encoder::from_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+            .encode(f32::from(quality))
+    } else {
+        let rgb = img.to_rgb8();
+        webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height())
+            .encode(f32::from(quality))
+    };
+    Some(encoder.to_vec())
 }
 
-/// Save processed image data to cache
+/// Save processed image data to cache. Failures (full disk, read-only
+/// cache dir, …) are logged but otherwise non-fatal: the image was still
+/// produced for this request, only the cache speedup is lost.
 fn save_to_cache(cache_dir: &str, cache_path: &PathBuf, data: &[u8]) {
     use std::fs;
     use std::io::Write;
 
-    if fs::create_dir_all(cache_dir).is_ok() {
-        if let Ok(mut file) = fs::File::create(cache_path) {
-            let _ = file.write_all(data);
+    if let Err(err) = fs::create_dir_all(cache_dir) {
+        log!("cache: create_dir_all({}) failed: {err}", cache_dir);
+        return;
+    }
+    match fs::File::create(cache_path) {
+        Ok(mut file) => {
+            if let Err(err) = file.write_all(data) {
+                log!("cache: write {} failed: {err}", cache_path.display());
+            }
         }
+        Err(err) => log!("cache: create {} failed: {err}", cache_path.display()),
     }
 }
 
@@ -362,5 +389,134 @@ fn collect_image_paths_recursive(dir: &std::path::Path, base: &str, paths: &mut 
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{Duration, SystemTime};
+    use tempfile::TempDir;
+
+    fn write_jpeg(path: &std::path::Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, bytes).unwrap();
+    }
+
+    /// 2-byte file is enough for `path.exists()` checks; we never decode it
+    /// in these tests.
+    const STUB: &[u8] = b"\xff\xd8";
+
+    #[test]
+    fn find_image_file_finds_existing_extension() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path();
+        write_jpeg(&images.join("foo/bar.jpg"), STUB);
+
+        let found = find_image_file(images.to_str().unwrap(), "foo/bar", &["jpg", "png"]);
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert!(found.ends_with("foo/bar.jpg"));
+    }
+
+    #[test]
+    fn find_image_file_returns_none_for_nonexistent() {
+        let dir = TempDir::new().unwrap();
+        let found = find_image_file(dir.path().to_str().unwrap(), "missing", &["jpg"]);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn find_image_file_rejects_path_traversal() {
+        // Set up:  <root>/inside/inside.jpg   (legitimate)
+        //         <root>/outside.jpg          (must NOT be reachable)
+        let dir = TempDir::new().unwrap();
+        let inside = dir.path().join("inside");
+        fs::create_dir_all(&inside).unwrap();
+        write_jpeg(&inside.join("inside.jpg"), STUB);
+        write_jpeg(&dir.path().join("outside.jpg"), STUB);
+
+        // Sanity: legitimate path resolves.
+        assert!(find_image_file(inside.to_str().unwrap(), "inside", &["jpg"]).is_some());
+
+        // Traversal: from `<root>/inside` try to reach `../outside` — would
+        // resolve to `<root>/outside.jpg` which is OUTSIDE the images_dir.
+        let escape = find_image_file(inside.to_str().unwrap(), "../outside", &["jpg"]);
+        assert!(escape.is_none(), "traversal escape was not blocked");
+    }
+
+    #[test]
+    fn try_use_cached_image_returns_data_when_cache_newer() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.jpg");
+        let cache = dir.path().join("source.webp");
+        fs::write(&source, b"source").unwrap();
+        // Write source first, then cache — cache will have the later mtime.
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&cache, b"cached").unwrap();
+
+        let data = try_use_cached_image(&source, &cache);
+        assert_eq!(data.as_deref(), Some(b"cached".as_slice()));
+    }
+
+    #[test]
+    fn try_use_cached_image_misses_when_source_newer() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.jpg");
+        let cache = dir.path().join("source.webp");
+        fs::write(&cache, b"cached").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&source, b"source").unwrap();
+
+        assert!(try_use_cached_image(&source, &cache).is_none());
+    }
+
+    #[test]
+    fn try_use_cached_image_misses_when_cache_absent() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.jpg");
+        let cache = dir.path().join("source.webp");
+        fs::write(&source, b"source").unwrap();
+        // No cache file written.
+        assert!(try_use_cached_image(&source, &cache).is_none());
+    }
+
+    #[test]
+    fn save_to_cache_creates_dir_and_writes_bytes() {
+        let dir = TempDir::new().unwrap();
+        let cache_dir = dir.path().join("nested/cache");
+        let cache_path = cache_dir.join("foo.webp");
+        save_to_cache(cache_dir.to_str().unwrap(), &cache_path, b"webp-data");
+        assert_eq!(fs::read(&cache_path).unwrap(), b"webp-data");
+    }
+
+    #[test]
+    fn source_image_exists_finds_any_supported_extension() {
+        let dir = TempDir::new().unwrap();
+        write_jpeg(&dir.path().join("a/b.png"), STUB);
+        assert!(source_image_exists(dir.path().to_str().unwrap(), "a/b"));
+        assert!(!source_image_exists(dir.path().to_str().unwrap(), "a/missing"));
+    }
+
+    #[test]
+    fn is_cache_file_old_compares_against_max_age() {
+        let dir = TempDir::new().unwrap();
+        let f = dir.path().join("x.webp");
+        fs::write(&f, b"x").unwrap();
+        // File was just created — 1ns "max age" should mark it old.
+        assert!(is_cache_file_old(
+            &f,
+            Duration::from_nanos(1),
+            SystemTime::now() + Duration::from_secs(1)
+        ));
+        // 1-day max age should not.
+        assert!(!is_cache_file_old(
+            &f,
+            Duration::from_secs(86_400),
+            SystemTime::now()
+        ));
     }
 }
