@@ -34,3 +34,6 @@ cache/
 
 # MacOS Artifacts
 .DS_Store
+
+# Claude
+.claude/*
