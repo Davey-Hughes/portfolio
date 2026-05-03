@@ -34,7 +34,7 @@ impl ImageParams {
         }
 
         // Default valid combinations: (width, quality)
-        vec![(1200, 80), (2400, 80), (2400, 100), (3600, 100)]
+        vec![(2400, 80)]
     }
 
     pub fn validate(&self) -> Result<(u32, u8), &'static str> {
@@ -47,7 +47,7 @@ impl ImageParams {
                     Ok((w, q))
                 } else {
                     Err(
-                        "Invalid width/quality combination. Check IMAGE_PRESETS environment variable or use defaults: 1200px/80, 2400px/80, 2400px/100, 3600px/100",
+                        "Invalid width/quality combination. Check IMAGE_PRESETS environment variable or use default: 2400px/80",
                     )
                 }
             }
@@ -57,7 +57,7 @@ impl ImageParams {
                     .iter()
                     .find(|(width, _)| *width == w)
                     .map(|(w, q)| (*w, *q))
-                    .ok_or("Invalid width. Check IMAGE_PRESETS environment variable or use defaults: 1200, 2400, 3600. Note: 2400 has both quality 80 and 100 presets.")
+                    .ok_or("Invalid width. Check IMAGE_PRESETS environment variable or use default: 2400")
             }
             (None, Some(_)) => Err("Quality must be specified with a width"),
             (None, None) => {
@@ -77,25 +77,28 @@ mod tests {
     use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_validate_with_no_params_uses_default() {
+        std::env::remove_var("IMAGE_PRESETS");
         let params = ImageParams {
             width: None,
             quality: None,
         };
         let result = params.validate();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (1200, 80));
+        assert_eq!(result.unwrap(), (2400, 80));
     }
 
     #[test]
+    #[serial]
     fn test_validate_with_valid_width_only() {
+        std::env::remove_var("IMAGE_PRESETS");
         let params = ImageParams {
             width: Some(2400),
             quality: None,
         };
         let result = params.validate();
         assert!(result.is_ok());
-        // Should return the first matching preset for 2400, which is now (2400, 80)
         assert_eq!(result.unwrap(), (2400, 80));
     }
 
@@ -120,18 +123,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_with_valid_combination() {
-        let params = ImageParams {
-            width: Some(3600),
-            quality: Some(100),
-        };
-        let result = params.validate();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (3600, 100));
-    }
-
-    #[test]
+    #[serial]
     fn test_validate_with_2400_80_combination() {
+        std::env::remove_var("IMAGE_PRESETS");
         let params = ImageParams {
             width: Some(2400),
             quality: Some(80),
@@ -142,21 +136,10 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_with_2400_100_combination() {
-        let params = ImageParams {
-            width: Some(2400),
-            quality: Some(100),
-        };
-        let result = params.validate();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (2400, 100));
-    }
-
-    #[test]
     fn test_validate_with_invalid_combination() {
         let params = ImageParams {
             width: Some(1200),
-            quality: Some(100),
+            quality: Some(80),
         };
         let result = params.validate();
         assert!(result.is_err());
@@ -193,12 +176,8 @@ mod tests {
         let presets = ImageParams::get_valid_presets();
         std::env::remove_var("IMAGE_PRESETS");
 
-        // Should fall back to defaults (now 4 presets)
-        assert_eq!(presets.len(), 4);
-        assert!(presets.contains(&(1200, 80)));
+        assert_eq!(presets.len(), 1);
         assert!(presets.contains(&(2400, 80)));
-        assert!(presets.contains(&(2400, 100)));
-        assert!(presets.contains(&(3600, 100)));
     }
 
     #[test]
