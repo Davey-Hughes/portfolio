@@ -139,6 +139,11 @@ async fn main() {
     // Periodic in-memory cache sweep (mosaic + gallery TTLs). Off the request path.
     portfolio::server::spawn_cache_sweeper();
 
+    // Watch the images directory so newly added/moved/removed photos show up
+    // immediately instead of waiting for the TTL to expire. Also prunes
+    // matching entries from the on-disk compressed-image cache.
+    portfolio::server::spawn_image_watcher(images_dir.clone(), cache_dir.clone());
+
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();

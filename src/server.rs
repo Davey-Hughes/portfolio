@@ -71,13 +71,16 @@ impl MosaicCache {
 
     fn set(&mut self, key: String, data: Arc<GalleryData>, duration_secs: u64) {
         let expires_at = now_unix_secs() + duration_secs;
-        self.entries
-            .insert(key, CachedMosaic { data, expires_at });
+        self.entries.insert(key, CachedMosaic { data, expires_at });
     }
 
     fn clear_expired(&mut self) {
         let now = now_unix_secs();
         self.entries.retain(|_, cached| cached.expires_at > now);
+    }
+
+    fn clear_all(&mut self) {
+        self.entries.clear();
     }
 }
 
@@ -103,10 +106,11 @@ impl AllPhotosCache {
 
     fn set(&mut self, photos: Arc<Vec<PhotoInfo>>, duration_secs: u64) {
         let expires_at = now_unix_secs() + duration_secs;
-        self.cached_data = Some(CachedAllPhotos {
-            photos,
-            expires_at,
-        });
+        self.cached_data = Some(CachedAllPhotos { photos, expires_at });
+    }
+
+    fn clear_all(&mut self) {
+        self.cached_data = None;
     }
 }
 
@@ -116,7 +120,7 @@ fn generate_mosaic_layout_for_size(
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{calculate_orientation_bias, generate_mosaic_with_images, MosaicConfig};
+    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
 
     let num_images = photos.len();
     let image_aspects: Vec<(usize, f64)> = photos
@@ -217,7 +221,6 @@ fn build_gallery_data(
             let reordered_photos: Vec<PhotoInfo> =
                 image_order.iter().map(|&idx| photos[idx].clone()).collect();
 
-            // Tablet uses the same photo order so the mosaic stays consistent.
             let (layout_tablet, _) =
                 generate_mosaic_layout_for_size(&reordered_photos, 768.0, 600.0);
 
@@ -226,7 +229,10 @@ fn build_gallery_data(
                 mosaic_layout: Some(layout_desktop),
                 mosaic_layout_tablet: Some(layout_tablet),
             };
-            return (data, cfg.mosaic_cache_duration.unwrap_or(MOSAIC_DEFAULT_TTL));
+            return (
+                data,
+                cfg.mosaic_cache_duration.unwrap_or(MOSAIC_DEFAULT_TTL),
+            );
         }
     }
 
@@ -507,6 +513,315 @@ mod tests {
         let mut cache = AllPhotosCache::new();
         assert!(cache.get().is_none());
     }
+
+    #[test]
+    fn cache_filename_needle_uses_w_suffix_for_image_extensions() {
+        let root = std::path::Path::new("/srv/images");
+        let needle = cache_filename_needle(root, &root.join("home/sunset.jpg")).unwrap();
+        assert_eq!(needle, "home_sunset_w");
+    }
+
+    #[test]
+    fn cache_filename_needle_is_case_insensitive_on_extension() {
+        let root = std::path::Path::new("/srv/images");
+        let needle = cache_filename_needle(root, &root.join("home/Sunset.JPG")).unwrap();
+        // Extension match is case-insensitive; the prefix preserves filename case.
+        assert_eq!(needle, "home_Sunset_w");
+    }
+
+    #[test]
+    fn cache_filename_needle_uses_broad_suffix_for_non_image() {
+        let root = std::path::Path::new("/srv/images");
+        // gallery.toml — config sibling: invalidate broadly.
+        let needle = cache_filename_needle(root, &root.join("travel/gallery.toml")).unwrap();
+        assert_eq!(needle, "travel_gallery_");
+    }
+
+    #[test]
+    fn cache_filename_needle_uses_broad_suffix_for_directory() {
+        let root = std::path::Path::new("/srv/images");
+        // No extension — treat as directory-ish so we catch descendant caches.
+        let needle = cache_filename_needle(root, &root.join("travel/iceland")).unwrap();
+        assert_eq!(needle, "travel_iceland_");
+    }
+
+    #[test]
+    fn cache_filename_needle_returns_none_outside_root() {
+        let root = std::path::Path::new("/srv/images");
+        assert!(cache_filename_needle(root, std::path::Path::new("/etc/passwd")).is_none());
+    }
+
+    #[test]
+    fn cache_filename_needle_returns_none_for_root_itself() {
+        let root = std::path::Path::new("/srv/images");
+        assert!(cache_filename_needle(root, root).is_none());
+    }
+
+    #[test]
+    fn delete_matching_cache_files_removes_only_matches() {
+        use std::collections::HashSet;
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = dir.path();
+        // Two cache entries for home/sunset, plus an unrelated entry.
+        std::fs::write(cache.join("home_sunset_w800_q80_l1.webp"), b"a").unwrap();
+        std::fs::write(cache.join("home_sunset_w2400_q80_l1.webp"), b"b").unwrap();
+        std::fs::write(cache.join("home_other_w800_q80_l1.webp"), b"c").unwrap();
+
+        let mut needles = HashSet::new();
+        needles.insert("home_sunset_w".to_string());
+
+        let deleted = delete_matching_cache_files(cache, &needles);
+        assert_eq!(deleted, 2);
+        assert!(!cache.join("home_sunset_w800_q80_l1.webp").exists());
+        assert!(!cache.join("home_sunset_w2400_q80_l1.webp").exists());
+        assert!(cache.join("home_other_w800_q80_l1.webp").exists());
+    }
+
+    #[test]
+    fn delete_matching_cache_files_broad_needle_catches_descendants() {
+        use std::collections::HashSet;
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = dir.path();
+        // Cache files representing photos inside a renamed `travel/iceland/`
+        // folder, plus an unrelated `travel/japan/...` entry.
+        std::fs::write(cache.join("travel_iceland_glacier_w800_q80_l1.webp"), b"a").unwrap();
+        std::fs::write(cache.join("travel_iceland_geyser_w2400_q80_l1.webp"), b"b").unwrap();
+        std::fs::write(cache.join("travel_japan_tokyo_w800_q80_l1.webp"), b"c").unwrap();
+
+        let mut needles = HashSet::new();
+        needles.insert("travel_iceland_".to_string());
+
+        let deleted = delete_matching_cache_files(cache, &needles);
+        assert_eq!(deleted, 2);
+        assert!(cache.join("travel_japan_tokyo_w800_q80_l1.webp").exists());
+    }
+
+    #[test]
+    fn delete_matching_cache_files_handles_missing_cache_dir() {
+        use std::collections::HashSet;
+        let mut needles = HashSet::new();
+        needles.insert("anything_w".to_string());
+        let deleted =
+            delete_matching_cache_files(std::path::Path::new("/no/such/dir/abc123"), &needles);
+        assert_eq!(deleted, 0);
+    }
+}
+
+/// Drop every entry from both in-memory galleries caches. Called by the
+/// image directory watcher when the underlying files change, so the next
+/// request re-scans the filesystem.
+#[cfg(feature = "ssr")]
+pub fn invalidate_caches() {
+    use leptos::logging::log;
+
+    match MOSAIC_CACHE.lock() {
+        Ok(mut cache) => cache.clear_all(),
+        Err(_) => log!("MOSAIC_CACHE lock poisoned during invalidation; skipping"),
+    }
+    match ALL_PHOTOS_CACHE.lock() {
+        Ok(mut cache) => cache.clear_all(),
+        Err(_) => log!("ALL_PHOTOS_CACHE lock poisoned during invalidation; skipping"),
+    }
+}
+
+/// Translate a source path under `images_root` into a filename needle that
+/// matches the compressed-cache entries produced for it by
+/// `image_cache::process_and_cache_image`. Cache files are named
+/// `{prefix}_w{w}_q{q}_l1.webp`, where `prefix` is the path relative to
+/// `images_root` with `/` (and `\`) replaced by `_` and the extension
+/// stripped.
+///
+/// For image-extension paths we return `{prefix}_w` (matches that one
+/// file's variants). For anything else — directories, `.toml` siblings,
+/// unknown extensions — we return `{prefix}_`, which is broader: it also
+/// catches cache files for descendants of a renamed/deleted folder, at
+/// the cost of occasional over-invalidation when a sibling source's name
+/// happens to share a prefix.
+#[cfg(feature = "ssr")]
+fn cache_filename_needle(
+    images_root: &std::path::Path,
+    source: &std::path::Path,
+) -> Option<String> {
+    let relative = source.strip_prefix(images_root).ok()?;
+    let no_ext = relative.with_extension("");
+    let s = no_ext.to_string_lossy();
+    if s.is_empty() {
+        return None;
+    }
+    let prefix = s.replace(['/', '\\'], "_");
+
+    let is_image = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+        .is_some_and(|ext| {
+            matches!(
+                ext,
+                "jpg" | "jpeg" | "png" | "webp" | "gif" | "jxl" | "avif"
+            )
+        });
+
+    Some(if is_image {
+        format!("{prefix}_w")
+    } else {
+        format!("{prefix}_")
+    })
+}
+
+/// Remove every file in `cache_dir` whose name starts with any of `needles`.
+/// Errors are logged but otherwise ignored — a stale cache entry is harmless
+/// (the next request will simply regenerate it), so we don't want a cleanup
+/// failure to mask the in-memory invalidation that follows.
+#[cfg(feature = "ssr")]
+fn delete_matching_cache_files(
+    cache_dir: &std::path::Path,
+    needles: &std::collections::HashSet<String>,
+) -> usize {
+    use leptos::logging::log;
+
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        // Cache dir may not exist yet — that's not an error.
+        return 0;
+    };
+
+    let mut deleted = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if needles.iter().any(|n| name.starts_with(n)) {
+            match std::fs::remove_file(&path) {
+                Ok(_) => deleted += 1,
+                Err(err) => log!(
+                    "Image watcher: failed to remove {}: {err}",
+                    path.display()
+                ),
+            }
+        }
+    }
+    deleted
+}
+
+/// Watch `images_dir` recursively and, when files change, (a) delete the
+/// matching compressed-cache entries under `cache_dir` and (b) invalidate
+/// the in-memory galleries caches. Events are debounced — a burst of moves
+/// (e.g. dragging a folder of photos in) collapses to one cleanup after
+/// activity settles.
+///
+/// Runs on a dedicated `std::thread` because `notify` delivers events via a
+/// sync `mpsc` channel and the loop blocks indefinitely; the tokio blocking
+/// pool isn't the right place for that.
+#[cfg(feature = "ssr")]
+pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
+    use leptos::logging::log;
+    use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    std::thread::spawn(move || {
+        // The watcher errors if the path doesn't exist yet; create it so the
+        // server can be started before any photos have been added.
+        if !Path::new(&images_dir).exists() {
+            if let Err(err) = std::fs::create_dir_all(&images_dir) {
+                log!("Image watcher: failed to create {images_dir}: {err}");
+                return;
+            }
+        }
+
+        // Canonicalize so event paths (which arrive joined to whatever we
+        // pass to watch()) reliably share a prefix with `images_root`.
+        let images_root = match Path::new(&images_dir).canonicalize() {
+            Ok(p) => p,
+            Err(err) => {
+                log!("Image watcher: canonicalize({images_dir}) failed: {err}");
+                return;
+            }
+        };
+        let cache_root = PathBuf::from(&cache_dir);
+
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = match RecommendedWatcher::new(
+            move |res| {
+                let _ = tx.send(res);
+            },
+            notify::Config::default(),
+        ) {
+            Ok(w) => w,
+            Err(err) => {
+                log!("Image watcher: failed to initialize: {err}");
+                return;
+            }
+        };
+
+        if let Err(err) = watcher.watch(&images_root, RecursiveMode::Recursive) {
+            log!(
+                "Image watcher: failed to watch {}: {err}",
+                images_root.display()
+            );
+            return;
+        }
+        log!(
+            "Watching {} for changes; caches invalidate on file events",
+            images_root.display()
+        );
+
+        let quiet = Duration::from_millis(500);
+        loop {
+            // Block until something happens.
+            let first = match rx.recv() {
+                Ok(ev) => ev,
+                Err(_) => return, // sender dropped; watcher gone
+            };
+
+            let mut events = Vec::new();
+            match first {
+                Ok(ev) => events.push(ev),
+                Err(err) => log!("Image watcher: event error: {err}"),
+            }
+
+            // Drain follow-up events within the quiet window so a burst of
+            // filesystem activity collapses to a single invalidation.
+            while let Ok(res) = rx.recv_timeout(quiet) {
+                match res {
+                    Ok(ev) => events.push(ev),
+                    Err(err) => log!("Image watcher: event error: {err}"),
+                }
+            }
+
+            // Collect unique cache-filename needles from relevant events.
+            let mut needles: HashSet<String> = HashSet::new();
+            for event in &events {
+                if !matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) {
+                    continue;
+                }
+                for path in &event.paths {
+                    if let Some(needle) = cache_filename_needle(&images_root, path) {
+                        needles.insert(needle);
+                    }
+                }
+            }
+
+            if !needles.is_empty() {
+                let deleted = delete_matching_cache_files(&cache_root, &needles);
+                if deleted > 0 {
+                    log!("Image watcher: removed {deleted} stale compressed cache file(s)");
+                }
+            }
+
+            log!("Image directory changed; invalidating in-memory caches");
+            invalidate_caches();
+        }
+    });
 }
 
 /// Spawn a background task that periodically evicts expired entries from
