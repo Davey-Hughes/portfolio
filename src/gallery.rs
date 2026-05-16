@@ -245,6 +245,12 @@ fn find_images_recursive_with_gallery(
 
         let focal_point = photo_config.focal_point;
 
+        let lens_model = photo_config
+            .lens_model
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or(exif.lens_model);
+
         photos.push(PhotoInfo {
             url: compressed_url,
             original_url,
@@ -260,7 +266,7 @@ fn find_images_recursive_with_gallery(
             date_taken: exif.date_taken,
             camera_make: exif.camera_make,
             camera_model: exif.camera_model,
-            lens_model: exif.lens_model,
+            lens_model,
             focal_length: exif.focal_length,
             aperture: exif.aperture,
             shutter_speed: exif.shutter_speed,
@@ -407,6 +413,23 @@ fn extension_supports_xmp(path: &Path) -> bool {
     )
 }
 
+/// Return true if `s` carries lens identity beyond a bare focal-length/aperture
+/// stringification. Strings like `"85mm f/1.4D"`, `"AF Nikkor 85mm f/1.4D"` or
+/// `"AF-S Nikkor 50mm f/1.4G"` pass; `"50.0 mm f/1.8"` or `"85mm f/1.4"` (which
+/// the EXIF `LensModel` already exposes verbatim) do not.
+fn looks_like_real_lens_name(s: &str) -> bool {
+    s.chars().any(|c| {
+        c.is_alphabetic() && !matches!(c.to_ascii_lowercase(), 'f' | 'm')
+    })
+}
+
+/// Lightroom writes these as `crs:LensProfileName` when no Adobe lens profile
+/// was matched (e.g. it fell back to the in-camera correction data). They are
+/// not real lens names, so we ignore them and fall through to other sources.
+fn is_lens_profile_placeholder(s: &str) -> bool {
+    matches!(s, "Camera Settings" | "None" | "(none)" | "")
+}
+
 /// Try to recover a human-readable lens name from XMP metadata. Lightroom
 /// often strips the camera maker note, but writes the matched lens profile
 /// as `crs:LensProfileName="Adobe (<lens name>) v<n>"` and `aux:Lens` (which
@@ -429,16 +452,14 @@ fn extract_lens_name_from_xmp(path: &Path) -> Option<String> {
                 Some(s[..close].trim())
             })
             .unwrap_or(trimmed);
-        if !inner.is_empty() {
+        if !is_lens_profile_placeholder(inner) {
             return Some(inner.to_string());
         }
     }
 
     if let Some(raw) = xmp_attr_value(&xmp, "aux:Lens") {
         let trimmed = raw.trim();
-        // Only accept it as a real name when it doesn't start with a digit
-        // (e.g. "Nikon AF NIKKOR 50mm f/1.8" — yes; "50.0 mm f/1.8" — no).
-        if trimmed.chars().next().is_some_and(char::is_alphabetic) {
+        if looks_like_real_lens_name(trimmed) {
             return Some(trimmed.to_string());
         }
     }
@@ -868,6 +889,32 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::fs;
+
+    #[test]
+    fn looks_like_real_lens_name_accepts_manufacturer_strings() {
+        assert!(looks_like_real_lens_name("85mm f/1.4D"));
+        assert!(looks_like_real_lens_name("AF Nikkor 85mm f/1.4D"));
+        assert!(looks_like_real_lens_name("AF-S Nikkor 50mm f/1.4G"));
+        assert!(looks_like_real_lens_name("RF 24-70mm f/2.8L IS USM"));
+    }
+
+    #[test]
+    fn looks_like_real_lens_name_rejects_bare_focal_stringifications() {
+        assert!(!looks_like_real_lens_name("85mm f/1.4"));
+        assert!(!looks_like_real_lens_name("50.0 mm f/1.8"));
+        assert!(!looks_like_real_lens_name("24-70mm f/2.8-4"));
+        assert!(!looks_like_real_lens_name(""));
+    }
+
+    #[test]
+    fn lens_profile_placeholders_are_recognized() {
+        assert!(is_lens_profile_placeholder("Camera Settings"));
+        assert!(is_lens_profile_placeholder("None"));
+        assert!(is_lens_profile_placeholder("(none)"));
+        assert!(is_lens_profile_placeholder(""));
+        assert!(!is_lens_profile_placeholder("Adobe (Nikon AF-S 50mm f/1.8G) v1"));
+        assert!(!is_lens_profile_placeholder("Nikon AF Nikkor 85mm f/1.4D"));
+    }
 
     #[test]
     #[serial]
