@@ -1,5 +1,5 @@
 use crate::types::{MosaicCell, MosaicLayout};
-use rand::Rng;
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 
 /// Represents a rectangle in the mosaic layout
@@ -163,7 +163,7 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
         )];
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Start with the full container
     let mut rectangles = vec![Rectangle::new(
@@ -264,7 +264,7 @@ fn try_split_rectangle_with_bias(
 ) -> Option<(Rectangle, Rectangle, DivisionLine)> {
     // Add a general bias toward vertical splits (which create portrait/tall rectangles)
     // Vertical splits create tall rectangles, which are less common but needed for portraits
-    let random_val: f64 = rng.gen();
+    let random_val: f64 = rng.random();
     let general_vertical_bias = 0.65; // 65% chance to prefer vertical split
 
     // Determine base preference - favor vertical splits overall
@@ -278,7 +278,7 @@ fn try_split_rectangle_with_bias(
     let prefer_horizontal = if let Some(tracker) = tracker {
         if let Some((bias_preference, strength)) = tracker.get_split_preference() {
             // Use random value to apply bias probabilistically
-            let random_val_2: f64 = rng.gen();
+            let random_val_2: f64 = rng.random();
             if random_val_2 < strength {
                 bias_preference
             } else {
@@ -331,7 +331,7 @@ fn try_horizontal_split(
     // Bias AWAY from center to create more extreme aspect ratios
     for _ in 0..10 {
         // Pick position biased toward edges (creates one tall, one short rectangle)
-        let random_val = rng.gen::<f64>();
+        let random_val = rng.random::<f64>();
         let split_y = if random_val < 0.5 {
             // Bias toward top edge (creates tall bottom rectangle)
             let bias = random_val * 2.0; // 0.0 to 1.0
@@ -397,7 +397,7 @@ fn try_vertical_split(
     // Bias AWAY from center to create more extreme aspect ratios
     for _ in 0..10 {
         // Pick position biased toward edges (creates one wide, one narrow rectangle)
-        let random_val = rng.gen::<f64>();
+        let random_val = rng.random::<f64>();
         let split_x = if random_val < 0.5 {
             // Bias toward left edge (creates wide right rectangle)
             let bias = random_val * 2.0; // 0.0 to 1.0
@@ -517,7 +517,7 @@ fn find_line_extent_vertical(
 /// Weighted random selection based on provided weights
 fn weighted_random_select(weights: &[f64], rng: &mut impl Rng) -> usize {
     let total: f64 = weights.iter().sum();
-    let mut random = rng.gen_range(0.0..total);
+    let mut random = rng.random_range(0.0..total);
 
     for (i, &weight) in weights.iter().enumerate() {
         random -= weight;
@@ -777,7 +777,7 @@ mod tests {
 
     #[test]
     fn test_weighted_random_select() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let weights = vec![0.1, 0.2, 0.7];
 
         // Run multiple times to ensure it doesn't panic
