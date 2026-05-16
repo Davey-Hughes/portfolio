@@ -136,8 +136,13 @@ fn generate_mosaic_layout_for_size(
         })
         .collect();
 
-    let photos_sqrt = (num_images as f64).sqrt();
-    let container_height = base_height * photos_sqrt.max(2.0);
+    // Scale container height linearly with photo count so average cell area
+    // stays roughly constant as the gallery grows. `PHOTOS_PER_BASE_HEIGHT` is
+    // how many photos we want to fit per `base_height` slice of the canvas.
+    // The floor of 2.0 keeps small galleries from looking cramped.
+    const PHOTOS_PER_BASE_HEIGHT: f64 = 3.0;
+    let scale = (num_images as f64 / PHOTOS_PER_BASE_HEIGHT).max(2.0);
+    let container_height = base_height * scale;
 
     // Calculate orientation bias from the actual images
     let orientation_bias = calculate_orientation_bias(&image_aspects);
