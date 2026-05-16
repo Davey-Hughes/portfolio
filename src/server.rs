@@ -610,6 +610,126 @@ mod tests {
             delete_matching_cache_files(std::path::Path::new("/no/such/dir/abc123"), &needles);
         assert_eq!(deleted, 0);
     }
+
+    // ---- watch_event_is_relevant -------------------------------------
+    //
+    // The bug this guards against: reads (Access events) and metadata
+    // churn (chmod/utime) were triggering full cache invalidation. These
+    // tests pin the predicate's behavior for every EventKind variant we
+    // care about. If `notify` adds new variants in a future version, the
+    // `_` arm in the predicate falls through to `false` (conservative).
+
+    #[test]
+    fn watch_event_is_relevant_includes_create_and_remove() {
+        use notify::event::{CreateKind, RemoveKind};
+        use notify::EventKind;
+        assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::File)));
+        assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::Folder)));
+        assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::Any)));
+        assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::File)));
+        assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::Folder)));
+        assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::Any)));
+    }
+
+    #[test]
+    fn watch_event_is_relevant_includes_data_and_rename_modifies() {
+        use notify::event::{DataChange, ModifyKind, RenameMode};
+        use notify::EventKind;
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Content
+        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Size
+        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Any
+        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Name(
+            RenameMode::From
+        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Name(
+            RenameMode::To
+        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Name(
+            RenameMode::Both
+        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Any)));
+        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Other)));
+    }
+
+    #[test]
+    fn watch_event_is_relevant_excludes_metadata_modifies() {
+        // The original bug surface: rsync/syncthing/touch churn fires
+        // these and the watcher was treating them as content changes.
+        use notify::event::{MetadataKind, ModifyKind};
+        use notify::EventKind;
+        assert!(!watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::AccessTime)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::WriteTime)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::Permissions)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::Ownership)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::Extended)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::Any)
+        )));
+    }
+
+    #[test]
+    fn watch_event_is_relevant_excludes_access_events() {
+        // The headline cause of the constant invalidation: every read
+        // (cache prewarm, every HTTP image serve) generates these.
+        use notify::event::{AccessKind, AccessMode};
+        use notify::EventKind;
+        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Read)));
+        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Open(
+            AccessMode::Read
+        ))));
+        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Close(
+            AccessMode::Read
+        ))));
+        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Any)));
+    }
+
+    #[test]
+    fn watch_event_is_relevant_excludes_any_and_other_top_level() {
+        // Be conservative on uncategorized events.
+        use notify::EventKind;
+        assert!(!watch_event_is_relevant(&EventKind::Any));
+        assert!(!watch_event_is_relevant(&EventKind::Other));
+    }
+}
+
+/// Return true when a notify `EventKind` represents an actual content
+/// change worth invalidating cached galleries for.
+///
+/// Filters out:
+/// - `Access(_)` — reads. Serving an image generates these constantly and
+///   they don't change on-disk state.
+/// - `Modify(Metadata(_))` — chmod / utime / xattr churn. Tools like rsync
+///   or syncthing stamp mtimes; that shouldn't blow away the layout cache.
+/// - `Any` / `Other` at the top level — we'd rather miss an exotic event
+///   than invalidate on something we can't classify.
+#[cfg(feature = "ssr")]
+fn watch_event_is_relevant(kind: &notify::EventKind) -> bool {
+    use notify::event::ModifyKind;
+    use notify::EventKind;
+    match kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        EventKind::Modify(ModifyKind::Data(_))
+        | EventKind::Modify(ModifyKind::Name(_))
+        | EventKind::Modify(ModifyKind::Any)
+        | EventKind::Modify(ModifyKind::Other) => true,
+        _ => false,
+    }
 }
 
 /// Drop every entry from both in-memory galleries caches. Called by the
@@ -724,7 +844,7 @@ fn delete_matching_cache_files(
 #[cfg(feature = "ssr")]
 pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
     use leptos::logging::log;
-    use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use notify::{RecommendedWatcher, RecursiveMode, Watcher};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::sync::mpsc;
@@ -800,25 +920,13 @@ pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
                 }
             }
 
-            // Decide whether anything in this burst represents an actual
-            // change. `Access` events (reads) are ignored entirely; serving
-            // an image generates them constantly and they don't change state.
-            // `Modify(Metadata)` is also ignored — chmod/utime/xattr churn
-            // shouldn't invalidate cached layouts.
-            let is_relevant = |kind: &EventKind| match kind {
-                EventKind::Create(_) | EventKind::Remove(_) => true,
-                EventKind::Modify(notify::event::ModifyKind::Data(_))
-                | EventKind::Modify(notify::event::ModifyKind::Name(_))
-                | EventKind::Modify(notify::event::ModifyKind::Any)
-                | EventKind::Modify(notify::event::ModifyKind::Other) => true,
-                _ => false,
-            };
-
             // Collect unique cache-filename needles from relevant events.
+            // Irrelevant events (reads, metadata churn) are filtered by
+            // `watch_event_is_relevant` — see its doc comment for details.
             let mut needles: HashSet<String> = HashSet::new();
             let mut had_relevant_event = false;
             for event in &events {
-                if !is_relevant(&event.kind) {
+                if !watch_event_is_relevant(&event.kind) {
                     continue;
                 }
                 had_relevant_event = true;
