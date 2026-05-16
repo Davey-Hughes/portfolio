@@ -53,10 +53,12 @@ impl FocalPoint {
     }
 }
 
-/// Focal point configuration for a single photo, loaded from photo-name.toml
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct PhotoFocalPointConfig {
-    pub focal_point: FocalPoint,
+/// Per-photo configuration loaded from photo-name.toml (sibling of the image)
+#[derive(Clone, Serialize, Deserialize, Debug, Default)]
+pub struct PhotoConfig {
+    pub focal_point: Option<FocalPoint>,
+    /// Display title override. When set, this replaces the title derived from the filename.
+    pub title: Option<String>,
 }
 
 /// Represents metadata and information for a photo in the portfolio.

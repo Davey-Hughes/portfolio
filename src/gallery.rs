@@ -1,4 +1,4 @@
-use crate::types::{GalleryInfo, ImageSource, PhotoFocalPointConfig, PhotoInfo};
+use crate::types::{GalleryInfo, ImageSource, PhotoConfig, PhotoInfo};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -29,27 +29,23 @@ fn get_mime_type(extension: &str) -> &'static str {
     }
 }
 
-/// Load focal point configuration for a specific photo
-/// Looks for photo-basename.toml next to the photo file
-/// Example: for "photo.jpg", looks for "photo.toml"
-fn load_photo_focal_point(photo_path: &Path) -> Option<crate::types::FocalPoint> {
-    // Get the file stem (filename without extension)
-    let stem = photo_path.file_stem()?.to_string_lossy();
+/// Load per-photo configuration from a sibling TOML file.
+/// Looks for `<basename>.toml` next to the photo (e.g. `photo.jpg` -> `photo.toml`).
+fn load_photo_config(photo_path: &Path) -> PhotoConfig {
+    let Some(stem) = photo_path.file_stem() else {
+        return PhotoConfig::default();
+    };
+    let stem = stem.to_string_lossy();
 
-    // Check if there's a .toml file with the same base name
-    if let Some(parent) = photo_path.parent() {
-        let config_path = parent.join(format!("{}.toml", stem));
+    let Some(parent) = photo_path.parent() else {
+        return PhotoConfig::default();
+    };
+    let config_path = parent.join(format!("{}.toml", stem));
 
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Ok(config) = toml::from_str::<PhotoFocalPointConfig>(&content) {
-                    return Some(config.focal_point);
-                }
-            }
-        }
-    }
-
-    None
+    fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|content| toml::from_str::<PhotoConfig>(&content).ok())
+        .unwrap_or_default()
 }
 
 /// Get default image width and quality from environment variables
@@ -187,9 +183,17 @@ fn find_images_recursive_with_gallery(
             .replace([' ', '_'], "-");
 
         // Strip leading numbers and dashes, then convert to title
-        let title = strip_leading_number_and_dash(&filename_str)
+        let derived_title = strip_leading_number_and_dash(&filename_str)
             .trim_end_matches(&format!(".{}", primary_ext))
             .replace(['-', '_'], " ");
+
+        // Load per-photo config (focal point, title override) from sibling TOML
+        let photo_config = load_photo_config(&primary_full_path);
+        let title = photo_config
+            .title
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or(derived_title);
 
         // Extract EXIF data from primary image
         let exif = extract_exif_data(&primary_full_path);
@@ -239,8 +243,7 @@ fn find_images_recursive_with_gallery(
             }
         });
 
-        // Load focal point from photo-specific TOML file
-        let focal_point = load_photo_focal_point(&primary_full_path);
+        let focal_point = photo_config.focal_point;
 
         photos.push(PhotoInfo {
             url: compressed_url,
