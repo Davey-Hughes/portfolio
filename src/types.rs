@@ -59,6 +59,10 @@ pub struct PhotoConfig {
     pub focal_point: Option<FocalPoint>,
     /// Display title override. When set, this replaces the title derived from the filename.
     pub title: Option<String>,
+    /// Lens name override. Useful when metadata is missing, ambiguous (e.g. Nikon
+    /// LensID maps to multiple physical lenses) or contains a placeholder like
+    /// Lightroom's "Camera Settings".
+    pub lens_model: Option<String>,
 }
 
 /// Represents metadata and information for a photo in the portfolio.
