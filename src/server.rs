@@ -800,20 +800,37 @@ pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
                 }
             }
 
+            // Decide whether anything in this burst represents an actual
+            // change. `Access` events (reads) are ignored entirely; serving
+            // an image generates them constantly and they don't change state.
+            // `Modify(Metadata)` is also ignored — chmod/utime/xattr churn
+            // shouldn't invalidate cached layouts.
+            let is_relevant = |kind: &EventKind| match kind {
+                EventKind::Create(_) | EventKind::Remove(_) => true,
+                EventKind::Modify(notify::event::ModifyKind::Data(_))
+                | EventKind::Modify(notify::event::ModifyKind::Name(_))
+                | EventKind::Modify(notify::event::ModifyKind::Any)
+                | EventKind::Modify(notify::event::ModifyKind::Other) => true,
+                _ => false,
+            };
+
             // Collect unique cache-filename needles from relevant events.
             let mut needles: HashSet<String> = HashSet::new();
+            let mut had_relevant_event = false;
             for event in &events {
-                if !matches!(
-                    event.kind,
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                ) {
+                if !is_relevant(&event.kind) {
                     continue;
                 }
+                had_relevant_event = true;
                 for path in &event.paths {
                     if let Some(needle) = cache_filename_needle(&images_root, path) {
                         needles.insert(needle);
                     }
                 }
+            }
+
+            if !had_relevant_event {
+                continue;
             }
 
             if !needles.is_empty() {
