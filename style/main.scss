@@ -1249,6 +1249,12 @@ img {
         opacity: 1;
         margin-top: 1rem;
       }
+
+      // .exif-settings is display: flex, so text-align on the parent
+      // doesn't position its children — center the chips explicitly.
+      .exif-settings {
+        justify-content: center;
+      }
     }
   }
 
