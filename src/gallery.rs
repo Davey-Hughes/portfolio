@@ -700,7 +700,22 @@ pub fn load_galleries() -> Vec<GalleryInfo> {
         }
     }
 
-    galleries.sort_by(|a, b| a.name.cmp(&b.name));
+    let config = crate::config::load_config();
+    let order_index: HashMap<&str, usize> = config
+        .gallery_order
+        .iter()
+        .enumerate()
+        .map(|(i, slug)| (slug.as_str(), i))
+        .collect();
+
+    galleries.sort_by(|a, b| {
+        match (order_index.get(a.slug.as_str()), order_index.get(b.slug.as_str())) {
+            (Some(ia), Some(ib)) => ia.cmp(ib),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.cmp(&b.name),
+        }
+    });
     galleries
 }
 
@@ -1386,6 +1401,12 @@ mod tests {
     #[test]
     fn test_load_galleries_sorted_alphabetically() {
         let galleries = load_galleries();
+
+        // If a gallery_order is configured, alphabetical sort is not guaranteed.
+        let config = crate::config::load_config();
+        if !config.gallery_order.is_empty() {
+            return;
+        }
 
         // Check if sorted by name
         if galleries.len() > 1 {

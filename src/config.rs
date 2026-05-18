@@ -95,6 +95,11 @@ pub struct SiteConfig {
     pub site_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_copyright: Option<String>,
+    /// Ordered list of gallery slugs controlling nav-bar order.
+    /// Galleries listed here appear first in the given order; any galleries
+    /// not listed fall through to alphabetical order afterwards.
+    #[serde(default)]
+    pub gallery_order: Vec<String>,
     #[serde(default)]
     pub sections: HashMap<String, SectionValue>,
 }
@@ -128,6 +133,7 @@ impl Default for SiteConfig {
             site_tagline: "Photography".to_string(),
             site_title: None,
             site_copyright: None,
+            gallery_order: Vec::new(),
             sections: HashMap::new(),
         }
     }
@@ -433,6 +439,66 @@ test_field = "test value"
         assert!(copyright.contains(&current_year.to_string()));
 
         // Cleanup
+        std::env::remove_var("CONFIG_PATH");
+        fs::remove_file(&config_file).ok();
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    #[serial]
+    fn test_load_config_gallery_order() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir();
+        let config_file = temp_dir.join(format!(
+            "test_config_gallery_order_{}_{}.toml",
+            std::process::id(),
+            line!()
+        ));
+
+        let content = r#"
+site_name = "Test"
+site_tagline = "Test"
+gallery_order = ["landscapes", "portraits", "film"]
+"#;
+
+        fs::write(&config_file, content).unwrap();
+        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+
+        let config = load_config();
+        assert_eq!(
+            config.gallery_order,
+            vec!["landscapes".to_string(), "portraits".to_string(), "film".to_string()]
+        );
+
+        std::env::remove_var("CONFIG_PATH");
+        fs::remove_file(&config_file).ok();
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    #[serial]
+    fn test_load_config_gallery_order_defaults_empty() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir();
+        let config_file = temp_dir.join(format!(
+            "test_config_gallery_order_default_{}_{}.toml",
+            std::process::id(),
+            line!()
+        ));
+
+        let content = r#"
+site_name = "Test"
+site_tagline = "Test"
+"#;
+
+        fs::write(&config_file, content).unwrap();
+        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+
+        let config = load_config();
+        assert!(config.gallery_order.is_empty());
+
         std::env::remove_var("CONFIG_PATH");
         fs::remove_file(&config_file).ok();
     }
