@@ -430,17 +430,56 @@ fn is_lens_profile_placeholder(s: &str) -> bool {
     matches!(s, "Camera Settings" | "None" | "(none)" | "")
 }
 
-/// Try to recover a human-readable lens name from XMP metadata. Lightroom
-/// often strips the camera maker note, but writes the matched lens profile
-/// as `crs:LensProfileName="Adobe (<lens name>) v<n>"` and `aux:Lens` (which
-/// for tools like LensTagger contains the name directly). Returns `None`
-/// when XMP holds only a focal-range string that the EXIF `LensModel` tag
-/// already exposes.
-fn extract_lens_name_from_xmp(path: &Path) -> Option<String> {
-    if !extension_supports_xmp(path) {
-        return None;
+/// Lens-name candidates recoverable from XMP. Returned separately so the
+/// caller can interleave them with the EXIF `LensModel` tag in priority
+/// order — `aux:Lens` is authoritative (LensTagger writes the taking lens
+/// here even on film scans), while `crs:LensProfileName` is Lightroom's
+/// optical-correction profile, which for film scans names the *scanning*
+/// lens rather than the lens that took the photo.
+#[derive(Default)]
+struct XmpLensCandidates {
+    aux_lens: Option<String>,
+    profile_lens: Option<String>,
+}
+
+impl XmpLensCandidates {
+    /// True when both lens fields are present and describe meaningfully
+    /// different lenses — the fingerprint of a camera-scanned film frame,
+    /// where `aux:Lens` is the taking lens and `crs:LensProfileName` is the
+    /// macro lens whose optical-correction profile Lightroom applies to the
+    /// scan. EXIF exposure values (FNumber, ExposureTime) in that case
+    /// belong to the scanning camera, not the original photograph.
+    fn looks_like_film_scan(&self) -> bool {
+        let (Some(aux), Some(profile)) = (&self.aux_lens, &self.profile_lens) else {
+            return false;
+        };
+        let aux_norm = aux.to_ascii_lowercase();
+        let profile_norm = profile.to_ascii_lowercase();
+        !aux_norm.contains(&profile_norm) && !profile_norm.contains(&aux_norm)
     }
-    let xmp = read_xmp_packet(path)?;
+}
+
+/// Recover human-readable lens names from XMP metadata. Lightroom often
+/// strips the camera maker note, but writes the matched lens profile as
+/// `crs:LensProfileName="Adobe (<lens name>) v<n>"` and tools like
+/// LensTagger write the taking lens directly to `aux:Lens`. Values that
+/// only stringify focal length/aperture (which EXIF `LensModel` already
+/// exposes) are filtered out.
+fn extract_lens_candidates_from_xmp(path: &Path) -> XmpLensCandidates {
+    let mut out = XmpLensCandidates::default();
+    if !extension_supports_xmp(path) {
+        return out;
+    }
+    let Some(xmp) = read_xmp_packet(path) else {
+        return out;
+    };
+
+    if let Some(raw) = xmp_attr_value(&xmp, "aux:Lens") {
+        let trimmed = raw.trim();
+        if looks_like_real_lens_name(trimmed) {
+            out.aux_lens = Some(trimmed.to_string());
+        }
+    }
 
     if let Some(raw) = xmp_attr_value(&xmp, "crs:LensProfileName") {
         let trimmed = raw.trim();
@@ -453,18 +492,11 @@ fn extract_lens_name_from_xmp(path: &Path) -> Option<String> {
             })
             .unwrap_or(trimmed);
         if !is_lens_profile_placeholder(inner) {
-            return Some(inner.to_string());
+            out.profile_lens = Some(inner.to_string());
         }
     }
 
-    if let Some(raw) = xmp_attr_value(&xmp, "aux:Lens") {
-        let trimmed = raw.trim();
-        if looks_like_real_lens_name(trimmed) {
-            return Some(trimmed.to_string());
-        }
-    }
-
-    None
+    out
 }
 
 /// Extract EXIF metadata from an image file
@@ -527,7 +559,15 @@ fn extract_exif_data(path: &Path) -> ExifData {
     let exif_lens_model = exif_reader
         .get_field(exif::Tag::LensModel, exif::In::PRIMARY)
         .map(|f| f.display_value().to_string());
-    let lens_model = extract_lens_name_from_xmp(path).or(exif_lens_model);
+    let xmp_lens = extract_lens_candidates_from_xmp(path);
+    let is_film_scan = xmp_lens.looks_like_film_scan();
+    // Prefer `aux:Lens` (LensTagger writes the taking lens here) and EXIF
+    // `LensModel` over `crs:LensProfileName` — on film scans the latter
+    // names the scanning lens, not the lens used to take the photo.
+    let lens_model = xmp_lens
+        .aux_lens
+        .or(exif_lens_model)
+        .or(xmp_lens.profile_lens);
 
     let focal_length = exif_reader
         .get_field(exif::Tag::FocalLength, exif::In::PRIMARY)
@@ -540,20 +580,32 @@ fn extract_exif_data(path: &Path) -> ExifData {
             }
         });
 
-    let aperture = exif_reader
-        .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
-        .map(|f| format!("f/{}", f.display_value()));
+    // On camera-scanned film, EXIF FNumber/ExposureTime belong to the
+    // scanning camera unless LensTagger explicitly overwrote them. We can't
+    // reliably tell which is which, so drop both rather than misattribute
+    // the scan's exposure settings to the original photograph.
+    let aperture = if is_film_scan {
+        None
+    } else {
+        exif_reader
+            .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
+            .map(|f| format!("f/{}", f.display_value()))
+    };
 
-    let shutter_speed = exif_reader
-        .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
-        .map(|f| {
-            let val = f.display_value().to_string();
-            if val.contains("s") {
-                val
-            } else {
-                format!("{} s", val)
-            }
-        });
+    let shutter_speed = if is_film_scan {
+        None
+    } else {
+        exif_reader
+            .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
+            .map(|f| {
+                let val = f.display_value().to_string();
+                if val.contains("s") {
+                    val
+                } else {
+                    format!("{} s", val)
+                }
+            })
+    };
 
     let iso = exif_reader
         .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
@@ -1510,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_lens_name_from_xmp_strips_adobe_lens_profile_wrapper() {
+    fn extract_lens_candidates_from_xmp_strips_adobe_lens_profile_wrapper() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fixture.jpg");
         let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:crs="x">
@@ -1519,53 +1571,119 @@ mod tests {
         let jpeg = build_synth_jpeg(None, Some(xmp));
         fs::write(&path, &jpeg).unwrap();
 
-        let name = extract_lens_name_from_xmp(&path);
-        assert_eq!(name.as_deref(), Some("Test 35mm f/1.4"));
+        let candidates = extract_lens_candidates_from_xmp(&path);
+        assert_eq!(candidates.profile_lens.as_deref(), Some("Test 35mm f/1.4"));
+        assert!(candidates.aux_lens.is_none());
     }
 
     #[test]
-    fn extract_lens_name_from_xmp_uses_aux_lens_when_letter_prefixed() {
+    fn extract_lens_candidates_from_xmp_uses_aux_lens_when_letter_prefixed() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fixture.jpg");
         let xmp = br#"<x:xmpmeta>aux:Lens="Acme 50mm f/2"</x:xmpmeta>"#;
         let jpeg = build_synth_jpeg(None, Some(xmp));
         fs::write(&path, &jpeg).unwrap();
 
-        let name = extract_lens_name_from_xmp(&path);
-        assert_eq!(name.as_deref(), Some("Acme 50mm f/2"));
+        let candidates = extract_lens_candidates_from_xmp(&path);
+        assert_eq!(candidates.aux_lens.as_deref(), Some("Acme 50mm f/2"));
     }
 
     #[test]
-    fn extract_lens_name_from_xmp_skips_aux_lens_when_focal_only() {
+    fn extract_lens_candidates_from_xmp_skips_aux_lens_when_focal_only() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fixture.jpg");
         let xmp = br#"<x:xmpmeta>aux:Lens="50.0 mm f/1.8"</x:xmpmeta>"#;
         let jpeg = build_synth_jpeg(None, Some(xmp));
         fs::write(&path, &jpeg).unwrap();
 
-        assert!(extract_lens_name_from_xmp(&path).is_none());
+        assert!(extract_lens_candidates_from_xmp(&path).aux_lens.is_none());
     }
 
     #[test]
-    fn extract_lens_name_from_xmp_skips_non_jpeg_extensions() {
+    fn extract_lens_candidates_from_xmp_skips_non_jpeg_extensions() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fixture.webp");
         let xmp = br#"<x:xmpmeta>aux:Lens="Acme 50mm"</x:xmpmeta>"#;
         let jpeg = build_synth_jpeg(None, Some(xmp));
         fs::write(&path, &jpeg).unwrap();
 
+        let candidates = extract_lens_candidates_from_xmp(&path);
         assert!(
-            extract_lens_name_from_xmp(&path).is_none(),
+            candidates.aux_lens.is_none() && candidates.profile_lens.is_none(),
             "should not read XMP from non-JPEG"
         );
     }
 
     #[test]
-    fn extract_lens_name_from_xmp_returns_none_when_packet_absent() {
+    fn extract_lens_candidates_from_xmp_returns_empty_when_packet_absent() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fixture.jpg");
         let jpeg = build_synth_jpeg(None, None);
         fs::write(&path, &jpeg).unwrap();
-        assert!(extract_lens_name_from_xmp(&path).is_none());
+        let candidates = extract_lens_candidates_from_xmp(&path);
+        assert!(candidates.aux_lens.is_none() && candidates.profile_lens.is_none());
+    }
+
+    #[test]
+    fn looks_like_film_scan_true_when_aux_and_profile_describe_different_lenses() {
+        let candidates = XmpLensCandidates {
+            aux_lens: Some("Nikon NIKKOR SC Auto 55mm f/1.2".to_string()),
+            profile_lens: Some("Nikon AF-S VR Micro-Nikkor 105mm f/2.8G IF-ED".to_string()),
+        };
+        assert!(candidates.looks_like_film_scan());
+    }
+
+    #[test]
+    fn looks_like_film_scan_false_when_profile_name_contains_aux_lens() {
+        // Typical digital workflow: Lightroom prepends the manufacturer.
+        let candidates = XmpLensCandidates {
+            aux_lens: Some("RF 50mm f/1.8 STM".to_string()),
+            profile_lens: Some("Canon RF 50mm f/1.8 STM".to_string()),
+        };
+        assert!(!candidates.looks_like_film_scan());
+    }
+
+    #[test]
+    fn looks_like_film_scan_false_when_aux_lens_alone() {
+        let candidates = XmpLensCandidates {
+            aux_lens: Some("Acme 50mm f/2".to_string()),
+            profile_lens: None,
+        };
+        assert!(!candidates.looks_like_film_scan());
+    }
+
+    #[test]
+    fn looks_like_film_scan_false_when_profile_alone() {
+        let candidates = XmpLensCandidates {
+            aux_lens: None,
+            profile_lens: Some("Canon RF 50mm f/1.8 STM".to_string()),
+        };
+        assert!(!candidates.looks_like_film_scan());
+    }
+
+    /// For a film scan the Lightroom `crs:LensProfileName` describes the
+    /// macro lens used to capture the scan, while `aux:Lens` (set by
+    /// LensTagger) carries the actual taking lens. The taking lens must win.
+    #[test]
+    fn extract_lens_candidates_from_xmp_exposes_aux_and_profile_independently() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:crs="x" xmlns:aux="y">
+            <rdf:Description
+                aux:Lens="Nikon NIKKOR SC Auto 55mm f/1.2"
+                crs:LensProfileName="Adobe (Nikon AF-S VR Micro-Nikkor 105mm f/2.8G IF-ED)"/>
+            </x:xmpmeta>"#;
+        let jpeg = build_synth_jpeg(None, Some(xmp));
+        fs::write(&path, &jpeg).unwrap();
+
+        let candidates = extract_lens_candidates_from_xmp(&path);
+        assert_eq!(
+            candidates.aux_lens.as_deref(),
+            Some("Nikon NIKKOR SC Auto 55mm f/1.2"),
+        );
+        assert_eq!(
+            candidates.profile_lens.as_deref(),
+            Some("Nikon AF-S VR Micro-Nikkor 105mm f/2.8G IF-ED"),
+        );
     }
 }
