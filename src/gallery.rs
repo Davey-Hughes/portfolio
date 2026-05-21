@@ -459,6 +459,60 @@ impl XmpLensCandidates {
     }
 }
 
+/// Which EXIF fields LensTagger explicitly wrote, recovered from its
+/// `-Key=Value` annotation lines in `UserComment`. When the user enters a
+/// value in LensTagger (aperture, shutter, etc.), the plugin records the
+/// override here as well as updating the corresponding EXIF tag, so a
+/// present flag means the EXIF value reflects the user's input rather than
+/// the scanning camera's auto-exposure.
+#[derive(Default, Debug, PartialEq, Eq)]
+struct LenstaggerOverrides {
+    fnumber: bool,
+    exposure_time: bool,
+}
+
+impl LenstaggerOverrides {
+    /// Parse `UserComment` text for LensTagger's `-Key=Value` override
+    /// lines. Accepts the case-insensitive aliases LensTagger uses across
+    /// versions (`-FNumber=` / `-Aperture=`, `-ExposureTime=` / `-Shutter*=`).
+    fn from_user_comment(text: &str) -> Self {
+        let mut out = Self::default();
+        for line in text.lines() {
+            let Some(rest) = line.trim_start().strip_prefix('-') else {
+                continue;
+            };
+            let Some((key, _)) = rest.split_once('=') else {
+                continue;
+            };
+            match key.trim().to_ascii_lowercase().as_str() {
+                "fnumber" | "aperture" | "fstop" => out.fnumber = true,
+                "exposuretime" | "shutterspeed" | "shutterspeedvalue" | "shutter" => {
+                    out.exposure_time = true;
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// Read LensTagger override annotations out of the EXIF `UserComment` tag.
+/// Returns an all-false struct when the tag is absent or doesn't decode as
+/// the ASCII-prefixed undefined-bytes form LensTagger writes.
+fn read_lenstagger_overrides(exif_reader: &exif::Exif) -> LenstaggerOverrides {
+    let Some(field) = exif_reader.get_field(exif::Tag::UserComment, exif::In::PRIMARY) else {
+        return LenstaggerOverrides::default();
+    };
+    let exif::Value::Undefined(bytes, _) = &field.value else {
+        return LenstaggerOverrides::default();
+    };
+    if bytes.len() <= 8 {
+        return LenstaggerOverrides::default();
+    }
+    let text = String::from_utf8_lossy(&bytes[8..]);
+    LenstaggerOverrides::from_user_comment(&text)
+}
+
 /// Recover human-readable lens names from XMP metadata. Lightroom often
 /// strips the camera maker note, but writes the matched lens profile as
 /// `crs:LensProfileName="Adobe (<lens name>) v<n>"` and tools like
@@ -561,6 +615,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
         .map(|f| f.display_value().to_string());
     let xmp_lens = extract_lens_candidates_from_xmp(path);
     let is_film_scan = xmp_lens.looks_like_film_scan();
+    let lt_overrides = read_lenstagger_overrides(&exif_reader);
     // Prefer `aux:Lens` (LensTagger writes the taking lens here) and EXIF
     // `LensModel` over `crs:LensProfileName` — on film scans the latter
     // names the scanning lens, not the lens used to take the photo.
@@ -581,20 +636,21 @@ fn extract_exif_data(path: &Path) -> ExifData {
         });
 
     // On camera-scanned film, EXIF FNumber/ExposureTime belong to the
-    // scanning camera unless LensTagger explicitly overwrote them. We can't
-    // reliably tell which is which, so drop both rather than misattribute
-    // the scan's exposure settings to the original photograph.
-    let aperture = if is_film_scan {
-        None
-    } else {
+    // scanning camera — unless LensTagger explicitly overwrote them, in
+    // which case it leaves a matching `-FNumber=` / `-ExposureTime=` line
+    // in `UserComment` and the EXIF value is what the user typed in.
+    let trust_aperture = !is_film_scan || lt_overrides.fnumber;
+    let trust_shutter = !is_film_scan || lt_overrides.exposure_time;
+
+    let aperture = if trust_aperture {
         exif_reader
             .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
             .map(|f| format!("f/{}", f.display_value()))
+    } else {
+        None
     };
 
-    let shutter_speed = if is_film_scan {
-        None
-    } else {
+    let shutter_speed = if trust_shutter {
         exif_reader
             .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
             .map(|f| {
@@ -605,6 +661,8 @@ fn extract_exif_data(path: &Path) -> ExifData {
                     format!("{} s", val)
                 }
             })
+    } else {
+        None
     };
 
     let iso = exif_reader
@@ -1622,6 +1680,60 @@ mod tests {
         fs::write(&path, &jpeg).unwrap();
         let candidates = extract_lens_candidates_from_xmp(&path);
         assert!(candidates.aux_lens.is_none() && candidates.profile_lens.is_none());
+    }
+
+    #[test]
+    fn lenstagger_overrides_parse_rent_a_car_user_comment() {
+        // Real-world LensTagger output: only Make/Model/ISO touched, no
+        // aperture or shutter override.
+        let text = "-Make=Nippon Kogaku K. K.\n\
+                    -Model=Nikon F\n\
+                    -ISO=200\n\
+                    Scanner Make: Nikon Corporation\n\
+                    Scanner Model: D850\n\
+                    LensTaggerVer:1.7.6";
+        assert_eq!(
+            LenstaggerOverrides::from_user_comment(text),
+            LenstaggerOverrides {
+                fnumber: false,
+                exposure_time: false,
+            },
+        );
+    }
+
+    #[test]
+    fn lenstagger_overrides_detect_aperture_and_shutter_keys() {
+        let text = "-FNumber=5.6\n-ExposureTime=1/125\n-ISO=400";
+        assert_eq!(
+            LenstaggerOverrides::from_user_comment(text),
+            LenstaggerOverrides {
+                fnumber: true,
+                exposure_time: true,
+            },
+        );
+    }
+
+    #[test]
+    fn lenstagger_overrides_accept_alias_keys_case_insensitively() {
+        // LensTagger versions / forks have used several names for the same
+        // overrides — accept the common aliases.
+        let text = "-aperture=2.8\n-Shutter=1/60";
+        assert_eq!(
+            LenstaggerOverrides::from_user_comment(text),
+            LenstaggerOverrides {
+                fnumber: true,
+                exposure_time: true,
+            },
+        );
+    }
+
+    #[test]
+    fn lenstagger_overrides_ignore_unrelated_lines() {
+        let text = "Scanner Make: Nikon\nFilm Type: Gold\nLensTaggerVer:1.7.6";
+        assert_eq!(
+            LenstaggerOverrides::from_user_comment(text),
+            LenstaggerOverrides::default(),
+        );
     }
 
     #[test]
