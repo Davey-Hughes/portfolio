@@ -8,9 +8,6 @@ RUN npm install -g sass
 
 RUN curl --proto '=https' --tlsv1.3 -LsSf https://github.com/leptos-rs/cargo-leptos/releases/latest/download/cargo-leptos-installer.sh | sh
 
-# Add the WASM target
-RUN rustup target add wasm32-unknown-unknown
-
 WORKDIR /work
 COPY . .
 
@@ -22,7 +19,6 @@ WORKDIR /app
 
 COPY --from=builder /work/target/release/portfolio /app/
 COPY --from=builder /work/target/site /app/site
-COPY --from=builder /work/Cargo.toml /app/
 
 # Create images directory for runtime mounting
 RUN mkdir -p /app/public/images /app/public/content
