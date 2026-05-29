@@ -715,11 +715,18 @@ fn extract_exif_data(path: &Path) -> ExifData {
                             (None, None) => text.clone(), // Return full text if no specific fields found
                         };
 
-                        // Add ISO if found (format: "Kodak Gold 200")
-                        if let Some(iso_value) = film_iso {
-                            Some(format!("{} {}", film_stock, iso_value))
-                        } else {
-                            Some(film_stock)
+                        // Add ISO if found (format: "Kodak Gold 200"), unless
+                        // the film stock name already contains it (e.g. "Ilford
+                        // Delta 400 Professional" with ISO 400).
+                        match film_iso {
+                            Some(iso_value)
+                                if !film_stock
+                                    .split_whitespace()
+                                    .any(|tok| tok == iso_value) =>
+                            {
+                                Some(format!("{} {}", film_stock, iso_value))
+                            }
+                            _ => Some(film_stock),
                         }
                     } else {
                         None
