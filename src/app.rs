@@ -319,7 +319,7 @@ fn MobilePhotoItem(photo: PhotoInfo) -> impl IntoView {
             <img
                 src=photo_url
                 srcset=photo_srcset
-                sizes="100vw"
+                sizes="(max-width: 767px) 100vw, 50vw"
                 alt=photo_title
                 width=photo.width.unwrap_or(1200)
                 height=photo.height.unwrap_or(800)

@@ -237,18 +237,31 @@ img {
   display: none;
 }
 
-// Tablet layout (768px - 1199px): hide desktop, show tablet, hide mobile
+// Tablet layout (768px - 1199px): reuse the vertical mobile list, but split
+// into 2 masonry-style columns via CSS multi-column. Each column packs its
+// own items so a portrait next to a landscape doesn't leave a hole.
 @media (max-width: 1199px) and (min-width: 768px) {
   .photo-grid-mosaic-desktop {
     display: none;
   }
 
   .photo-grid-mosaic-tablet {
-    display: grid;
+    display: none;
   }
 
   .photo-grid-mobile {
-    display: none;
+    display: block;
+    column-count: 2;
+    column-gap: 1rem;
+    padding: 1.5rem;
+    background-color: #fafafa;
+
+    .photo-mobile-item {
+      display: block;
+      // Stop the browser from splitting a single photo across columns.
+      break-inside: avoid;
+      margin-bottom: 1rem;
+    }
   }
 }
 
