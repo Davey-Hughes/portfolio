@@ -75,6 +75,8 @@ pub struct PhotoConfig {
 /// let photo = PhotoInfo {
 ///     url: "/images/photo.jpg".to_string(),
 ///     original_url: "/images/photo.jpg".to_string(),
+///     detail_url: "/images/photo.jpg".to_string(),
+///     srcset: String::new(),
 ///     sources: vec![],
 ///     original_sources: vec![],
 ///     title: "Sunset".to_string(),
@@ -104,6 +106,8 @@ pub struct PhotoConfig {
 pub struct PhotoInfo {
     pub url: String,                        // Primary/fallback image URL
     pub original_url: String,               // Full resolution primary image
+    pub detail_url: String,                 // High-quality compressed URL for the photo viewer
+    pub srcset: String,                     // Responsive srcset for `url` (width descriptors)
     pub sources: Vec<ImageSource>,          // Alternative compressed formats
     pub original_sources: Vec<ImageSource>, // Alternative original formats
     pub title: String,
@@ -246,6 +250,8 @@ mod tests {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
             original_url: "/images/test.jpg".to_string(),
+            detail_url: "/images/test.jpg".to_string(),
+            srcset: String::new(),
             sources: vec![],
             original_sources: vec![],
             title: "Test Photo".to_string(),
@@ -282,6 +288,8 @@ mod tests {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
             original_url: "/images/test.jpg".to_string(),
+            detail_url: "/images/test.jpg".to_string(),
+            srcset: String::new(),
             sources: vec![],
             original_sources: vec![],
             title: "Test Photo".to_string(),
@@ -365,6 +373,8 @@ mod tests {
         let photo = PhotoInfo {
             url: "/images/test.jpg".to_string(),
             original_url: "/images/test.jpg".to_string(),
+            detail_url: "/images/test.jpg".to_string(),
+            srcset: String::new(),
             sources: vec![],
             original_sources: vec![],
             title: "Test Photo".to_string(),

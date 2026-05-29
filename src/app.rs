@@ -258,7 +258,7 @@ fn MosaicPhotoGridItem(
     let photo_slug = photo.slug.clone();
     let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
-    let photo_sources = photo.sources.clone();
+    let photo_srcset = photo.srcset.clone();
     let photo_title = photo.title.clone();
     let focal_point = photo.focal_point.clone();
 
@@ -284,24 +284,18 @@ fn MosaicPhotoGridItem(
         >
             <div class="photo-hero-section">
                 <div class="photo-hero-image">
-                    <picture>
-                        {photo_sources
-                            .into_iter()
-                            .map(|source| {
-                                view! { <source srcset=source.url type=source.mime_type /> }
-                            })
-                            .collect_view()}
-                        <img
-                            src=photo_url
-                            alt=photo_title.clone()
-                            style=img_style
-                            width=photo.width.unwrap_or(1200)
-                            height=photo.height.unwrap_or(800)
-                            loading=move || if is_priority { "eager" } else { "lazy" }
-                            fetchpriority=move || if is_priority { "high" } else { "auto" }
-                            decoding="async"
-                        />
-                    </picture>
+                    <img
+                        src=photo_url
+                        srcset=photo_srcset
+                        sizes="(max-width: 767px) 100vw, (max-width: 1199px) 50vw, 33vw"
+                        alt=photo_title.clone()
+                        style=img_style
+                        width=photo.width.unwrap_or(1200)
+                        height=photo.height.unwrap_or(800)
+                        loading=move || if is_priority { "eager" } else { "lazy" }
+                        fetchpriority=move || if is_priority { "high" } else { "auto" }
+                        decoding="async"
+                    />
                 </div>
                 <div class="photo-hero-caption">
                     <h2>{photo_title}</h2>
@@ -317,13 +311,15 @@ fn MobilePhotoItem(photo: PhotoInfo) -> impl IntoView {
     let photo_slug = photo.slug.clone();
     let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
+    let photo_srcset = photo.srcset.clone();
     let photo_title = photo.title.clone();
 
     view! {
         <a href=format!("/gallery/{}/{}", photo_gallery, photo_slug) class="photo-mobile-item">
-            // On mobile, use only the compressed WebP image (no sources needed)
             <img
                 src=photo_url
+                srcset=photo_srcset
+                sizes="100vw"
                 alt=photo_title
                 width=photo.width.unwrap_or(1200)
                 height=photo.height.unwrap_or(800)
@@ -340,7 +336,7 @@ fn PhotoGridItem(photo: PhotoInfo, #[prop(optional)] index: Option<usize>) -> im
     let photo_slug = photo.slug.clone();
     let photo_gallery = photo.gallery_name.clone();
     let photo_url = photo.url.clone();
-    let photo_sources = photo.sources.clone();
+    let photo_srcset = photo.srcset.clone();
     let photo_title = photo.title.clone();
     let base_orientation = orientation_class_from_dimensions(photo.width, photo.height);
 
@@ -382,22 +378,16 @@ fn PhotoGridItem(photo: PhotoInfo, #[prop(optional)] index: Option<usize>) -> im
         >
             <div class="photo-hero-section">
                 <div class="photo-hero-image">
-                    <picture>
-                        {photo_sources
-                            .into_iter()
-                            .map(|source| {
-                                view! { <source srcset=source.url type=source.mime_type /> }
-                            })
-                            .collect_view()}
-                        <img
-                            src=photo_url
-                            alt=photo_title.clone()
-                            width=photo.width.unwrap_or(1200)
-                            height=photo.height.unwrap_or(800)
-                            loading="lazy"
-                            decoding="async"
-                        />
-                    </picture>
+                    <img
+                        src=photo_url
+                        srcset=photo_srcset
+                        sizes="(max-width: 767px) 100vw, (max-width: 1199px) 50vw, 33vw"
+                        alt=photo_title.clone()
+                        width=photo.width.unwrap_or(1200)
+                        height=photo.height.unwrap_or(800)
+                        loading="lazy"
+                        decoding="async"
+                    />
                 </div>
                 <div class="photo-hero-caption">
                     <h2>{photo_title}</h2>
@@ -1059,7 +1049,7 @@ fn FullscreenViewer(
     state.max_zoom.set(calculated_max_zoom);
 
     let is_mobile = move || viewport_width.get() <= 768.0 && viewport_width.get() > 0.0;
-    let photo_url_cached = StoredValue::new(photo.url.clone());
+    let photo_url_detail = StoredValue::new(photo.detail_url.clone());
     let photo_url_original = StoredValue::new(photo.original_url.clone());
     let photo_sources_original = StoredValue::new(photo.original_sources.clone());
     let photo_title_fs = photo.title.clone();
@@ -1430,7 +1420,7 @@ fn FullscreenViewer(
                         <img
                             src=move || {
                                 if is_mobile() {
-                                    photo_url_cached.get_value()
+                                    photo_url_detail.get_value()
                                 } else {
                                     photo_url_original.get_value()
                                 }
@@ -1592,10 +1582,7 @@ fn PhotoDetailPage() -> impl IntoView {
                     } else {
                         None
                     };
-                    let is_mobile = move || {
-                        viewport_width.get() <= 768.0 && viewport_width.get() > 0.0
-                    };
-                    let photo_url_cached = StoredValue::new(photo.url.clone());
+                    let photo_url_detail = StoredValue::new(photo.detail_url.clone());
                     let photo_url_original = StoredValue::new(photo.original_url.clone());
                     let photo_sources_original = StoredValue::new(photo.original_sources.clone());
                     let photo_title = photo.title.clone();
@@ -1618,27 +1605,33 @@ fn PhotoDetailPage() -> impl IntoView {
                                     style="cursor: pointer;"
                                 >
                                     <picture>
-                                        {move || {
-                                            if is_mobile() {
-                                                Vec::new()
-                                            } else {
-                                                photo_sources_original
-                                                    .get_value()
-                                                    .into_iter()
-                                                    .map(|source| {
-                                                        view! { <source srcset=source.url type=source.mime_type /> }
-                                                    })
-                                                    .collect()
-                                            }
-                                        }}
-                                        <img
-                                            src=move || {
-                                                if is_mobile() {
-                                                    photo_url_cached.get_value()
-                                                } else {
-                                                    photo_url_original.get_value()
+                                        // Desktop: alternative original-file formats. Restricted
+                                        // to >=768px so mobile never tries to fetch the (often
+                                        // multi-MB) original — it falls through to the high-quality
+                                        // compressed <img> below.
+                                        {photo_sources_original
+                                            .get_value()
+                                            .into_iter()
+                                            .map(|source| {
+                                                view! {
+                                                    <source
+                                                        media="(min-width: 768px)"
+                                                        srcset=source.url
+                                                        type=source.mime_type
+                                                    />
                                                 }
-                                            }
+                                            })
+                                            .collect_view()}
+                                        // Desktop primary original (no type → matched if reached).
+                                        <source
+                                            media="(min-width: 768px)"
+                                            srcset=photo_url_original.get_value()
+                                        />
+                                        // Mobile + final fallback: 4000w/90q WebP — significantly
+                                        // higher quality than the grid preset, well below the
+                                        // multi-MB originals that would OOM phones.
+                                        <img
+                                            src=photo_url_detail.get_value()
                                             alt=photo_title.clone()
                                             width=photo.width.unwrap_or(3600)
                                             height=photo.height.unwrap_or(2400)

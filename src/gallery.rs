@@ -48,6 +48,35 @@ fn load_photo_config(photo_path: &Path) -> PhotoConfig {
         .unwrap_or_default()
 }
 
+/// Widest preset eligible for the grid `srcset`. Anything larger (e.g. the
+/// 4000w detail preset) is reserved for the photo viewer and excluded here so
+/// big desktops don't pull multi-MB images for every thumbnail.
+#[cfg(feature = "ssr")]
+const SRCSET_MAX_WIDTH: u32 = 2400;
+
+/// Build a responsive srcset string for the compressed endpoint.
+/// Each preset becomes "url Ww", letting the browser pick by viewport+DPR.
+#[cfg(feature = "ssr")]
+fn build_compressed_srcset(encoded_path: &str) -> String {
+    use crate::image_params::ImageParams;
+    let mut presets: Vec<_> = ImageParams::get_valid_presets()
+        .into_iter()
+        .filter(|(w, _)| *w <= SRCSET_MAX_WIDTH)
+        .collect();
+    // Sort ascending by width so the srcset reads small→large.
+    presets.sort_by_key(|(w, _)| *w);
+    presets
+        .into_iter()
+        .map(|(w, q)| format!("/images/compressed/{encoded_path}?width={w}&quality={q} {w}w"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(not(feature = "ssr"))]
+fn build_compressed_srcset(_encoded_path: &str) -> String {
+    String::new()
+}
+
 /// Get default image width and quality from environment variables
 /// Returns (width, quality) tuple with defaults of (2400, 80)
 fn get_default_image_params() -> (u32, u8) {
@@ -232,6 +261,11 @@ fn find_images_recursive_with_gallery(
             encoded_primary_path, img_width, img_quality
         );
         let original_url = format!("/images/{}", encoded_primary_path);
+        let detail_url = format!(
+            "/images/compressed/{}?width=4000&quality=90",
+            encoded_primary_path
+        );
+        let srcset = build_compressed_srcset(&encoded_primary_path);
 
         // Extract subfolder from relative path
         let subfolder = Path::new(primary_relative_path).parent().and_then(|p| {
@@ -254,6 +288,8 @@ fn find_images_recursive_with_gallery(
         photos.push(PhotoInfo {
             url: compressed_url,
             original_url,
+            detail_url,
+            srcset,
             sources,
             original_sources,
             title,
