@@ -115,15 +115,8 @@ impl AllPhotosCache {
 }
 
 #[cfg(feature = "ssr")]
-fn generate_mosaic_layout_for_size(
-    photos: &[crate::types::PhotoInfo],
-    container_width: f64,
-    base_height: f64,
-) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
-
-    let num_images = photos.len();
-    let image_aspects: Vec<(usize, f64)> = photos
+fn image_aspects(photos: &[crate::types::PhotoInfo]) -> Vec<(usize, f64)> {
+    photos
         .iter()
         .enumerate()
         .map(|(idx, photo)| {
@@ -134,7 +127,19 @@ fn generate_mosaic_layout_for_size(
             };
             (idx, aspect)
         })
-        .collect();
+        .collect()
+}
+
+#[cfg(feature = "ssr")]
+fn generate_mosaic_layout_for_size(
+    photos: &[crate::types::PhotoInfo],
+    container_width: f64,
+    base_height: f64,
+) -> (crate::types::MosaicLayout, Vec<usize>) {
+    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
+
+    let num_images = photos.len();
+    let image_aspects = image_aspects(photos);
 
     // Scale container height linearly with photo count so average cell area
     // stays roughly constant as the gallery grows. `PHOTOS_PER_BASE_HEIGHT` is
@@ -158,6 +163,7 @@ fn generate_mosaic_layout_for_size(
 
     generate_mosaic_with_images(num_images, &image_aspects, mosaic_config, 100)
 }
+
 
 /// Server function to get site configuration
 #[server(GetSiteConfig, "/api")]
@@ -226,13 +232,12 @@ fn build_gallery_data(
             let reordered_photos: Vec<PhotoInfo> =
                 image_order.iter().map(|&idx| photos[idx].clone()).collect();
 
-            let (layout_tablet, _) =
-                generate_mosaic_layout_for_size(&reordered_photos, 768.0, 600.0);
-
+            // Tablet uses a CSS multi-column masonry on the `.photo-grid-mobile`
+            // div — no server-computed layout needed.
             let data = GalleryData {
                 photos: reordered_photos,
                 mosaic_layout: Some(layout_desktop),
-                mosaic_layout_tablet: Some(layout_tablet),
+                mosaic_layout_tablet: None,
             };
             return (
                 data,
