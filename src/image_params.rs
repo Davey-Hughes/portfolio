@@ -33,8 +33,19 @@ impl ImageParams {
             }
         }
 
-        // Default valid combinations: (width, quality)
-        vec![(2400, 80)]
+        // Default valid combinations: (width, quality). Order matters: the
+        // first entry is the prewarm/default-fallback preset. The smaller
+        // entries power responsive `srcset` for grid views; (4000, 90) is the
+        // high-quality preset used as the `src` on the photo detail page and
+        // fullscreen viewer (mobile sees this instead of the multi-MB original).
+        vec![
+            (2400, 80),
+            (480, 80),
+            (800, 80),
+            (1200, 80),
+            (1800, 80),
+            (4000, 90),
+        ]
     }
 
     pub fn validate(&self) -> Result<(u32, u8), &'static str> {
@@ -136,13 +147,33 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_validate_with_invalid_combination() {
+        std::env::remove_var("IMAGE_PRESETS");
+        // 2400 is a valid width and 50 is a valid quality, but the pair
+        // doesn't appear in the default presets.
         let params = ImageParams {
-            width: Some(1200),
-            quality: Some(80),
+            width: Some(2400),
+            quality: Some(50),
         };
         let result = params.validate();
         assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_validate_accepts_responsive_widths() {
+        std::env::remove_var("IMAGE_PRESETS");
+        for w in [480, 800, 1200, 1800, 2400] {
+            let params = ImageParams {
+                width: Some(w),
+                quality: None,
+            };
+            assert!(
+                params.validate().is_ok(),
+                "expected width {w} to be a valid preset"
+            );
+        }
     }
 
     #[test]
@@ -176,8 +207,13 @@ mod tests {
         let presets = ImageParams::get_valid_presets();
         std::env::remove_var("IMAGE_PRESETS");
 
-        assert_eq!(presets.len(), 1);
+        // Falls back to the built-in responsive preset list.
         assert!(presets.contains(&(2400, 80)));
+        assert!(presets.contains(&(480, 80)));
+        assert!(presets.contains(&(800, 80)));
+        assert!(presets.contains(&(1200, 80)));
+        assert!(presets.contains(&(1800, 80)));
+        assert!(presets.contains(&(4000, 90)));
     }
 
     #[test]
