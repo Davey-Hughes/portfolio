@@ -192,6 +192,12 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
         return;
     }
 
+    // Enumerate every source image and compute the path-encoded prefix
+    // `process_and_cache_image` would produce. Doing it this way avoids the
+    // ambiguous reverse decoding that previously deleted cache files for any
+    // source whose name happened to contain `_` or `_w`.
+    let valid_prefixes = collect_valid_prefixes(images_dir);
+
     let mut orphaned_count = 0;
     let mut old_count = 0;
     let mut error_count = 0;
@@ -200,7 +206,6 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
     let max_age = Duration::from_secs(30 * 24 * 60 * 60); // 30 days
     let now = SystemTime::now();
 
-    // Read all cache files
     let cache_entries = match fs::read_dir(cache_path) {
         Ok(entries) => entries,
         Err(e) => {
@@ -221,37 +226,36 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
             None => continue,
         };
 
-        // Parse cache filename and check if source exists
-        if let Some(first_part) = filename.split("_w").next() {
-            let original_path = first_part.replace('_', "/");
+        let Some(prefix) = cache_file_prefix(filename) else {
+            // Unknown filename pattern — leave it alone rather than risk
+            // deleting an unrelated file someone dropped in the cache dir.
+            continue;
+        };
 
-            if !source_image_exists(images_dir, &original_path) {
-                // Source image doesn't exist, remove cached file
-                match fs::remove_file(&cache_file) {
-                    Ok(_) => {
-                        log!("Removed orphaned cache file: {}", filename);
-                        orphaned_count += 1;
-                    }
-                    Err(e) => {
-                        log!("Failed to remove cache file {}: {}", filename, e);
-                        error_count += 1;
-                    }
+        if !valid_prefixes.contains(prefix) {
+            match fs::remove_file(&cache_file) {
+                Ok(_) => {
+                    log!("Removed orphaned cache file: {}", filename);
+                    orphaned_count += 1;
                 }
-                continue;
+                Err(e) => {
+                    log!("Failed to remove cache file {}: {}", filename, e);
+                    error_count += 1;
+                }
             }
+            continue;
+        }
 
-            // Check if cache file is too old (based on last access time)
-            if is_cache_file_old(&cache_file, max_age, now) {
-                match fs::remove_file(&cache_file) {
-                    Ok(_) => {
-                        let age_days = get_file_age_days(&cache_file, now);
-                        log!("Removed old cache file ({}d old): {}", age_days, filename);
-                        old_count += 1;
-                    }
-                    Err(e) => {
-                        log!("Failed to remove old cache file {}: {}", filename, e);
-                        error_count += 1;
-                    }
+        if is_cache_file_old(&cache_file, max_age, now) {
+            match fs::remove_file(&cache_file) {
+                Ok(_) => {
+                    let age_days = get_file_age_days(&cache_file, now);
+                    log!("Removed old cache file ({}d old): {}", age_days, filename);
+                    old_count += 1;
+                }
+                Err(e) => {
+                    log!("Failed to remove old cache file {}: {}", filename, e);
+                    error_count += 1;
                 }
             }
         }
@@ -265,18 +269,77 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
     );
 }
 
-/// Check if a source image exists with any supported extension
-fn source_image_exists(images_dir: &str, original_path: &str) -> bool {
-    let extensions = ["jxl", "avif", "jpg", "jpeg", "webp", "png", "gif"];
+/// Parse the source-path prefix out of a cache filename.
+///
+/// Cache files are named `{prefix}_w{W}_q{Q}_l{V}.webp`. The prefix encodes
+/// the source path with `/` (and `\`) replaced by `_`, so it can itself
+/// contain underscores and even `_w` substrings (e.g. `home_walking`). We
+/// strip the deterministic right-hand `_w<digits>_q<digits>_l<digits>.webp`
+/// tail instead of trying to reverse the path encoding, which is lossy.
+fn cache_file_prefix(filename: &str) -> Option<&str> {
+    let stripped = filename.strip_suffix(".webp")?;
+    let head = strip_underscore_digit_segment(stripped, "_l")?;
+    let head = strip_underscore_digit_segment(head, "_q")?;
+    let prefix = strip_underscore_digit_segment(head, "_w")?;
+    (!prefix.is_empty()).then_some(prefix)
+}
 
-    for ext in &extensions {
-        let source_path = PathBuf::from(images_dir).join(format!("{}.{}", original_path, ext));
-        if source_path.exists() {
-            return true;
+/// Strip a trailing `<sep><digits>` segment (e.g. `_l1`, `_q80`, `_w2400`)
+/// from `s` and return the remainder. None if the tail doesn't match.
+fn strip_underscore_digit_segment<'a>(s: &'a str, sep: &str) -> Option<&'a str> {
+    let pos = s.rfind(sep)?;
+    let (head, tail) = s.split_at(pos);
+    let digits = &tail[sep.len()..];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(head)
+}
+
+/// Walk `images_dir` recursively and collect the set of valid cache-file
+/// prefixes — the same encoding `process_and_cache_image` produces for each
+/// source file. Used by `cleanup_cache` to decide whether a cache file's
+/// source still exists.
+fn collect_valid_prefixes(images_dir: &str) -> std::collections::HashSet<String> {
+    let mut prefixes = std::collections::HashSet::new();
+    let base = std::path::Path::new(images_dir);
+    collect_valid_prefixes_recursive(base, base, &mut prefixes);
+    prefixes
+}
+
+fn collect_valid_prefixes_recursive(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    out: &mut std::collections::HashSet<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_valid_prefixes_recursive(&path, base, out);
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let ext = ext.to_ascii_lowercase();
+        if !matches!(
+            ext.as_str(),
+            "jpg" | "jpeg" | "png" | "webp" | "gif" | "jxl" | "avif"
+        ) {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(base) else {
+            continue;
+        };
+        let no_ext = relative.with_extension("");
+        let encoded = no_ext.to_string_lossy().replace(['/', '\\'], "_");
+        if !encoded.is_empty() {
+            out.insert(encoded);
         }
     }
-
-    false
 }
 
 /// Check if a cache file is older than the maximum age
@@ -494,11 +557,128 @@ mod tests {
     }
 
     #[test]
-    fn source_image_exists_finds_any_supported_extension() {
+    fn cache_file_prefix_strips_w_q_l_suffix() {
+        assert_eq!(
+            cache_file_prefix("home_sunset_w2400_q80_l1.webp"),
+            Some("home_sunset")
+        );
+        assert_eq!(
+            cache_file_prefix("home_sunset_w4000_q90_l1.webp"),
+            Some("home_sunset")
+        );
+    }
+
+    #[test]
+    fn cache_file_prefix_handles_underscore_in_source_name() {
+        // Source path `home/space_needle.jpg` encodes to `home_space_needle`.
+        // The lossy old code split on the first `_w` and replaced every `_`
+        // with `/`, mangling this. The new parser strips from the right.
+        assert_eq!(
+            cache_file_prefix("home_space_needle_w2400_q80_l1.webp"),
+            Some("home_space_needle")
+        );
+    }
+
+    #[test]
+    fn cache_file_prefix_handles_w_substring_in_source_name() {
+        // `home/walking.jpg` — prefix `home_walking` contains `_w`.
+        assert_eq!(
+            cache_file_prefix("home_walking_w800_q80_l1.webp"),
+            Some("home_walking")
+        );
+        // And starts-with: `home/wave.jpg` — prefix begins with `wave`.
+        assert_eq!(
+            cache_file_prefix("home_wave_w800_q80_l1.webp"),
+            Some("home_wave")
+        );
+    }
+
+    #[test]
+    fn cache_file_prefix_rejects_unknown_pattern() {
+        assert_eq!(cache_file_prefix("notes.txt"), None);
+        assert_eq!(cache_file_prefix("foo.webp"), None);
+        assert_eq!(cache_file_prefix("foo_w_q80_l1.webp"), None); // empty digit group
+        assert_eq!(cache_file_prefix("_w2400_q80_l1.webp"), None); // empty prefix
+    }
+
+    #[test]
+    fn collect_valid_prefixes_walks_recursively() {
+        use std::collections::HashSet;
         let dir = TempDir::new().unwrap();
-        write_jpeg(&dir.path().join("a/b.png"), STUB);
-        assert!(source_image_exists(dir.path().to_str().unwrap(), "a/b"));
-        assert!(!source_image_exists(dir.path().to_str().unwrap(), "a/missing"));
+        let images = dir.path();
+        write_jpeg(&images.join("home/sunset.jpg"), STUB);
+        write_jpeg(&images.join("home/space_needle.jpg"), STUB);
+        write_jpeg(&images.join("travel/iceland/glacier.png"), STUB);
+        // Non-image file is skipped.
+        fs::write(images.join("home/notes.txt"), b"x").unwrap();
+
+        let prefixes = collect_valid_prefixes(images.to_str().unwrap());
+        let expected: HashSet<String> = [
+            "home_sunset",
+            "home_space_needle",
+            "travel_iceland_glacier",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(prefixes, expected);
+    }
+
+    #[test]
+    fn cleanup_cache_keeps_caches_for_underscored_source_names() {
+        // Regression: the previous `_` → `/` reverse decoded
+        // `home_space_needle` as `home/space/needle`, found no source, and
+        // wrongly deleted the cache. The new code looks up the literal prefix
+        // in the set built from a directory walk.
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/space_needle.jpg"), STUB);
+
+        let kept = cache.join("home_space_needle_w2400_q80_l1.webp");
+        fs::write(&kept, b"webp").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(
+            kept.exists(),
+            "cache for an existing source with `_` in its name must survive cleanup"
+        );
+    }
+
+    #[test]
+    fn cleanup_cache_removes_orphan_cache_files() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        // No source images at all → every cache file is orphaned.
+        let orphan = cache.join("home_deleted_w2400_q80_l1.webp");
+        fs::write(&orphan, b"webp").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(!orphan.exists());
+    }
+
+    #[test]
+    fn cleanup_cache_leaves_unknown_filenames_alone() {
+        // A stray file someone dropped in the cache dir mustn't be deleted
+        // just because its source can't be inferred.
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let stray = cache.join("README.txt");
+        fs::write(&stray, b"hello").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(stray.exists());
     }
 
     #[test]
