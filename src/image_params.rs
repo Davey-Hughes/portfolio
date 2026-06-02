@@ -34,18 +34,15 @@ impl ImageParams {
         }
 
         // Default valid combinations: (width, quality). Order matters: the
-        // first entry is the prewarm/default-fallback preset. The smaller
-        // entries power responsive `srcset` for grid views; (4000, 90) is the
-        // high-quality preset used as the `src` on the photo detail page and
-        // fullscreen viewer (mobile sees this instead of the multi-MB original).
-        vec![
-            (2400, 80),
-            (480, 80),
-            (800, 80),
-            (1200, 80),
-            (1800, 80),
-            (4000, 90),
-        ]
+        // first entry is the prewarm/default-fallback preset and powers the
+        // grid `srcset`. (4000, 90) is the high-quality preset used as the
+        // `src` on the photo detail page and fullscreen viewer (mobile sees
+        // this instead of the multi-MB original).
+        //
+        // Smaller/lower-quality variants were dropped intentionally: anything
+        // below 2400px @ q90 looked soft, so 2400px is the minimum width
+        // served and every preset is quality 90.
+        vec![(2400, 90), (4000, 90)]
     }
 
     pub fn validate(&self) -> Result<(u32, u8), &'static str> {
@@ -58,7 +55,7 @@ impl ImageParams {
                     Ok((w, q))
                 } else {
                     Err(
-                        "Invalid width/quality combination. Check IMAGE_PRESETS environment variable or use default: 2400px/80",
+                        "Invalid width/quality combination. Check IMAGE_PRESETS environment variable or use default: 2400px/90",
                     )
                 }
             }
@@ -97,7 +94,7 @@ mod tests {
         };
         let result = params.validate();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (2400, 80));
+        assert_eq!(result.unwrap(), (2400, 90));
     }
 
     #[test]
@@ -110,7 +107,7 @@ mod tests {
         };
         let result = params.validate();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (2400, 80));
+        assert_eq!(result.unwrap(), (2400, 90));
     }
 
     #[test]
@@ -135,15 +132,15 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_validate_with_2400_80_combination() {
+    fn test_validate_with_2400_90_combination() {
         std::env::remove_var("IMAGE_PRESETS");
         let params = ImageParams {
             width: Some(2400),
-            quality: Some(80),
+            quality: Some(90),
         };
         let result = params.validate();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), (2400, 80));
+        assert_eq!(result.unwrap(), (2400, 90));
     }
 
     #[test]
@@ -164,7 +161,7 @@ mod tests {
     #[serial]
     fn test_validate_accepts_responsive_widths() {
         std::env::remove_var("IMAGE_PRESETS");
-        for w in [480, 800, 1200, 1800, 2400] {
+        for w in [2400, 4000] {
             let params = ImageParams {
                 width: Some(w),
                 quality: None,
@@ -207,12 +204,9 @@ mod tests {
         let presets = ImageParams::get_valid_presets();
         std::env::remove_var("IMAGE_PRESETS");
 
-        // Falls back to the built-in responsive preset list.
-        assert!(presets.contains(&(2400, 80)));
-        assert!(presets.contains(&(480, 80)));
-        assert!(presets.contains(&(800, 80)));
-        assert!(presets.contains(&(1200, 80)));
-        assert!(presets.contains(&(1800, 80)));
+        // Falls back to the built-in preset list (2400px minimum, q90).
+        assert_eq!(presets.len(), 2);
+        assert!(presets.contains(&(2400, 90)));
         assert!(presets.contains(&(4000, 90)));
     }
 
