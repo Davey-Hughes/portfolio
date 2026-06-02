@@ -229,19 +229,34 @@ fn build_gallery_data(
             let (layout_desktop, image_order) =
                 generate_mosaic_layout_for_size(&photos, 1200.0, 600.0);
 
-            let reordered_photos: Vec<PhotoInfo> =
-                image_order.iter().map(|&idx| photos[idx].clone()).collect();
+            // The generator assigns exactly one photo per layout cell, so a
+            // short `image_order` means some photos got no cell. Reordering by
+            // it would silently drop those photos — and the truncated result
+            // would be cached for the mosaic TTL (this is the bug that made the
+            // film gallery intermittently show a single image). Only use the
+            // mosaic when every photo was placed; otherwise fall through to the
+            // plain responsive grid, which always renders them all.
+            if image_order.len() == photos.len() {
+                let reordered_photos: Vec<PhotoInfo> =
+                    image_order.iter().map(|&idx| photos[idx].clone()).collect();
 
-            // Tablet uses a CSS multi-column masonry on the `.photo-grid-mobile`
-            // div — no server-computed layout needed.
-            let data = GalleryData {
-                photos: reordered_photos,
-                mosaic_layout: Some(layout_desktop),
-                mosaic_layout_tablet: None,
-            };
-            return (
-                data,
-                cfg.mosaic_cache_duration.unwrap_or(MOSAIC_DEFAULT_TTL),
+                // Tablet uses a CSS multi-column masonry on the
+                // `.photo-grid-mobile` div — no server-computed layout needed.
+                let data = GalleryData {
+                    photos: reordered_photos,
+                    mosaic_layout: Some(layout_desktop),
+                    mosaic_layout_tablet: None,
+                };
+                return (
+                    data,
+                    cfg.mosaic_cache_duration.unwrap_or(MOSAIC_DEFAULT_TTL),
+                );
+            }
+
+            leptos::logging::log!(
+                "Mosaic layout placed only {} of {} photos; falling back to grid layout",
+                image_order.len(),
+                photos.len()
             );
         }
     }
@@ -441,6 +456,67 @@ mod tests {
             mosaic_layout: None,
             mosaic_layout_tablet: None,
         })
+    }
+
+    fn photo(filename: &str, width: u32, height: u32) -> PhotoInfo {
+        PhotoInfo {
+            url: String::new(),
+            original_url: String::new(),
+            detail_url: String::new(),
+            srcset: String::new(),
+            sources: Vec::new(),
+            original_sources: Vec::new(),
+            title: String::new(),
+            filename: filename.to_string(),
+            slug: String::new(),
+            gallery_name: "film".to_string(),
+            subfolder: None,
+            width: Some(width),
+            height: Some(height),
+            date_taken: None,
+            camera_make: None,
+            camera_model: None,
+            lens_model: None,
+            focal_length: None,
+            aperture: None,
+            shutter_speed: None,
+            iso: None,
+            film_stock: None,
+            copyright: None,
+            focal_point: None,
+        }
+    }
+
+    // Regression: a `use_mosaic` gallery whose photo count makes the canvas very
+    // tall used to have its first split fail intermittently, collapsing the
+    // layout to one cell and dropping every other photo. `build_gallery_data`
+    // must always return as many photos as it was given.
+    #[test]
+    fn build_gallery_data_mosaic_never_drops_photos() {
+        use crate::types::GalleryConfig;
+
+        // Mostly landscape, a few portrait — mirrors the film gallery.
+        let photos: Vec<PhotoInfo> = (0..23)
+            .map(|i| {
+                let (w, h) = if i % 7 == 0 { (5049, 8911) } else { (8911, 5049) };
+                photo(&format!("photo_{i}.jpg"), w, h)
+            })
+            .collect();
+
+        let config = GalleryConfig {
+            use_mosaic: Some(true),
+            mosaic_cache_duration: Some(3600),
+            ..Default::default()
+        };
+
+        for _ in 0..300 {
+            let (data, _ttl) = build_gallery_data(photos.clone(), Some(&config));
+            assert_eq!(
+                data.photos.len(),
+                photos.len(),
+                "mosaic build must not drop photos"
+            );
+        }
     }
 
     #[test]
