@@ -78,26 +78,25 @@ fn build_compressed_srcset(_encoded_path: &str) -> String {
 }
 
 /// Get default image width and quality from environment variables
-/// Returns (width, quality) tuple with defaults of (2400, 80)
+/// Returns (width, quality) tuple with defaults of (2400, 90)
 fn get_default_image_params() -> (u32, u8) {
-    // Use 2400px at 80 quality for photo detail pages
-    // This provides good quality while keeping file sizes reasonable
+    // Use 2400px at 90 quality for photo detail pages — the minimum width
+    // served, since anything smaller looked soft.
     #[cfg(feature = "ssr")]
     {
         use crate::image_params::ImageParams;
         let presets = ImageParams::get_valid_presets();
-        // Find the 2400px/80 quality preset, or fall back to default
+        // Find the 2400px preset (the minimum served width), or fall back.
         presets
             .iter()
-            .find(|(w, q)| *w == 2400 && *q == 80)
+            .find(|(w, _)| *w == 2400)
             .copied()
-            .or_else(|| presets.iter().find(|(w, _)| *w == 2400).copied())
-            .unwrap_or((2400, 80))
+            .unwrap_or((2400, 90))
     }
 
     #[cfg(not(feature = "ssr"))]
     {
-        // For client-side, use environment variables or default to 2400/80
+        // For client-side, use environment variables or default to 2400/90
         let width = std::env::var("DEFAULT_IMAGE_WIDTH")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
@@ -106,7 +105,7 @@ fn get_default_image_params() -> (u32, u8) {
         let quality = std::env::var("DEFAULT_IMAGE_QUALITY")
             .ok()
             .and_then(|s| s.parse::<u8>().ok())
-            .unwrap_or(80);
+            .unwrap_or(90);
 
         (width, quality)
     }
@@ -1094,9 +1093,9 @@ mod tests {
         std::env::remove_var("IMAGE_PRESETS");
 
         let (width, quality) = get_default_image_params();
-        // Should use 2400px at 80 quality (the new default)
+        // Should use 2400px at 90 quality (the default)
         assert_eq!(width, 2400);
-        assert_eq!(quality, 80);
+        assert_eq!(quality, 90);
     }
 
     #[test]
@@ -1114,12 +1113,12 @@ mod tests {
         #[cfg(feature = "ssr")]
         {
             assert_eq!(width, 2400);
-            assert_eq!(quality, 80);
+            assert_eq!(quality, 90);
         }
         #[cfg(not(feature = "ssr"))]
         {
             assert_eq!(width, 1200);
-            assert_eq!(quality, 80);
+            assert_eq!(quality, 90);
         }
     }
 
@@ -1138,7 +1137,7 @@ mod tests {
         #[cfg(feature = "ssr")]
         {
             assert_eq!(width, 2400);
-            assert_eq!(quality, 80);
+            assert_eq!(quality, 90);
         }
         #[cfg(not(feature = "ssr"))]
         {
@@ -1163,7 +1162,7 @@ mod tests {
         #[cfg(feature = "ssr")]
         {
             assert_eq!(width, 2400);
-            assert_eq!(quality, 80);
+            assert_eq!(quality, 90);
         }
         #[cfg(not(feature = "ssr"))]
         {
@@ -1185,7 +1184,7 @@ mod tests {
 
         // Should fall back to defaults
         assert_eq!(width, 2400);
-        assert_eq!(quality, 80);
+        assert_eq!(quality, 90);
     }
 
     #[test]
