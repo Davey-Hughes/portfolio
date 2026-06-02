@@ -309,6 +309,20 @@ fn try_split_rectangle_with_bias(
     None
 }
 
+/// A split is usable only if neither resulting rectangle violates the minimum
+/// size or aspect-ratio constraints.
+fn split_is_valid(rect1: &Rectangle, rect2: &Rectangle, config: &MosaicConfig) -> bool {
+    !rect1.is_too_small(
+        config.min_cell_dimension,
+        config.min_aspect_ratio,
+        config.max_aspect_ratio,
+    ) && !rect2.is_too_small(
+        config.min_cell_dimension,
+        config.min_aspect_ratio,
+        config.max_aspect_ratio,
+    )
+}
+
 /// Try to split a rectangle horizontally
 fn try_horizontal_split(
     rect: &Rectangle,
@@ -352,15 +366,7 @@ fn try_horizontal_split(
         let rect2 = Rectangle::new(rect.x, split_y, rect.width, rect.y + rect.height - split_y);
 
         // Check if the new rectangles would be valid
-        if !rect1.is_too_small(
-            config.min_cell_dimension,
-            config.min_aspect_ratio,
-            config.max_aspect_ratio,
-        ) && !rect2.is_too_small(
-            config.min_cell_dimension,
-            config.min_aspect_ratio,
-            config.max_aspect_ratio,
-        ) {
+        if split_is_valid(&rect1, &rect2, config) {
             let line = DivisionLine {
                 start_x,
                 start_y: split_y,
@@ -373,7 +379,48 @@ fn try_horizontal_split(
         }
     }
 
+    // Deterministic fallback. The edge-biased random samples above can miss the
+    // valid band entirely for extreme container aspect ratios — e.g. a very
+    // tall canvas, where only near-central cuts leave both halves within the
+    // allowed aspect range. Without this, the first split of such a container
+    // fails and, with no other rectangle to fall back to, the whole layout
+    // collapses to a single cell. Scan evenly spaced positions and take the
+    // valid one nearest the center.
+    if let Some(split_y) = scan_for_valid_split(min_y, max_y, |split_y| {
+        let rect1 = Rectangle::new(rect.x, rect.y, rect.width, split_y - rect.y);
+        let rect2 = Rectangle::new(rect.x, split_y, rect.width, rect.y + rect.height - split_y);
+        split_is_valid(&rect1, &rect2, config)
+    }) {
+        let (start_x, end_x) = find_line_extent_horizontal(rect, split_y, existing_lines);
+        let rect1 = Rectangle::new(rect.x, rect.y, rect.width, split_y - rect.y);
+        let rect2 = Rectangle::new(rect.x, split_y, rect.width, rect.y + rect.height - split_y);
+        let line = DivisionLine {
+            start_x,
+            start_y: split_y,
+            end_x,
+            end_y: split_y,
+            is_horizontal: true,
+        };
+        return Some((rect1, rect2, line));
+    }
+
     None
+}
+
+/// Scan evenly spaced positions in `(min, max)` and return the valid one
+/// nearest the center (or `None` if no scanned position is valid). Used as a
+/// deterministic fallback when biased random sampling fails to find a split.
+fn scan_for_valid_split(min: f64, max: f64, is_valid: impl Fn(f64) -> bool) -> Option<f64> {
+    const FALLBACK_STEPS: u32 = 64;
+    let center = (min + max) / 2.0;
+    let mut best: Option<f64> = None;
+    for i in 1..FALLBACK_STEPS {
+        let pos = min + (max - min) * f64::from(i) / f64::from(FALLBACK_STEPS);
+        if is_valid(pos) && best.is_none_or(|b| (pos - center).abs() < (b - center).abs()) {
+            best = Some(pos);
+        }
+    }
+    best
 }
 
 /// Try to split a rectangle vertically
@@ -418,15 +465,7 @@ fn try_vertical_split(
         let rect2 = Rectangle::new(split_x, rect.y, rect.x + rect.width - split_x, rect.height);
 
         // Check if the new rectangles would be valid
-        if !rect1.is_too_small(
-            config.min_cell_dimension,
-            config.min_aspect_ratio,
-            config.max_aspect_ratio,
-        ) && !rect2.is_too_small(
-            config.min_cell_dimension,
-            config.min_aspect_ratio,
-            config.max_aspect_ratio,
-        ) {
+        if split_is_valid(&rect1, &rect2, config) {
             let line = DivisionLine {
                 start_x: split_x,
                 start_y,
@@ -437,6 +476,25 @@ fn try_vertical_split(
 
             return Some((rect1, rect2, line));
         }
+    }
+
+    // Deterministic fallback — see `try_horizontal_split` for the rationale.
+    if let Some(split_x) = scan_for_valid_split(min_x, max_x, |split_x| {
+        let rect1 = Rectangle::new(rect.x, rect.y, split_x - rect.x, rect.height);
+        let rect2 = Rectangle::new(split_x, rect.y, rect.x + rect.width - split_x, rect.height);
+        split_is_valid(&rect1, &rect2, config)
+    }) {
+        let (start_y, end_y) = find_line_extent_vertical(rect, split_x, existing_lines);
+        let rect1 = Rectangle::new(rect.x, rect.y, split_x - rect.x, rect.height);
+        let rect2 = Rectangle::new(split_x, rect.y, rect.x + rect.width - split_x, rect.height);
+        let line = DivisionLine {
+            start_x: split_x,
+            start_y,
+            end_x: split_x,
+            end_y,
+            is_horizontal: false,
+        };
+        return Some((rect1, rect2, line));
     }
 
     None
@@ -772,6 +830,28 @@ mod tests {
         for rect in &layout {
             assert!(rect.width > 0.0);
             assert!(rect.height > 0.0);
+        }
+    }
+
+    #[test]
+    fn generate_fills_extreme_tall_container() {
+        // Regression: galleries with many photos produce a very tall canvas
+        // (e.g. 1200x4600). Vertical splits are geometrically impossible there
+        // and only near-central horizontal cuts are valid, but the sampler
+        // biases toward the edges — so the first split failed ~38% of the time
+        // and the layout collapsed to a single cell, dropping every other
+        // photo. The deterministic fallback split must now place every image.
+        let config = MosaicConfig {
+            container_width: 1200.0,
+            container_height: 4600.0,
+            min_cell_dimension: 180.0,
+            min_aspect_ratio: 0.4,
+            max_aspect_ratio: 3.0,
+            orientation_bias: None,
+        };
+        for _ in 0..300 {
+            let layout = generate_mosaic_layout(23, config.clone());
+            assert_eq!(layout.len(), 23, "every photo must get its own cell");
         }
     }
 
