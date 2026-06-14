@@ -548,6 +548,77 @@ fn read_lenstagger_overrides(exif_reader: &exif::Exif) -> LenstaggerOverrides {
     LenstaggerOverrides::from_user_comment(&text)
 }
 
+/// Parse a film stock label out of an EXIF `UserComment` body. Two export
+/// formats are supported and distinguished by whether the comment carries a
+/// `LensTaggerVer` marker (the old LensTagger exporter always writes one):
+///
+/// * **Old format** (has `LensTaggerVer`): LensTagger's newline-delimited
+///   annotations, where the stock is assembled from `Film Make:`,
+///   `Film Type:` and the `-ISO=` override.
+/// * **New format** (no `LensTaggerVer`): a single line of ` | `-separated
+///   `Key: Value` pairs (`Camera: … | Film: Kodak Ektar 100, 35mm | …`),
+///   where the stock is the `Film:` value with its trailing gauge note
+///   dropped.
+fn parse_film_stock_from_comment(text: &str) -> Option<String> {
+    if text.to_lowercase().contains("lenstaggerver") {
+        parse_film_stock_lenstagger(text)
+    } else {
+        parse_film_stock_pipe_delimited(text)
+    }
+}
+
+/// Old LensTagger format: newline-delimited annotations. Assemble the film
+/// stock from `Film Make:`, `Film Type:` and the `-ISO=` override. Falls
+/// back to the full comment text when no film fields are present.
+fn parse_film_stock_lenstagger(text: &str) -> Option<String> {
+    let mut film_make: Option<&str> = None;
+    let mut film_type: Option<&str> = None;
+    let mut film_iso: Option<&str> = None;
+
+    for line in text.lines() {
+        let line_lower = line.to_lowercase();
+        if line_lower.contains("film make:") {
+            film_make = line.split_once(':').map(|(_, v)| v.trim());
+        } else if line_lower.contains("film type:") {
+            film_type = line.split_once(':').map(|(_, v)| v.trim());
+        } else if line_lower.starts_with("-iso=") || line_lower.starts_with("iso=") {
+            // Handle formats like "-ISO=200" or "ISO=400"
+            film_iso = line.split_once('=').map(|(_, v)| v.trim());
+        }
+    }
+
+    // Combine film make, type, and ISO if present
+    let film_stock = match (film_make, film_type) {
+        (Some(make), Some(typ)) => format!("{} {}", make, typ),
+        (Some(make), None) => make.to_string(),
+        (None, Some(typ)) => typ.to_string(),
+        (None, None) => text.to_string(), // Return full text if no specific fields found
+    };
+
+    // Add ISO if found (format: "Kodak Gold 200"), unless the film stock name
+    // already contains it (e.g. "Ilford Delta 400 Professional" with ISO 400).
+    let combined = match film_iso {
+        Some(iso_value) if !film_stock.split_whitespace().any(|tok| tok == iso_value) => {
+            format!("{} {}", film_stock, iso_value)
+        }
+        _ => film_stock,
+    };
+
+    Some(combined).filter(|s| !s.trim().is_empty())
+}
+
+/// New export format: one line of ` | `-separated `Key: Value` pairs. The
+/// film stock is the `Film:` value (matched case-insensitively); its
+/// optional trailing gauge note (`, 35mm`) is dropped so the label reads as
+/// just the stock name (`Kodak Ektar 100`).
+fn parse_film_stock_pipe_delimited(text: &str) -> Option<String> {
+    text.split('|')
+        .filter_map(|segment| segment.split_once(':'))
+        .find(|(key, _)| key.trim().eq_ignore_ascii_case("film"))
+        .map(|(_, value)| value.split(',').next().unwrap_or(value).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Recover human-readable lens names from XMP metadata. Lightroom often
 /// strips the camera maker note, but writes the matched lens profile as
 /// `crs:LensProfileName="Adobe (<lens name>) v<n>"` and tools like
@@ -722,49 +793,10 @@ fn extract_exif_data(path: &Path) -> ExifData {
                 // The character code is typically "ASCII\0\0\0" or "UNICODE\0"
                 if bytes.len() > 8 {
                     let text = String::from_utf8_lossy(&bytes[8..]).trim().to_string();
-                    if !text.is_empty() {
-                        // Try to extract film stock information from the metadata
-                        let mut film_make: Option<&str> = None;
-                        let mut film_type: Option<&str> = None;
-                        let mut film_iso: Option<&str> = None;
-
-                        for line in text.lines() {
-                            let line_lower = line.to_lowercase();
-                            if line_lower.contains("film make:") {
-                                film_make = line.split_once(':').map(|(_, v)| v.trim());
-                            } else if line_lower.contains("film type:") {
-                                film_type = line.split_once(':').map(|(_, v)| v.trim());
-                            } else if line_lower.starts_with("-iso=")
-                                || line_lower.starts_with("iso=")
-                            {
-                                // Handle formats like "-ISO=200" or "ISO=400"
-                                film_iso = line.split_once('=').map(|(_, v)| v.trim());
-                            }
-                        }
-
-                        // Combine film make, type, and ISO if present
-                        let film_stock = match (film_make, film_type) {
-                            (Some(make), Some(typ)) => format!("{} {}", make, typ),
-                            (Some(make), None) => make.to_string(),
-                            (None, Some(typ)) => typ.to_string(),
-                            (None, None) => text.clone(), // Return full text if no specific fields found
-                        };
-
-                        // Add ISO if found (format: "Kodak Gold 200"), unless
-                        // the film stock name already contains it (e.g. "Ilford
-                        // Delta 400 Professional" with ISO 400).
-                        match film_iso {
-                            Some(iso_value)
-                                if !film_stock
-                                    .split_whitespace()
-                                    .any(|tok| tok == iso_value) =>
-                            {
-                                Some(format!("{} {}", film_stock, iso_value))
-                            }
-                            _ => Some(film_stock),
-                        }
-                    } else {
+                    if text.is_empty() {
                         None
+                    } else {
+                        parse_film_stock_from_comment(&text)
                     }
                 } else {
                     None
@@ -1776,6 +1808,71 @@ mod tests {
             LenstaggerOverrides::from_user_comment(text),
             LenstaggerOverrides::default(),
         );
+    }
+
+    #[test]
+    fn film_stock_old_format_combines_make_type_and_iso() {
+        let text = "-Make=Mamiya Digital Imaging Co., Ltd.\n\
+                    -Model=Mamiya RB67 Pro SD\n\
+                    -ISO=200\n\
+                    Scanner Make: Epson\n\
+                    Scanner Model: GT-X980\n\
+                    Film Make: Kodak\n\
+                    Film Type: Gold\n\
+                    DeveloperMoon Photo Lab\n\
+                    LensTaggerVer:1.7.6";
+        assert_eq!(
+            parse_film_stock_from_comment(text).as_deref(),
+            Some("Kodak Gold 200"),
+        );
+    }
+
+    #[test]
+    fn film_stock_old_format_skips_iso_already_in_name() {
+        // "Delta 400 Professional" already names the speed, so the ISO
+        // override must not be appended a second time.
+        let text = "-ISO=400\n\
+                    Film Make: Ilford\n\
+                    Film Type: Delta 400 Professional\n\
+                    LensTaggerVer:1.7.6";
+        assert_eq!(
+            parse_film_stock_from_comment(text).as_deref(),
+            Some("Ilford Delta 400 Professional"),
+        );
+    }
+
+    #[test]
+    fn film_stock_new_format_extracts_film_field_without_gauge() {
+        // Pipe-delimited export (no LensTaggerVer marker). The film stock is
+        // the `Film:` value with the trailing `, 35mm` gauge note removed.
+        let text = "Camera: Nippon Kogaku K. K. Nikon F | \
+                    Lens: Nikon AF NIKKOR 50mm f/1.8 (SN 3193552) | \
+                    Focal length: 50mm (35mm-equiv 50mm) | \
+                    Film: Kodak Ektar 100, 35mm | \
+                    Shot at EI: 100 | \
+                    Developer: Glazer's Camera Photo Lab | \
+                    Scanner: Epson GT-X980";
+        assert_eq!(
+            parse_film_stock_from_comment(text).as_deref(),
+            Some("Kodak Ektar 100"),
+        );
+    }
+
+    #[test]
+    fn film_stock_new_format_without_gauge_note() {
+        let text = "Camera: Nikon F | Film: Ilford HP5 Plus | Shot at EI: 400";
+        assert_eq!(
+            parse_film_stock_from_comment(text).as_deref(),
+            Some("Ilford HP5 Plus"),
+        );
+    }
+
+    #[test]
+    fn film_stock_new_format_missing_film_field_returns_none() {
+        // No `Film:` field — better to show nothing than dump the whole
+        // comment (the bug this format support fixes).
+        let text = "Camera: Nikon F | Lens: 50mm f/1.8 | Shot at EI: 100";
+        assert_eq!(parse_film_stock_from_comment(text), None);
     }
 
     #[test]
