@@ -1,91 +1,359 @@
-<picture>
-    <source srcset="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_Solid_White.svg" media="(prefers-color-scheme: dark)">
-    <img src="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_RGB.svg" alt="Leptos Logo">
-</picture>
+# Photography Portfolio
 
-# Leptos Axum Starter Template
+A self-hosted photography portfolio website. Drop your photos into a folder and
+they show up automatically — galleries, titles, EXIF/film metadata, responsive
+thumbnails, and a fullscreen viewer are all generated from the files on disk.
 
-This is a template for use with the [Leptos](https://github.com/leptos-rs/leptos) web framework and the [cargo-leptos](https://github.com/akesson/cargo-leptos) tool using [Axum](https://github.com/tokio-rs/axum).
+Built with [Leptos](https://leptos.dev/) (server-side rendered + hydrated WASM)
+on an [Axum](https://github.com/tokio-rs/axum) server. Images are transcoded to
+WebP and cached on disk on first request.
 
-## Creating your template repo
+## Highlights
 
-If you don't have `cargo-leptos` installed you can install it with
+- **Zero-code content** — galleries are just directories under `public/images/`;
+  add or remove a folder/photo and the site updates (no recompile).
+- **Automatic metadata** — camera, lens, focal length, aperture, shutter, ISO,
+  date, and film stock are read from EXIF/XMP. Filenames become titles.
+- **On-the-fly image processing** — originals stay full-res; the server serves
+  compressed WebP variants and caches them under `public/cache/`.
+- **Per-gallery and per-photo overrides** via small TOML files.
 
-```bash
-cargo install cargo-leptos --locked
-```
+---
 
-Then run
-```bash
-cargo leptos new --git https://github.com/leptos-rs/start-axum
-```
+## Prerequisites
 
-to generate a new project template.
+The Rust toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml)
+(nightly + the `wasm32-unknown-unknown` target), so `rustup` installs the right
+toolchain automatically the first time you build. You also need:
 
-```bash
-cd portfolio
-```
+| Tool | Why | Install |
+| --- | --- | --- |
+| [`cargo-leptos`](https://github.com/leptos-rs/cargo-leptos) | build/dev runner | `cargo install cargo-leptos --locked` |
+| `dart-sass` | compiles `style/main.scss` | `npm install -g sass` |
+| `binaryen` (`wasm-opt`) | shrinks the release WASM bundle | your package manager |
+| Node + Playwright | only for end-to-end tests | `cd end2end && npm install` |
+| [`leptosfmt`](https://github.com/bram209/leptosfmt) | optional, formats the `view!` macros (used by `rust-analyzer.toml`) | `cargo install leptosfmt` |
 
-to go to your newly created project.
-Feel free to explore the project structure, but the best place to start with your application code is in `src/app.rs`.
-Additionally, Cargo.toml may need updating as new versions of the dependencies are released, especially if things are not working after a `cargo update`.
+---
 
-## Running your project
+## Running locally
 
 ```bash
 cargo leptos watch
 ```
 
-## Installing Additional Tools
+This compiles the server (SSR) and client (WASM) bundles, watches for changes,
+and serves the site with live reload at **http://127.0.0.1:4000** (reload port
+`4001`). These addresses are configured in the `[package.metadata.leptos]`
+section of [`Cargo.toml`](Cargo.toml).
 
-By default, `cargo-leptos` uses `nightly` Rust, `cargo-generate`, and `sass`. If you run into any trouble, you may need to install one or more of these tools.
+Other useful commands (also listed in `CLAUDE.md`):
 
-1. `rustup toolchain install nightly --allow-downgrade` - make sure you have Rust nightly
-2. `rustup target add wasm32-unknown-unknown` - add the ability to compile Rust to WebAssembly
-3. `cargo install cargo-generate` - install `cargo-generate` binary (should be installed automatically in future)
-4. `npm install -g sass` - install `dart-sass` (should be optional in future
-5. Run `npm install` in end2end subdirectory before test
+```bash
+cargo leptos build              # one-off build; good for checking it compiles
+cargo leptos build --release    # optimized production build
+cargo test --lib --features ssr # Rust unit tests
+cargo leptos end-to-end         # Playwright e2e tests (see Testing)
+```
 
-## Compiling for Release
+Out of the box the site reads its content from `public/`. That directory is
+**gitignored** (except the example/README files) so your photos and personal
+config never get committed — see the layout below.
+
+---
+
+## Directory layout
+
+```
+portfolio/
+├── src/                      # Rust source
+│   ├── main.rs               # Axum server entry (SSR): routes, /images/compressed
+│   │                         #   endpoint, cache warmup + filesystem watcher
+│   ├── lib.rs                # WASM hydration entry + module declarations
+│   ├── app.rs                # Leptos components, routing, and pages
+│   ├── gallery.rs            # gallery/photo discovery, EXIF/XMP + film-stock parsing,
+│   │                         #   title/slug derivation
+│   ├── config.rs             # loads SiteConfig from content/config.toml
+│   ├── image_cache.rs        # on-disk WebP cache: process / prewarm / cleanup
+│   ├── image_params.rs       # width/quality preset validation for the image endpoint
+│   ├── mosaic.rs             # mosaic gallery layout generation
+│   ├── server.rs             # server functions, in-memory caches, watcher plumbing
+│   └── types.rs              # shared types (PhotoInfo, GalleryConfig, PhotoConfig, …)
+├── style/main.scss           # all site styles (compiled to app.css by cargo-leptos)
+├── public/                   # runtime content (GITIGNORED except examples/READMEs)
+│   ├── images/               # one subdirectory per gallery (see "Photos")
+│   ├── content/              # config.toml, about.txt, profile image
+│   └── cache/                # generated compressed WebP images (safe to delete)
+├── assets/                   # optional static assets copied to the site root
+├── end2end/                  # Playwright end-to-end tests
+├── Dockerfile                # multi-stage build → minimal Alpine runtime
+├── Cargo.toml                # dependencies + [package.metadata.leptos] config
+├── focal-points.toml.example # reference for per-photo focal_point overrides
+└── rust-toolchain.toml       # pins nightly + wasm32 target
+```
+
+> **Note on `.env` / `.env.example`:** these files are leftovers and are **not**
+> read by the application — `dotenvy` is unused. Site configuration lives in
+> `public/content/config.toml` (see [Site configuration](#site-configuration)).
+
+---
+
+## Adding & removing photos
+
+A **gallery** is any subdirectory of `public/images/`. The directory name becomes
+the gallery's display name and its URL slug (lowercased, spaces → dashes). Just
+create a folder and drop images in:
+
+```
+public/images/
+├── home/          # special: shown on the landing page, not in the nav
+├── city/
+├── nature/
+├── portraits/
+└── film/
+```
+
+- **`home`** is special — its photos appear on the landing page and it is *not*
+  listed as a regular gallery in the navigation.
+- Every other non-empty directory becomes a gallery in the nav automatically.
+- To **remove** a gallery or photo, delete the directory or file. The running
+  server watches `public/images/` and picks up changes without a restart (it
+  also prunes the matching cache entries).
+
+### Filenames, titles, and ordering
+
+The filename (minus extension) becomes the photo title, with light formatting:
+
+- a leading `N - ` or `N.N - ` ordering prefix is stripped
+  (`3 - space needle.jpg` → "space needle"),
+- `-` and `_` become spaces (`my_photo.jpg` → "my photo").
+
+Photos sort alphabetically by filename, so prefix files with numbers
+(`1 - …`, `2 - …`) to control order. Files in a subfolder sort after the
+top-level files of the same gallery.
+
+### Supported formats & multiple variants
+
+Recognized extensions: **jpg/jpeg, png, webp, gif, jxl, avif**.
+
+If several files share a basename (e.g. `sunset.jpg` + `sunset.avif`), they are
+grouped into one photo and offered as `<picture>` sources in modern-format
+priority order (avif → jxl → webp → png → jpg), with JPEG as the universal
+fallback.
+
+### Image sets (subfolders)
+
+A photo can be a subdirectory containing one image plus its sibling TOML — this
+is the natural place to keep a per-photo title/focal-point override next to a
+single image (see `public/images/film/rent_a_car/`). Images nested in
+subdirectories are discovered recursively.
+
+### Automatic metadata
+
+On discovery the server reads EXIF (and XMP as a fallback for lens names) to
+populate: dimensions, date taken, camera make/model, lens, focal length,
+aperture, shutter speed, ISO, copyright, and **film stock**.
+
+Film stock is parsed from the EXIF `UserComment`/`ImageDescription` in two
+supported export formats:
+
+- **Pipe-delimited** (current): `Camera: … | Film: Kodak Ektar 100, 35mm | …`
+  → the `Film:` value with the trailing gauge note dropped (`Kodak Ektar 100`).
+- **LensTagger** (legacy, detected by a `LensTaggerVer` marker): assembled from
+  `Film Make:`, `Film Type:`, and the `-ISO=` annotation.
+
+---
+
+## Configuration (TOML files)
+
+There are three kinds of TOML config, each scoped differently. Example files
+(`*.example`) are committed; copy them and edit.
+
+### Site configuration
+
+**`public/content/config.toml`** — site-wide settings. Copy
+[`public/content/config.toml.example`](public/content/config.toml.example) to
+get started.
+
+```toml
+# Required
+site_name = "Davey Hughes"
+site_tagline = "Photography"
+
+# Optional
+# site_title    = "Davey Hughes — Photography"   # browser tab; defaults to site_name
+# site_copyright = "© 2025 Davey Hughes."        # auto-generated from site_name + year if omitted
+
+# Optional: nav order. List gallery slugs first-to-last; galleries not listed
+# fall through alphabetically afterwards. Slug = lowercased dir name, spaces→dashes.
+gallery_order = ["film", "city", "nature", "portraits"]
+
+# Arbitrary key/value pairs surfaced on the contact/about pages.
+[sections]
+email     = "you@example.com"
+location  = "Seattle, WA"
+instagram = "@yourhandle"
+github    = "https://github.com/you/"
+```
+
+The about page also uses two files in `public/content/`:
+
+- **`about.txt`** — about text; blank lines separate paragraphs (each becomes a
+  `<p>`). Falls back to placeholder text if missing.
+- **`profile.{jpg,jpeg,png,webp}`** — profile photo; the first matching file is
+  used (falls back to `/images/profile.jpg`).
+
+### Per-gallery layout
+
+**`public/images/<gallery>/gallery.toml`** — controls how that gallery's grid is
+rendered. All fields are optional:
+
+```toml
+use_mosaic            = true   # mosaic layout instead of a uniform grid (default false)
+mosaic_cache_duration = 3600   # seconds to cache the computed mosaic layout (default 3600)
+columns               = 4      # grid columns       (default 6; ignored when use_mosaic)
+row_height            = 320    # grid row height px  (default 280; ignored when use_mosaic)
+gap                   = 12      # gap between items px (default 8)
+```
+
+### Per-photo overrides
+
+A TOML file **named after the photo** (sibling file, same basename) overrides
+metadata for that one photo. For `portrait.jpg`, create `portrait.toml`:
+
+```toml
+title       = "A Better Title"   # overrides the filename-derived title
+focal_point = "top-center"       # which third stays visible when cropped to a thumbnail
+lens_model  = "Nikon 50mm f/1.8" # override when EXIF lens is missing/ambiguous
+```
+
+`focal_point` uses a rule-of-thirds grid — one of: `top-left`, `top-center`,
+`top-right`, `center-left`, `center` (default), `center-right`, `bottom-left`,
+`bottom-center`, `bottom-right`. See
+[`focal-points.toml.example`](focal-points.toml.example) for the full reference.
+
+---
+
+## Image cache & compressed endpoint
+
+Originals are never served to thumbnails or the viewer. Instead, the server
+exposes `/images/compressed/<path>?width=<w>&quality=<q>`, which transcodes to
+WebP and caches the result under `public/cache/` (filenames like
+`gallery_photo_w2400_q90_l1.webp`). On startup the server pre-warms the cache and
+removes orphaned entries; the filesystem watcher prunes cache files when their
+source image changes or is deleted.
+
+Only specific `(width, quality)` **presets** are accepted (requests outside the
+list get a 400). The defaults are `2400×q90` (grid `srcset` / default) and
+`4000×q90` (detail page + fullscreen viewer). Override them with the
+`IMAGE_PRESETS` environment variable:
+
+```bash
+IMAGE_PRESETS="1200,80;2400,90;4000,90"
+```
+
+The `public/cache/` directory is gitignored and safe to delete — it will be
+regenerated on demand.
+
+---
+
+## Environment variables
+
+All optional — defaults work for a standard `public/` layout. Paths fall back to
+`public/<x>` and then `./<x>`.
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `IMAGES_DIR` | gallery images root | `public/images` |
+| `GALLERY_PATH` | home-gallery directory | `public/images/home` |
+| `ABOUT_CONTENT_PATH` | content directory (about/profile) | `public/content` |
+| `CONFIG_PATH` | path to `config.toml` | `public/content/config.toml` |
+| `IMAGE_CACHE_DIR` | compressed-image cache dir | `public/cache` |
+| `IMAGE_PRESETS` | allowed `width,quality` pairs (`;`-separated) | `2400,90;4000,90` |
+| `RUST_LOG` | log level | — |
+| `LEPTOS_SITE_ADDR` | bind address | `127.0.0.1:4000` (dev) |
+| `LEPTOS_SITE_ROOT` | compiled site assets dir | `target/site` (`./site` in Docker) |
+
+---
+
+## Building for production
+
 ```bash
 cargo leptos build --release
 ```
 
-Will generate your server binary in target/release and your site package in target/site
+This produces:
 
-## Testing Your Project
+- the server binary at `target/release/portfolio`, and
+- the site bundle (JS/WASM/CSS + copied static files) at `target/site`.
+
+To run it on a machine without the Rust toolchain, copy both the binary and the
+`target/site` directory, then point Leptos at them:
+
 ```bash
-cargo leptos end-to-end
-```
-
-```bash
-cargo leptos end-to-end --release
-```
-
-Cargo-leptos uses Playwright as the end-to-end test tool.
-Tests are located in end2end/tests directory.
-
-## Executing a Server on a Remote Machine Without the Toolchain
-After running a `cargo leptos build --release` the minimum files needed are:
-
-1. The server binary located in `target/server/release`
-2. The `site` directory and all files within located in `target/site`
-
-Copy these files to your remote server. The directory structure should be:
-```text
-portfolio
-site/
-```
-Set the following environment variables (updating for your project as needed):
-```sh
 export LEPTOS_OUTPUT_NAME="portfolio"
 export LEPTOS_SITE_ROOT="site"
 export LEPTOS_SITE_PKG_DIR="pkg"
-export LEPTOS_SITE_ADDR="127.0.0.1:3000"
-export LEPTOS_RELOAD_PORT="3001"
+export LEPTOS_SITE_ADDR="0.0.0.0:8080"
+./portfolio
 ```
-Finally, run the server binary.
 
-## Licensing
+You also need a `public/` directory (images + content) alongside the binary, or
+set the `*_DIR`/`*_PATH` env vars above to point at one.
 
-This template itself is released under the Unlicense. You should replace the LICENSE for your own application with an appropriate license if you plan to release it publicly.
+---
+
+## Docker
+
+The [`Dockerfile`](Dockerfile) is a multi-stage build: it compiles with
+`rustlang/rust:nightly-alpine` + `cargo-leptos`, then copies the binary and
+`target/site` into a minimal `alpine:latest` runtime.
+
+Build:
+
+```bash
+docker build -t portfolio .
+```
+
+The image serves on port **8080** (`LEPTOS_SITE_ADDR=0.0.0.0:8080`) and declares
+a volume at `/app/public`. Photos and content are **not** baked into the image —
+mount them at runtime:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v "$(pwd)/public:/app/public" \
+  portfolio
+```
+
+That mounts your `public/images`, `public/content`, and `public/cache` into the
+container. The cache is written to the mounted volume so it persists across
+restarts. Adjust with the environment variables above as needed (e.g.
+`-e RUST_LOG=debug`, `-e IMAGE_PRESETS=...`).
+
+`.dockerignore` excludes `target/`, `public/`, `end2end/`, and `.git/` from the
+build context, so the build is fast and your local photos aren't copied in.
+
+---
+
+## Testing
+
+Rust unit tests (config parsing, metadata extraction, cache logic, …):
+
+```bash
+cargo test --lib --features ssr
+```
+
+End-to-end tests use [Playwright](https://playwright.dev/) and live in
+`end2end/tests/`:
+
+```bash
+cd end2end && npm install   # first time only
+cargo leptos end-to-end             # builds the site, then runs Playwright
+cargo leptos end-to-end --release   # against a release build
+```
+
+---
+
+## License
+
+See [`LICENSE.md`](LICENSE.md).
