@@ -33,7 +33,6 @@ web-sys = { version = "0.3", features = [
 serde = { version = "1.0", features = ["derive"] }
 rand = { version = "0.10", optional = true }
 once_cell = { version = "1.21", optional = true }
-dotenvy = { version = "0.15", optional = true }
 chrono = { version = "0.4", optional = true }
 toml = { version = "1.1", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
@@ -69,7 +68,6 @@ ssr = [
   "dep:tower",
   "dep:tower-http",
   "dep:leptos_axum",
-  "dep:dotenvy",
   "dep:toml",
   "dep:kamadak-exif",
   "dep:image",
