@@ -620,7 +620,9 @@ pub fn assign_images_to_layout(
     available_images.sort_by(|a, b| {
         let extremeness_a = aspect_extremeness(a.1);
         let extremeness_b = aspect_extremeness(b.1);
-        extremeness_b.partial_cmp(&extremeness_a).unwrap_or(std::cmp::Ordering::Equal)
+        extremeness_b
+            .partial_cmp(&extremeness_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut assignments: Vec<(Rectangle, usize)> = Vec::new();
@@ -638,7 +640,8 @@ pub fn assign_images_to_layout(
             let rect_orientation = categorize_orientation(rect_aspect);
 
             // Calculate similarity score
-            let score = calculate_match_score(img_aspect, img_orientation, rect_aspect, rect_orientation);
+            let score =
+                calculate_match_score(img_aspect, img_orientation, rect_aspect, rect_orientation);
 
             if let Some((_, best_score)) = best_rect_match {
                 if score > best_score {
@@ -948,9 +951,9 @@ mod tests {
 
         // Create images with matching orientations
         let images = vec![
-            (0, 0.6),  // Portrait
-            (1, 1.8),  // Landscape
-            (2, 1.0),  // Square
+            (0, 0.6), // Portrait
+            (1, 1.8), // Landscape
+            (2, 1.0), // Square
         ];
 
         let assignments = assign_images_to_layout(&rectangles, &images);
@@ -990,20 +993,25 @@ mod tests {
         let landscape_rect_orient = categorize_orientation(landscape_rect);
 
         let portrait_score = calculate_match_score(
-            portrait_img, portrait_img_orient,
-            portrait_rect, portrait_rect_orient
+            portrait_img,
+            portrait_img_orient,
+            portrait_rect,
+            portrait_rect_orient,
         );
 
         let landscape_score = calculate_match_score(
-            portrait_img, portrait_img_orient,
-            landscape_rect, landscape_rect_orient
+            portrait_img,
+            portrait_img_orient,
+            landscape_rect,
+            landscape_rect_orient,
         );
 
         // Portrait rectangle should score much higher for portrait image
         assert!(
             portrait_score > landscape_score * 10.0,
             "Portrait match score {} should be much higher than landscape mismatch score {}",
-            portrait_score, landscape_score
+            portrait_score,
+            landscape_score
         );
     }
 }

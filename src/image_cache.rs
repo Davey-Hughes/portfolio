@@ -156,8 +156,7 @@ pub fn convert_to_webp(img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>
             .encode(f32::from(quality))
     } else {
         let rgb = img.to_rgb8();
-        webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height())
-            .encode(f32::from(quality))
+        webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height()).encode(f32::from(quality))
     };
     Some(encoder.to_vec())
 }
@@ -348,7 +347,11 @@ fn collect_valid_prefixes_recursive(
 }
 
 /// Check if a cache file is older than the maximum age
-fn is_cache_file_old(cache_file: &PathBuf, max_age: std::time::Duration, now: std::time::SystemTime) -> bool {
+fn is_cache_file_old(
+    cache_file: &PathBuf,
+    max_age: std::time::Duration,
+    now: std::time::SystemTime,
+) -> bool {
     if let Ok(metadata) = cache_file.metadata() {
         if let Ok(accessed) = metadata.accessed() {
             if let Ok(age) = now.duration_since(accessed) {
@@ -618,14 +621,11 @@ mod tests {
         fs::write(images.join("home/notes.txt"), b"x").unwrap();
 
         let prefixes = collect_valid_prefixes(images.to_str().unwrap());
-        let expected: HashSet<String> = [
-            "home_sunset",
-            "home_space_needle",
-            "travel_iceland_glacier",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+        let expected: HashSet<String> =
+            ["home_sunset", "home_space_needle", "travel_iceland_glacier"]
+                .into_iter()
+                .map(String::from)
+                .collect();
         assert_eq!(prefixes, expected);
     }
 

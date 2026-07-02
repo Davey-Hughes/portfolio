@@ -136,7 +136,7 @@ fn generate_mosaic_layout_for_size(
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
+    use crate::mosaic::{calculate_orientation_bias, generate_mosaic_with_images, MosaicConfig};
 
     let num_images = photos.len();
     let image_aspects = image_aspects(photos);
@@ -163,7 +163,6 @@ fn generate_mosaic_layout_for_size(
 
     generate_mosaic_with_images(num_images, &image_aspects, mosaic_config, 100)
 }
-
 
 /// Server function to get site configuration
 #[server(GetSiteConfig, "/api")]
@@ -498,7 +497,11 @@ mod tests {
         // Mostly landscape, a few portrait — mirrors the film gallery.
         let photos: Vec<PhotoInfo> = (0..23)
             .map(|i| {
-                let (w, h) = if i % 7 == 0 { (5049, 8911) } else { (8911, 5049) };
+                let (w, h) = if i % 7 == 0 {
+                    (5049, 8911)
+                } else {
+                    (8911, 5049)
+                };
                 photo(&format!("photo_{i}.jpg"), w, h)
             })
             .collect();
@@ -704,11 +707,19 @@ mod tests {
     fn watch_event_is_relevant_includes_create_and_remove() {
         use notify::event::{CreateKind, RemoveKind};
         use notify::EventKind;
-        assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::File)));
-        assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::Folder)));
+        assert!(watch_event_is_relevant(&EventKind::Create(
+            CreateKind::File
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Create(
+            CreateKind::Folder
+        )));
         assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::Any)));
-        assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::File)));
-        assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::Folder)));
+        assert!(watch_event_is_relevant(&EventKind::Remove(
+            RemoveKind::File
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Remove(
+            RemoveKind::Folder
+        )));
         assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::Any)));
     }
 
@@ -716,26 +727,28 @@ mod tests {
     fn watch_event_is_relevant_includes_data_and_rename_modifies() {
         use notify::event::{DataChange, ModifyKind, RenameMode};
         use notify::EventKind;
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Data(
-            DataChange::Content
-        ))));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Data(
-            DataChange::Size
-        ))));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Data(
-            DataChange::Any
-        ))));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Name(
-            RenameMode::From
-        ))));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Name(
-            RenameMode::To
-        ))));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Name(
-            RenameMode::Both
-        ))));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Content)
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Size)
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Any)
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Name(RenameMode::From)
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Name(RenameMode::To)
+        )));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Name(RenameMode::Both)
+        )));
         assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Any)));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Other)));
+        assert!(watch_event_is_relevant(&EventKind::Modify(
+            ModifyKind::Other
+        )));
     }
 
     #[test]
@@ -770,14 +783,18 @@ mod tests {
         // (cache prewarm, every HTTP image serve) generates these.
         use notify::event::{AccessKind, AccessMode};
         use notify::EventKind;
-        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Read)));
-        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Open(
-            AccessMode::Read
-        ))));
-        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Close(
-            AccessMode::Read
-        ))));
-        assert!(!watch_event_is_relevant(&EventKind::Access(AccessKind::Any)));
+        assert!(!watch_event_is_relevant(&EventKind::Access(
+            AccessKind::Read
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Access(
+            AccessKind::Open(AccessMode::Read)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Access(
+            AccessKind::Close(AccessMode::Read)
+        )));
+        assert!(!watch_event_is_relevant(&EventKind::Access(
+            AccessKind::Any
+        )));
     }
 
     #[test]
@@ -903,10 +920,7 @@ fn delete_matching_cache_files(
         if needles.iter().any(|n| name.starts_with(n)) {
             match std::fs::remove_file(&path) {
                 Ok(_) => deleted += 1,
-                Err(err) => log!(
-                    "Image watcher: failed to remove {}: {err}",
-                    path.display()
-                ),
+                Err(err) => log!("Image watcher: failed to remove {}: {err}", path.display()),
             }
         }
     }
