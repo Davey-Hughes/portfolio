@@ -2,3 +2,5 @@ target/
 public/
 end2end/
 .git/
+# Local-dev only (disables pkg hashing); production hashes via the Dockerfile ENV.
+.env

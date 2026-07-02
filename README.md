@@ -92,9 +92,11 @@ portfolio/
 └── rust-toolchain.toml       # pins nightly + wasm32 target
 ```
 
-> **Note on `.env` / `.env.example`:** these files are leftovers and are **not**
-> read by the application — `dotenvy` is unused. Site configuration lives in
-> `public/content/config.toml` (see [Site configuration](#site-configuration)).
+> **Note on `.env`:** the only thing the app reads from `.env` (via `dotenvy`)
+> is `LEPTOS_HASH_FILES` — set to `false` locally so `cargo leptos watch/serve`
+> serves un-hashed `pkg/` filenames (see [Asset hashing & CDN caching](#asset-hashing--cdn-caching)).
+> Site configuration lives in `public/content/config.toml` (see
+> [Site configuration](#site-configuration)), **not** in `.env`.
 
 ---
 
@@ -273,6 +275,7 @@ All optional — defaults work for a standard `public/` layout. Paths fall back 
 | `RUST_LOG` | log level | — |
 | `LEPTOS_SITE_ADDR` | bind address | `127.0.0.1:4000` (dev) |
 | `LEPTOS_SITE_ROOT` | compiled site assets dir | `target/site` (`./site` in Docker) |
+| `LEPTOS_HASH_FILES` | emit content-hashed `pkg/` filenames (needs `hash.txt`) | `true` in Docker; `false` via local `.env` |
 
 ---
 
@@ -330,8 +333,30 @@ container. The cache is written to the mounted volume so it persists across
 restarts. Adjust with the environment variables above as needed (e.g.
 `-e RUST_LOG=debug`, `-e IMAGE_PRESETS=...`).
 
-`.dockerignore` excludes `target/`, `public/`, `end2end/`, and `.git/` from the
-build context, so the build is fast and your local photos aren't copied in.
+`.dockerignore` excludes `target/`, `public/`, `end2end/`, `.git/`, and `.env`
+from the build context, so the build is fast and your local photos aren't copied
+in.
+
+---
+
+## Asset hashing & CDN caching
+
+The compiled JS/WASM/CSS under `pkg/` are **content-hashed** in production
+(`hash-files = true` in [`Cargo.toml`](Cargo.toml)): each build emits
+`portfolio.<hash>.{js,wasm,css}` with unique URLs. This lets a CDN such as
+Cloudflare cache `/pkg/*` immutably with no risk of serving a stale JS against a
+freshly deployed WASM — the `wasm-bindgen` mismatch that otherwise breaks
+hydration after a deploy (and needs no cache purge).
+
+For the server to emit the hashed names at runtime:
+
+- **Production** (the [`Dockerfile`](Dockerfile)) sets `LEPTOS_HASH_FILES=true`
+  and copies `hash.txt` next to the binary — the server reads the hashes from it,
+  and without it the first render panics.
+- **Local dev** opts out: `.env` sets `LEPTOS_HASH_FILES=false`, so `cargo leptos
+  watch/serve` serve plain `portfolio.{js,wasm,css}` — nothing to wire up and no
+  filename churn on hot reload. `.env` is gitignored and excluded from the Docker
+  build, so it never affects production.
 
 ---
 

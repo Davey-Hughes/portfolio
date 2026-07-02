@@ -38,6 +38,11 @@ async fn main() {
         fallbacks.last().copied().unwrap_or(".").to_string()
     }
 
+    // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
+    // content-hashed pkg filenames). Never present in the Docker image
+    // (.dockerignore), so production keeps hashing on.
+    dotenvy::dotenv().ok();
+
     let conf = get_configuration(None).unwrap();
     let addr = conf.leptos_options.site_addr;
     let leptos_options = conf.leptos_options;
