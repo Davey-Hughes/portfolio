@@ -354,6 +354,22 @@ cargo leptos end-to-end --release   # against a release build
 
 ---
 
+## Performance
+
+The per-request hot paths — the on-the-fly WebP transcode, EXIF/film-stock
+parsing, and mosaic layout — have a measurement suite under
+[`scripts/perf/`](scripts/perf/):
+
+- **Benchmarks** (criterion): `cargo bench --features ssr`
+- **Allocation profile** (dhat): `cargo run --release --example alloc_profile --features ssr`
+- **WASM bundle-size budget**: `scripts/perf/wasm_size.sh` (after `cargo leptos build --release`)
+- **SSR load test / flamegraph**: `scripts/perf/load_test.sh`, `scripts/perf/flamegraph.sh`
+
+See [`scripts/perf/README.md`](scripts/perf/README.md) for what each measures,
+how to install the tools, and how to read the output.
+
+---
+
 ## License
 
 See [`LICENSE.md`](LICENSE.md).

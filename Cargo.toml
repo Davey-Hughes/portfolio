@@ -15,7 +15,7 @@ leptos_axum = { version = "0.8.9", optional = true }
 leptos_meta = { version = "0.8.6" }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 tower = { version = "0.5", optional = true }
-tower-http = { version = "0.6", features = [
+tower-http = { version = "0.7", features = [
   "fs",
   "set-header",
   "compression-gzip",
@@ -53,6 +53,35 @@ notify = { version = "8", optional = true }
 [dev-dependencies]
 serial_test = "3.4"
 tempfile = "3"
+criterion = "0.5"
+dhat = "0.3"
+
+# Hot-path microbenchmarks. Run: `cargo bench --features ssr`.
+# The per-request image endpoint decodes -> resizes (Lanczos3) -> encodes WebP;
+# that transcode is the heaviest user-facing CPU work, so it's benched first.
+[[bench]]
+name = "image_pipeline"
+harness = false
+required-features = ["ssr"]
+
+# EXIF-derived string parsing done once per photo on discovery: film-stock
+# extraction (both export formats) and filename -> title/slug derivation.
+[[bench]]
+name = "metadata"
+harness = false
+required-features = ["ssr"]
+
+# Per-gallery mosaic bin-packing (uses a thread RNG, so timing-only).
+[[bench]]
+name = "mosaic"
+harness = false
+required-features = ["ssr"]
+
+# Allocation profile of one image transcode (dhat global allocator).
+# Run: `cargo run --release --example alloc_profile --features ssr`.
+[[example]]
+name = "alloc_profile"
+required-features = ["ssr"]
 
 [features]
 hydrate = [
