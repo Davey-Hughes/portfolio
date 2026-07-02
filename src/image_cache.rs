@@ -420,12 +420,13 @@ fn get_file_age_days(cache_file: &Path, now: std::time::SystemTime) -> u64 {
 /// Pre-generate cache images for all existing photos
 pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
     use crate::image_params::ImageParams;
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
     log!("Starting cache prewarming...");
 
     let valid_presets = ImageParams::get_valid_presets();
     // Only use the first (default) preset for prewarming
-    let default_preset = match valid_presets.first() {
+    let (width, quality) = match valid_presets.first() {
         Some(preset) => *preset,
         None => {
             log!("No valid presets configured, skipping cache prewarming");
@@ -433,45 +434,54 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
         }
     };
 
-    log!(
-        "Prewarming cache with default preset: {}px @ quality {}",
-        default_preset.0,
-        default_preset.1
-    );
-
-    let mut processed_count = 0;
-    let mut error_count = 0;
+    log!("Prewarming cache with default preset: {width}px @ quality {quality}");
 
     // Recursively find all image files
     let image_paths = collect_image_paths(images_dir);
-
     log!("Found {} images to process", image_paths.len());
 
-    for image_path in image_paths {
-        // Strip extension to get base path
-        let path_without_ext = if let Some(dot_pos) = image_path.rfind('.') {
-            &image_path[..dot_pos]
-        } else {
-            &image_path
-        };
+    // Prewarm across a bounded worker pool. Each transcode is CPU- and
+    // memory-heavy (a full-res decode can peak ~185 MB), so cap parallelism at
+    // min(4, cores): fast startup on multi-core boxes without a memory spike on
+    // large galleries. Workers pull from a shared index, so uneven per-image
+    // cost stays balanced. Each image maps to a distinct cache file, so the
+    // concurrent `process_and_cache_image` calls never contend.
+    let workers = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .min(4);
 
-        let (width, quality) = default_preset;
+    let next = AtomicUsize::new(0);
+    let processed = AtomicU32::new(0);
+    let errors = AtomicU32::new(0);
 
-        // Use the shared processing function
-        match process_and_cache_image(images_dir, cache_dir, path_without_ext, width, quality) {
-            Some(_) => {
-                processed_count += 1;
-            }
-            None => {
-                error_count += 1;
-            }
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let idx = next.fetch_add(1, Ordering::Relaxed);
+                let Some(image_path) = image_paths.get(idx) else {
+                    break;
+                };
+                // Strip extension to get the base path.
+                let path_without_ext = match image_path.rfind('.') {
+                    Some(dot) => &image_path[..dot],
+                    None => image_path.as_str(),
+                };
+                if process_and_cache_image(images_dir, cache_dir, path_without_ext, width, quality)
+                    .is_some()
+                {
+                    processed.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    errors.fetch_add(1, Ordering::Relaxed);
+                }
+            });
         }
-    }
+    });
 
     log!(
         "Cache prewarming complete: processed {} images, {} errors",
-        processed_count,
-        error_count
+        processed.load(Ordering::Relaxed),
+        errors.load(Ordering::Relaxed)
     );
 }
 
@@ -510,6 +520,7 @@ fn collect_image_paths_recursive(dir: &std::path::Path, base: &str, paths: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
@@ -538,6 +549,33 @@ mod tests {
         let out_a = resize_for_width(&src_a, 50);
         assert_eq!((out_a.width(), out_a.height()), (50, 25));
         assert!(matches!(out_a, image::DynamicImage::ImageRgba8(_)));
+    }
+
+    #[test]
+    #[serial] // prewarm reads IMAGE_PRESETS, shared with other env-driven tests
+    fn prewarm_cache_transcodes_every_image_in_parallel() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+
+        // Small but real JPEGs across a subdir, so `process_image` actually
+        // decodes + encodes them (exercising the parallel worker pool).
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(16, 12))
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpeg),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        for i in 0..5 {
+            write_jpeg(&images.join(format!("g/pic{i}.jpg")), &jpeg);
+        }
+
+        prewarm_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        // One cached WebP derivative per source image.
+        let produced = fs::read_dir(&cache).unwrap().count();
+        assert_eq!(produced, 5);
     }
 
     #[test]
