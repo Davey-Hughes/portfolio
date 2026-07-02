@@ -761,7 +761,7 @@ fn to_title_case_if_uppercase(s: &str) -> String {
                 let has_digit = word.chars().any(|c| c.is_numeric());
 
                 // Keep acronyms (2-4 letters) and words with numbers in uppercase
-                if (letter_count >= 2 && letter_count <= 4 && !has_digit) || has_digit {
+                if ((2..=4).contains(&letter_count) && !has_digit) || has_digit {
                     word.to_string()
                 } else {
                     // Convert longer words to title case

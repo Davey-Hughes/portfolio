@@ -177,11 +177,10 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
     let mut lines: Vec<DivisionLine> = Vec::new();
 
     // Track orientation counts if bias is provided
-    let mut orientation_tracker = if let Some(ref bias) = config.orientation_bias {
-        Some(OrientationTracker::new(bias))
-    } else {
-        None
-    };
+    let mut orientation_tracker = config
+        .orientation_bias
+        .as_ref()
+        .map(OrientationTracker::new);
 
     // We need n-1 splits to get n rectangles
     let num_splits = num_images - 1;
