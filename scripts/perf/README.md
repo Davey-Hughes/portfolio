@@ -46,8 +46,8 @@ and prints total allocations / bytes / peak bytes plus the WebP output size. Als
 writes `dhat-heap.json` (load it at
 https://nnethercote.github.io/dh_view/dh_view.html). Use this to verify
 allocation-reduction work — the numbers should drop. As a baseline, one
-6000×4000 → 2400px q90 transcode is ~18 allocations with a ~237 MB peak (the
-decoded + resized pixel buffers dominate).
+6000×4000 → 2400px q90 transcode peaks around 185 MB (dominated by the decoded
+source buffer; the SIMD resize keeps the downscaled buffer small).
 
 ## WASM bundle size
 
