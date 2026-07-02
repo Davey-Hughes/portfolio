@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use image::DynamicImage;
-use portfolio::image_cache::convert_to_webp;
+use portfolio::image_cache::{convert_to_webp, resize_for_width};
 
 // A full-frame-ish 24MP source, larger than both presets so each one actually
 // exercises the downscale path (`process_image` only resizes when the source is
@@ -53,8 +53,8 @@ fn source_jpeg(img: &DynamicImage) -> Vec<u8> {
 }
 
 fn resize_to(img: &DynamicImage, width: u32) -> DynamicImage {
-    // Mirrors `process_image`: cap width, unbounded height, Lanczos3.
-    img.resize(width, u32::MAX, image::imageops::FilterType::Lanczos3)
+    // The exact SIMD Lanczos3 resize the server runs in `process_image`.
+    resize_for_width(img, width)
 }
 
 /// Decode cost, from an in-memory JPEG buffer (standard decode path).

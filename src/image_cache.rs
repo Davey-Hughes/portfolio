@@ -106,15 +106,59 @@ fn process_image(full_path: &PathBuf, width: u32, quality: u8) -> Option<Vec<u8>
         load_standard_image(full_path)?
     };
 
-    // Resize if needed
+    // Resize if needed (SIMD Lanczos3 via fast_image_resize)
     let img = if img.width() > width {
-        img.resize(width, u32::MAX, image::imageops::FilterType::Lanczos3)
+        resize_for_width(&img, width)
     } else {
         img
     };
 
     // Convert to WebP
     convert_to_webp(&img, quality)
+}
+
+/// Downscale `img` to `width` px wide (preserving aspect ratio) with
+/// fast_image_resize's SIMD Lanczos3 — markedly faster than the `image` crate's
+/// scalar convolution on the full-res photos this server transcodes. Falls back
+/// to the `image` crate on the rare error path so serving never breaks.
+///
+/// `#[doc(hidden)] pub` for `benches/image_pipeline.rs`; not part of the public API.
+#[doc(hidden)]
+pub fn resize_for_width(img: &image::DynamicImage, width: u32) -> image::DynamicImage {
+    use fast_image_resize::images::Image;
+    use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
+
+    let (sw, sh) = (img.width(), img.height());
+    let dw = width;
+    let dh = ((u64::from(sh) * u64::from(dw)) / u64::from(sw).max(1)).max(1) as u32;
+
+    // libwebp (and fir) work on packed RGB/RGBA8; convert once up front so both
+    // the resize and the later encode operate on the same layout.
+    let has_alpha = img.color().has_alpha();
+    let (pixel_type, src_buf) = if has_alpha {
+        (PixelType::U8x4, img.to_rgba8().into_raw())
+    } else {
+        (PixelType::U8x3, img.to_rgb8().into_raw())
+    };
+
+    let fallback = || img.resize(width, u32::MAX, image::imageops::FilterType::Lanczos3);
+
+    let Ok(src) = Image::from_vec_u8(sw, sh, src_buf, pixel_type) else {
+        return fallback();
+    };
+    let mut dst = Image::new(dw, dh, pixel_type);
+    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+    if Resizer::new().resize(&src, &mut dst, &opts).is_err() {
+        return fallback();
+    }
+
+    let raw = dst.into_vec();
+    let rebuilt = if has_alpha {
+        image::RgbaImage::from_raw(dw, dh, raw).map(image::DynamicImage::ImageRgba8)
+    } else {
+        image::RgbImage::from_raw(dw, dh, raw).map(image::DynamicImage::ImageRgb8)
+    };
+    rebuilt.unwrap_or_else(fallback)
 }
 
 /// Load a JXL image using jxl-oxide
@@ -480,6 +524,21 @@ mod tests {
     /// 2-byte file is enough for `path.exists()` checks; we never decode it
     /// in these tests.
     const STUB: &[u8] = b"\xff\xd8";
+
+    #[test]
+    fn resize_for_width_downscales_preserving_aspect_and_type() {
+        // RGB source -> RGB output at the requested width, aspect preserved.
+        let src = image::DynamicImage::ImageRgb8(image::RgbImage::new(200, 100));
+        let out = resize_for_width(&src, 80);
+        assert_eq!((out.width(), out.height()), (80, 40));
+        assert!(matches!(out, image::DynamicImage::ImageRgb8(_)));
+
+        // RGBA source -> RGBA output (alpha channel preserved through resize).
+        let src_a = image::DynamicImage::ImageRgba8(image::RgbaImage::new(200, 100));
+        let out_a = resize_for_width(&src_a, 50);
+        assert_eq!((out_a.width(), out_a.height()), (50, 25));
+        assert!(matches!(out_a, image::DynamicImage::ImageRgba8(_)));
+    }
 
     #[test]
     fn find_image_file_finds_existing_extension() {

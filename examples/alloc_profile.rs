@@ -15,7 +15,7 @@
 use std::io::Cursor;
 
 use image::DynamicImage;
-use portfolio::image_cache::convert_to_webp;
+use portfolio::image_cache::{convert_to_webp, resize_for_width};
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -51,9 +51,9 @@ fn main() {
         .expect("encode source jpeg");
 
     let profiler = dhat::Profiler::builder().build();
-    // The measured unit of work: one full transcode.
+    // The measured unit of work: one full transcode (the server's real path).
     let img = image::load_from_memory(&jpeg).expect("decode");
-    let resized = img.resize(width, u32::MAX, image::imageops::FilterType::Lanczos3);
+    let resized = resize_for_width(&img, width);
     let webp = convert_to_webp(&resized, quality).expect("encode");
     std::hint::black_box(&webp);
 
