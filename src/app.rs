@@ -6,7 +6,7 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{provide_meta_context, HashedStylesheet, MetaTags, Title};
 use leptos_router::{
     components::{Route, Router, Routes, A},
     hooks::{use_location, use_params},
@@ -23,7 +23,10 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
                 <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
-                <link rel="preload" r#as="style" href="/pkg/portfolio.css" />
+                // Emits <link rel="stylesheet"> with the content-hashed CSS name
+                // (reads hash.txt via LeptosOptions). Must live in the server shell
+                // since LeptosOptions isn't available in the App body.
+                <HashedStylesheet options=options.clone() id="leptos" />
                 <AutoReload options=options.clone() />
                 <HydrationScripts options />
                 <MetaTags />
@@ -71,7 +74,6 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/portfolio.css" />
         <PageTitle />
         <Router>
             <Nav />

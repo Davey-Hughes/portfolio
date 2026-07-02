@@ -50,6 +50,7 @@ urlencoding = { version = "2.1", optional = true }
 webp = { version = "0.3", optional = true }
 notify = { version = "8", optional = true }
 fast_image_resize = { version = "5", optional = true }
+dotenvy = { version = "0.15", optional = true }
 
 [dev-dependencies]
 serial_test = "3.4"
@@ -110,6 +111,7 @@ ssr = [
   "dep:webp",
   "dep:notify",
   "dep:fast_image_resize",
+  "dep:dotenvy",
   "leptos/ssr",
   "leptos_meta/ssr",
   "leptos_router/ssr",
@@ -137,6 +139,13 @@ site-pkg-dir = "pkg"
 
 # [Optional] The source CSS file. If it ends with .sass or .scss then it will be compiled by dart-sass into CSS. The CSS is optimized by Lightning CSS before being written to <site-root>/<site-pkg>/app.css
 style-file = "style/main.scss"
+# Append a content hash to the JS/WASM/CSS filenames so each build gets unique
+# URLs. Lets the CDN (Cloudflare) cache /pkg/* immutably with no chance of
+# serving a stale JS against a fresh WASM (the wasm-bindgen mismatch that breaks
+# hydration). Must also be set at runtime via LEPTOS_HASH_FILES=true so
+# HydrationScripts/HashedStylesheet emit the hashed names; local dev opts out via
+# `.env` (LEPTOS_HASH_FILES=false).
+hash-files = true
 # Assets source dir. All files found here will be copied and synchronized to site-root.
 # The assets-dir cannot have a sub directory with the same name/path as site-pkg-dir.
 #
