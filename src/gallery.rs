@@ -144,7 +144,10 @@ pub fn discover_gallery_directories() -> Vec<String> {
 /// Example: "1 - space_needle.jpg" -> "space_needle.jpg"
 ///          "42-mountain.jpg" -> "mountain.jpg"
 ///          "1.5 - photo.jpg" -> "photo.jpg"
-fn strip_leading_number_and_dash(filename: &str) -> String {
+///
+/// `#[doc(hidden)] pub` for `benches/metadata.rs`; not part of the public API.
+#[doc(hidden)]
+pub fn strip_leading_number_and_dash(filename: &str) -> String {
     LEADING_NUMBER_DASH.replace(filename, "").into_owned()
 }
 
@@ -559,7 +562,8 @@ fn read_lenstagger_overrides(exif_reader: &exif::Exif) -> LenstaggerOverrides {
 ///   `Key: Value` pairs (`Camera: … | Film: Kodak Ektar 100, 35mm | …`),
 ///   where the stock is the `Film:` value with its trailing gauge note
 ///   dropped.
-fn parse_film_stock_from_comment(text: &str) -> Option<String> {
+#[doc(hidden)] // exposed for benches/metadata.rs; not part of the public API
+pub fn parse_film_stock_from_comment(text: &str) -> Option<String> {
     if text.to_lowercase().contains("lenstaggerver") {
         parse_film_stock_lenstagger(text)
     } else {

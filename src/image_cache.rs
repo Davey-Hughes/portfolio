@@ -142,7 +142,12 @@ fn load_standard_image(path: &PathBuf) -> Option<image::DynamicImage> {
 /// Convert an image to lossy WebP at the given quality (0-100). Uses
 /// libwebp via the `webp` crate because the `image` crate's built-in
 /// WebP encoder is lossless-only.
-fn convert_to_webp(img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
+///
+/// `#[doc(hidden)] pub` so `benches/image_pipeline.rs` and
+/// `examples/alloc_profile.rs` can measure the encode step directly; not part
+/// of the public API.
+#[doc(hidden)]
+pub fn convert_to_webp(img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
     // libwebp expects RGB or RGBA; convert to RGB8 for opaque images and
     // RGBA8 only when there's an alpha channel.
     let encoder = if img.color().has_alpha() {
