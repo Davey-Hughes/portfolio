@@ -6,12 +6,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    ParamSegment, StaticSegment,
-    components::{A, Route, Router, Routes},
+    components::{Route, Router, Routes, A},
     hooks::{use_location, use_params},
     params::Params,
+    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -951,9 +951,7 @@ impl ZoomPanState {
 #[component]
 fn PhotoExifPanel(photo: PhotoInfo, is_expanded: RwSignal<bool>) -> impl IntoView {
     let dimensions_view = match (photo.width, photo.height) {
-        (Some(w), Some(h)) => view! {
-            <ExifField heading="Dimensions" value=format!("{w} × {h} px") />
-        }
+        (Some(w), Some(h)) => view! { <ExifField heading="Dimensions" value=format!("{w} × {h} px") /> }
         .into_any(),
         _ => view! { <div></div> }.into_any(),
     };
@@ -1013,8 +1011,7 @@ fn PhotoNavigationButtons(
                             "← Previous"
                         </A>
                     }
-                })}
-            <div class="photo-nav-copyright">
+                })} <div class="photo-nav-copyright">
                 <CopyrightFooter />
             </div>
             {next_photo
@@ -1264,10 +1261,8 @@ fn FullscreenViewer(
                 let dx = f64::from(touch1.client_x() - touch0.client_x());
                 let dy = f64::from(touch1.client_y() - touch0.client_y());
                 let distance = (dx * dx + dy * dy).sqrt();
-                let center_x =
-                    (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
-                let center_y =
-                    (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
+                let center_x = (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
+                let center_y = (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
                 _initial_pinch_distance.set(distance);
                 _initial_zoom.set(zoom_level.get());
                 _initial_pinch_center_x.set(center_x);
@@ -1354,7 +1349,11 @@ fn FullscreenViewer(
             pan_y.get(),
             zoom_level.get(),
             if zoom_level.get() > 1.0 {
-                if is_panning.get() { "grabbing" } else { "grab" }
+                if is_panning.get() {
+                    "grabbing"
+                } else {
+                    "grab"
+                }
             } else {
                 "default"
             },
@@ -1367,11 +1366,7 @@ fn FullscreenViewer(
                 return view! { <div></div> }.into_any();
             }
             view! {
-                <div
-                    class="fullscreen-overlay"
-                    on:click=close_fullscreen
-                    on:wheel=on_wheel
-                >
+                <div class="fullscreen-overlay" on:click=close_fullscreen on:wheel=on_wheel>
                     <div
                         class="fullscreen-close"
                         class:hidden=move || !show_zoom_controls.get()
@@ -1379,10 +1374,7 @@ fn FullscreenViewer(
                     >
                         "✕"
                     </div>
-                    <div
-                        class="fullscreen-controls"
-                        class:hidden=move || !show_zoom_controls.get()
-                    >
+                    <div class="fullscreen-controls" class:hidden=move || !show_zoom_controls.get()>
                         <div class="zoom-slider-container">
                             <label class="zoom-label">"1×"</label>
                             <input

@@ -468,7 +468,11 @@ gallery_order = ["landscapes", "portraits", "film"]
         let config = load_config();
         assert_eq!(
             config.gallery_order,
-            vec!["landscapes".to_string(), "portraits".to_string(), "film".to_string()]
+            vec![
+                "landscapes".to_string(),
+                "portraits".to_string(),
+                "film".to_string()
+            ]
         );
 
         std::env::remove_var("CONFIG_PATH");

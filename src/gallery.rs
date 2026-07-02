@@ -456,9 +456,8 @@ fn extension_supports_xmp(path: &Path) -> bool {
 /// `"AF-S Nikkor 50mm f/1.4G"` pass; `"50.0 mm f/1.8"` or `"85mm f/1.4"` (which
 /// the EXIF `LensModel` already exposes verbatim) do not.
 fn looks_like_real_lens_name(s: &str) -> bool {
-    s.chars().any(|c| {
-        c.is_alphabetic() && !matches!(c.to_ascii_lowercase(), 'f' | 'm')
-    })
+    s.chars()
+        .any(|c| c.is_alphabetic() && !matches!(c.to_ascii_lowercase(), 'f' | 'm'))
 }
 
 /// Lightroom writes these as `crs:LensProfileName` when no Adobe lens profile
@@ -897,7 +896,10 @@ pub fn load_galleries() -> Vec<GalleryInfo> {
         .collect();
 
     galleries.sort_by(|a, b| {
-        match (order_index.get(a.slug.as_str()), order_index.get(b.slug.as_str())) {
+        match (
+            order_index.get(a.slug.as_str()),
+            order_index.get(b.slug.as_str()),
+        ) {
             (Some(ia), Some(ib)) => ia.cmp(ib),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
@@ -1115,7 +1117,9 @@ mod tests {
         assert!(is_lens_profile_placeholder("None"));
         assert!(is_lens_profile_placeholder("(none)"));
         assert!(is_lens_profile_placeholder(""));
-        assert!(!is_lens_profile_placeholder("Adobe (Nikon AF-S 50mm f/1.8G) v1"));
+        assert!(!is_lens_profile_placeholder(
+            "Adobe (Nikon AF-S 50mm f/1.8G) v1"
+        ));
         assert!(!is_lens_profile_placeholder("Nikon AF Nikkor 85mm f/1.4D"));
     }
 

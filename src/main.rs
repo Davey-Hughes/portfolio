@@ -7,14 +7,14 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        Router,
         extract::{Path, Query},
-        http::{StatusCode, header},
+        http::{header, StatusCode},
         response::IntoResponse,
+        Router,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_axum::{generate_route_list, LeptosRoutes};
     use portfolio::app::*;
     use portfolio::image_cache::{cleanup_cache, prewarm_cache, process_and_cache_image};
     use portfolio::image_params::ImageParams;
@@ -35,11 +35,7 @@ async fn main() {
                 return (*candidate).to_string();
             }
         }
-        fallbacks
-            .last()
-            .copied()
-            .unwrap_or(".")
-            .to_string()
+        fallbacks.last().copied().unwrap_or(".").to_string()
     }
 
     let conf = get_configuration(None).unwrap();
@@ -97,10 +93,7 @@ async fn main() {
                             StatusCode::OK,
                             [
                                 (header::CONTENT_TYPE, "image/webp"),
-                                (
-                                    header::CACHE_CONTROL,
-                                    "public, max-age=31536000, immutable",
-                                ),
+                                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
                             ],
                             webp_data,
                         )
