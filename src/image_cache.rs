@@ -7,7 +7,7 @@
 //! - Pre-warming the cache on startup
 
 use leptos::logging::log;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Process and cache a single image with the given parameters
 /// Returns the WebP data or None if processing failed
@@ -73,7 +73,7 @@ fn find_image_file(
 }
 
 /// Try to use a cached image if it exists and is up-to-date
-fn try_use_cached_image(source_path: &PathBuf, cache_path: &PathBuf) -> Option<Vec<u8>> {
+fn try_use_cached_image(source_path: &Path, cache_path: &Path) -> Option<Vec<u8>> {
     use std::fs;
 
     if !cache_path.exists() {
@@ -348,7 +348,7 @@ fn collect_valid_prefixes_recursive(
 
 /// Check if a cache file is older than the maximum age
 fn is_cache_file_old(
-    cache_file: &PathBuf,
+    cache_file: &Path,
     max_age: std::time::Duration,
     now: std::time::SystemTime,
 ) -> bool {
@@ -363,7 +363,7 @@ fn is_cache_file_old(
 }
 
 /// Get the age of a file in days
-fn get_file_age_days(cache_file: &PathBuf, now: std::time::SystemTime) -> u64 {
+fn get_file_age_days(cache_file: &Path, now: std::time::SystemTime) -> u64 {
     cache_file
         .metadata()
         .ok()

@@ -820,14 +820,14 @@ mod tests {
 fn watch_event_is_relevant(kind: &notify::EventKind) -> bool {
     use notify::event::ModifyKind;
     use notify::EventKind;
-    match kind {
-        EventKind::Create(_) | EventKind::Remove(_) => true,
-        EventKind::Modify(ModifyKind::Data(_))
-        | EventKind::Modify(ModifyKind::Name(_))
-        | EventKind::Modify(ModifyKind::Any)
-        | EventKind::Modify(ModifyKind::Other) => true,
-        _ => false,
-    }
+    matches!(
+        kind,
+        EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Modify(
+                ModifyKind::Data(_) | ModifyKind::Name(_) | ModifyKind::Any | ModifyKind::Other
+            )
+    )
 }
 
 /// Drop every entry from both in-memory galleries caches. Called by the

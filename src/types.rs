@@ -365,7 +365,7 @@ mod tests {
 
         assert_eq!(deserialized.image_url, None);
         assert_eq!(deserialized.content, about.content);
-        assert_eq!(deserialized.is_html, false);
+        assert!(!deserialized.is_html);
     }
 
     #[test]
