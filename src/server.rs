@@ -136,7 +136,7 @@ fn generate_mosaic_layout_for_size(
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{calculate_orientation_bias, generate_mosaic_with_images, MosaicConfig};
+    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
 
     let num_images = photos.len();
     let image_aspects = image_aspects(photos);
@@ -223,41 +223,41 @@ fn build_gallery_data(
     const MOSAIC_DEFAULT_TTL: u64 = 3600;
     const NON_MOSAIC_TTL: u64 = 300;
 
-    if let Some(cfg) = config {
-        if cfg.use_mosaic.unwrap_or(false) && !photos.is_empty() {
-            let (layout_desktop, image_order) =
-                generate_mosaic_layout_for_size(&photos, 1200.0, 600.0);
+    if let Some(cfg) = config
+        && cfg.use_mosaic.unwrap_or(false)
+        && !photos.is_empty()
+    {
+        let (layout_desktop, image_order) = generate_mosaic_layout_for_size(&photos, 1200.0, 600.0);
 
-            // The generator assigns exactly one photo per layout cell, so a
-            // short `image_order` means some photos got no cell. Reordering by
-            // it would silently drop those photos — and the truncated result
-            // would be cached for the mosaic TTL (this is the bug that made the
-            // film gallery intermittently show a single image). Only use the
-            // mosaic when every photo was placed; otherwise fall through to the
-            // plain responsive grid, which always renders them all.
-            if image_order.len() == photos.len() {
-                let reordered_photos: Vec<PhotoInfo> =
-                    image_order.iter().map(|&idx| photos[idx].clone()).collect();
+        // The generator assigns exactly one photo per layout cell, so a
+        // short `image_order` means some photos got no cell. Reordering by
+        // it would silently drop those photos — and the truncated result
+        // would be cached for the mosaic TTL (this is the bug that made the
+        // film gallery intermittently show a single image). Only use the
+        // mosaic when every photo was placed; otherwise fall through to the
+        // plain responsive grid, which always renders them all.
+        if image_order.len() == photos.len() {
+            let reordered_photos: Vec<PhotoInfo> =
+                image_order.iter().map(|&idx| photos[idx].clone()).collect();
 
-                // Tablet uses a CSS multi-column masonry on the
-                // `.photo-grid-mobile` div — no server-computed layout needed.
-                let data = GalleryData {
-                    photos: reordered_photos,
-                    mosaic_layout: Some(layout_desktop),
-                    mosaic_layout_tablet: None,
-                };
-                return (
-                    data,
-                    cfg.mosaic_cache_duration.unwrap_or(MOSAIC_DEFAULT_TTL),
-                );
-            }
-
-            leptos::logging::log!(
-                "Mosaic layout placed only {} of {} photos; falling back to grid layout",
-                image_order.len(),
-                photos.len()
+            // Tablet uses a CSS multi-column masonry on the
+            // `.photo-grid-mobile` div — no server-computed layout needed.
+            let data = GalleryData {
+                photos: reordered_photos,
+                mosaic_layout: Some(layout_desktop),
+                mosaic_layout_tablet: None,
+            };
+            return (
+                data,
+                cfg.mosaic_cache_duration.unwrap_or(MOSAIC_DEFAULT_TTL),
             );
         }
+
+        leptos::logging::log!(
+            "Mosaic layout placed only {} of {} photos; falling back to grid layout",
+            image_order.len(),
+            photos.len()
+        );
     }
 
     let data = GalleryData {
@@ -705,8 +705,8 @@ mod tests {
 
     #[test]
     fn watch_event_is_relevant_includes_create_and_remove() {
-        use notify::event::{CreateKind, RemoveKind};
         use notify::EventKind;
+        use notify::event::{CreateKind, RemoveKind};
         assert!(watch_event_is_relevant(&EventKind::Create(
             CreateKind::File
         )));
@@ -725,8 +725,8 @@ mod tests {
 
     #[test]
     fn watch_event_is_relevant_includes_data_and_rename_modifies() {
-        use notify::event::{DataChange, ModifyKind, RenameMode};
         use notify::EventKind;
+        use notify::event::{DataChange, ModifyKind, RenameMode};
         assert!(watch_event_is_relevant(&EventKind::Modify(
             ModifyKind::Data(DataChange::Content)
         )));
@@ -755,8 +755,8 @@ mod tests {
     fn watch_event_is_relevant_excludes_metadata_modifies() {
         // The original bug surface: rsync/syncthing/touch churn fires
         // these and the watcher was treating them as content changes.
-        use notify::event::{MetadataKind, ModifyKind};
         use notify::EventKind;
+        use notify::event::{MetadataKind, ModifyKind};
         assert!(!watch_event_is_relevant(&EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::AccessTime)
         )));
@@ -781,8 +781,8 @@ mod tests {
     fn watch_event_is_relevant_excludes_access_events() {
         // The headline cause of the constant invalidation: every read
         // (cache prewarm, every HTTP image serve) generates these.
-        use notify::event::{AccessKind, AccessMode};
         use notify::EventKind;
+        use notify::event::{AccessKind, AccessMode};
         assert!(!watch_event_is_relevant(&EventKind::Access(
             AccessKind::Read
         )));
@@ -818,8 +818,8 @@ mod tests {
 ///   than invalidate on something we can't classify.
 #[cfg(feature = "ssr")]
 fn watch_event_is_relevant(kind: &notify::EventKind) -> bool {
-    use notify::event::ModifyKind;
     use notify::EventKind;
+    use notify::event::ModifyKind;
     matches!(
         kind,
         EventKind::Create(_)
@@ -948,11 +948,11 @@ pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
     std::thread::spawn(move || {
         // The watcher errors if the path doesn't exist yet; create it so the
         // server can be started before any photos have been added.
-        if !Path::new(&images_dir).exists() {
-            if let Err(err) = std::fs::create_dir_all(&images_dir) {
-                log!("Image watcher: failed to create {images_dir}: {err}");
-                return;
-            }
+        if !Path::new(&images_dir).exists()
+            && let Err(err) = std::fs::create_dir_all(&images_dir)
+        {
+            log!("Image watcher: failed to create {images_dir}: {err}");
+            return;
         }
 
         // Canonicalize so event paths (which arrive joined to whatever we

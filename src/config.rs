@@ -208,14 +208,14 @@ mod tests {
     #[serial]
     fn test_load_config_fallback_to_default() {
         // Temporarily set CONFIG_PATH to a non-existent file
-        std::env::set_var("CONFIG_PATH", "/tmp/nonexistent_config_file_12345.txt");
+        unsafe { std::env::set_var("CONFIG_PATH", "/tmp/nonexistent_config_file_12345.txt") };
 
         let config = load_config();
 
         assert_eq!(config.site_name, "Your Name");
         assert_eq!(config.site_tagline, "Photography");
 
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
     }
 
     #[cfg(feature = "ssr")]
@@ -244,7 +244,7 @@ contact_email = "john@example.com"
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
 
@@ -261,7 +261,7 @@ contact_email = "john@example.com"
         );
 
         // Cleanup
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 
@@ -292,7 +292,7 @@ custom_field = "value"
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
 
@@ -304,7 +304,7 @@ custom_field = "value"
         );
 
         // Cleanup
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 
@@ -331,7 +331,7 @@ custom_field = "value"
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
 
@@ -342,7 +342,7 @@ custom_field = "value"
         );
 
         // Cleanup
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 
@@ -371,7 +371,7 @@ another_field = "Another Value"
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
 
@@ -395,7 +395,7 @@ another_field = "Another Value"
         assert_eq!(config.sections.get("site_copyright"), None);
 
         // Cleanup
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 
@@ -422,7 +422,7 @@ test_field = "test value"
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
 
@@ -439,7 +439,7 @@ test_field = "test value"
         assert!(copyright.contains(&current_year.to_string()));
 
         // Cleanup
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 
@@ -463,7 +463,7 @@ gallery_order = ["landscapes", "portraits", "film"]
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
         assert_eq!(
@@ -475,7 +475,7 @@ gallery_order = ["landscapes", "portraits", "film"]
             ]
         );
 
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 
@@ -498,12 +498,12 @@ site_tagline = "Test"
 "#;
 
         fs::write(&config_file, content).unwrap();
-        std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap());
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
         assert!(config.gallery_order.is_empty());
 
-        std::env::remove_var("CONFIG_PATH");
+        unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();
     }
 }

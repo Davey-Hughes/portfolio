@@ -6,12 +6,12 @@ use crate::types::PhotoInfo;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
-use leptos_meta::{provide_meta_context, HashedStylesheet, MetaTags, Title};
+use leptos_meta::{HashedStylesheet, MetaTags, Title, provide_meta_context};
 use leptos_router::{
-    components::{Route, Router, Routes, A},
+    ParamSegment, StaticSegment,
+    components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
-    ParamSegment, StaticSegment,
 };
 
 #[must_use]
@@ -953,8 +953,9 @@ impl ZoomPanState {
 #[component]
 fn PhotoExifPanel(photo: PhotoInfo, is_expanded: RwSignal<bool>) -> impl IntoView {
     let dimensions_view = match (photo.width, photo.height) {
-        (Some(w), Some(h)) => view! { <ExifField heading="Dimensions" value=format!("{w} × {h} px") /> }
-        .into_any(),
+        (Some(w), Some(h)) => {
+            view! { <ExifField heading="Dimensions" value=format!("{w} × {h} px") /> }.into_any()
+        }
         _ => view! { <div></div> }.into_any(),
     };
 
@@ -1124,10 +1125,9 @@ fn FullscreenViewer(
         let target = ev.target();
         if let Some(element) =
             target.and_then(|t: web_sys::EventTarget| t.dyn_into::<web_sys::Element>().ok())
+            && element.class_name().contains("fullscreen-overlay")
         {
-            if element.class_name().contains("fullscreen-overlay") {
-                exit_fullscreen();
-            }
+            exit_fullscreen();
         }
     };
 
@@ -1351,11 +1351,7 @@ fn FullscreenViewer(
             pan_y.get(),
             zoom_level.get(),
             if zoom_level.get() > 1.0 {
-                if is_panning.get() {
-                    "grabbing"
-                } else {
-                    "grab"
-                }
+                if is_panning.get() { "grabbing" } else { "grab" }
             } else {
                 "default"
             },
@@ -1793,13 +1789,13 @@ fn get_social_media_link_from_string(key: &str, value: &str) -> Option<(String, 
         // Handle GitHub URLs
         if value.starts_with("https://github.com/") || value.starts_with("http://github.com/") {
             // Extract username from full URL
-            if let Some(username) = value.split('/').nth(3) {
-                if !username.is_empty() {
-                    return Some((
-                        format!("https://github.com/{username}"),
-                        username.to_string(),
-                    ));
-                }
+            if let Some(username) = value.split('/').nth(3)
+                && !username.is_empty()
+            {
+                return Some((
+                    format!("https://github.com/{username}"),
+                    username.to_string(),
+                ));
             }
             None
         } else {

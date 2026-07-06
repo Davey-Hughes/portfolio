@@ -969,10 +969,13 @@ mod tests {
             // Orientations should match or one should be square (which is flexible)
             assert!(
                 rect_orientation == img_orientation
-                || rect_orientation == "square"
-                || img_orientation == "square",
+                    || rect_orientation == "square"
+                    || img_orientation == "square",
                 "Mismatch: rect orientation {} (aspect {}) assigned to image orientation {} (aspect {})",
-                rect_orientation, rect.aspect_ratio(), img_orientation, img_aspect
+                rect_orientation,
+                rect.aspect_ratio(),
+                img_orientation,
+                img_aspect
             );
         }
     }

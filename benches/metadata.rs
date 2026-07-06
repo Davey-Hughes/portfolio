@@ -9,12 +9,11 @@
 //!
 //! Run: `cargo bench --features ssr --bench metadata`
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use portfolio::gallery::{parse_film_stock_from_comment, strip_leading_number_and_dash};
 
 // Current pipe-delimited export: film stock is the `Film:` value, gauge dropped.
-const PIPE_COMMENT: &str =
-    "Camera: Nikon F3 | Lens: Nikkor 50mm f/1.4 | Film: Kodak Portra 400, 35mm | \
+const PIPE_COMMENT: &str = "Camera: Nikon F3 | Lens: Nikkor 50mm f/1.4 | Film: Kodak Portra 400, 35mm | \
      Dev: Cinestill CS41 | Scan: Noritsu HS-1800";
 
 // Legacy LensTagger export: detected by the `LensTaggerVer` marker, assembled

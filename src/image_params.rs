@@ -19,13 +19,13 @@ impl ImageParams {
             let mut presets = Vec::new();
             for pair in env_presets.split(';') {
                 let parts: Vec<&str> = pair.split(',').collect();
-                if parts.len() == 2 {
-                    if let (Ok(width), Ok(quality)) = (
+                if parts.len() == 2
+                    && let (Ok(width), Ok(quality)) = (
                         parts[0].trim().parse::<u32>(),
                         parts[1].trim().parse::<u8>(),
-                    ) {
-                        presets.push((width, quality));
-                    }
+                    )
+                {
+                    presets.push((width, quality));
                 }
             }
             if !presets.is_empty() {
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_validate_with_no_params_uses_default() {
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
         let params = ImageParams {
             width: None,
             quality: None,
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_validate_with_valid_width_only() {
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
         let params = ImageParams {
             width: Some(2400),
             quality: None,
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_validate_with_2400_90_combination() {
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
         let params = ImageParams {
             width: Some(2400),
             quality: Some(90),
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_validate_with_invalid_combination() {
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
         // 2400 is a valid width and 50 is a valid quality, but the pair
         // doesn't appear in the default presets.
         let params = ImageParams {
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_validate_accepts_responsive_widths() {
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
         for w in [2400, 4000] {
             let params = ImageParams {
                 width: Some(w),
@@ -176,9 +176,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_env_override_valid() {
-        std::env::set_var("IMAGE_PRESETS", "800,70;1600,90");
+        unsafe { std::env::set_var("IMAGE_PRESETS", "800,70;1600,90") };
         let presets = ImageParams::get_valid_presets();
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         assert_eq!(presets.len(), 2);
         assert!(presets.contains(&(800, 70)));
@@ -188,9 +188,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_env_override_with_spaces() {
-        std::env::set_var("IMAGE_PRESETS", "800, 70 ; 1600 , 90");
+        unsafe { std::env::set_var("IMAGE_PRESETS", "800, 70 ; 1600 , 90") };
         let presets = ImageParams::get_valid_presets();
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         assert_eq!(presets.len(), 2);
         assert!(presets.contains(&(800, 70)));
@@ -200,9 +200,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_env_override_invalid_falls_back_to_defaults() {
-        std::env::set_var("IMAGE_PRESETS", "invalid,data;nonsense");
+        unsafe { std::env::set_var("IMAGE_PRESETS", "invalid,data;nonsense") };
         let presets = ImageParams::get_valid_presets();
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         // Falls back to the built-in preset list (2400px minimum, q90).
         assert_eq!(presets.len(), 2);
@@ -213,9 +213,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_env_override_partial_invalid() {
-        std::env::set_var("IMAGE_PRESETS", "800,70;invalid;1600,90");
+        unsafe { std::env::set_var("IMAGE_PRESETS", "800,70;invalid;1600,90") };
         let presets = ImageParams::get_valid_presets();
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         // Should only include valid pairs
         assert_eq!(presets.len(), 2);
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_validate_with_env_override() {
-        std::env::set_var("IMAGE_PRESETS", "800,70;1600,90");
+        unsafe { std::env::set_var("IMAGE_PRESETS", "800,70;1600,90") };
 
         let params = ImageParams {
             width: Some(800),
@@ -234,7 +234,7 @@ mod tests {
         };
         let result = params.validate();
 
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), (800, 70));
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_default_with_env_override() {
-        std::env::set_var("IMAGE_PRESETS", "800,70;1600,90");
+        unsafe { std::env::set_var("IMAGE_PRESETS", "800,70;1600,90") };
 
         let params = ImageParams {
             width: None,
@@ -251,7 +251,7 @@ mod tests {
         };
         let result = params.validate();
 
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         assert!(result.is_ok());
         // Should use first preset from env
