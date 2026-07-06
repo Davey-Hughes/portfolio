@@ -17,7 +17,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use image::DynamicImage;
 use portfolio::image_cache::{convert_to_webp, resize_for_width};
 

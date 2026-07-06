@@ -10,8 +10,8 @@
 //!
 //! Run: `cargo bench --features ssr --bench mosaic`
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use portfolio::mosaic::{calculate_orientation_bias, generate_mosaic_with_images, MosaicConfig};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use portfolio::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
 
 /// Deterministic mix of landscape / portrait / square aspect ratios.
 fn synthetic_aspects(n: usize) -> Vec<(usize, f64)> {

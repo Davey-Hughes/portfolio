@@ -125,13 +125,13 @@ pub fn discover_gallery_directories() -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             // Only include directories that are not special directories
-            if path.is_dir() {
-                if let Some(dir_name) = path.file_name() {
-                    let name = dir_name.to_string_lossy().to_string();
-                    // Skip special directories like categories, content, etc.
-                    if name != "categories" {
-                        gallery_dirs.push(path.to_string_lossy().to_string());
-                    }
+            if path.is_dir()
+                && let Some(dir_name) = path.file_name()
+            {
+                let name = dir_name.to_string_lossy().to_string();
+                // Skip special directories like categories, content, etc.
+                if name != "categories" {
+                    gallery_dirs.push(path.to_string_lossy().to_string());
                 }
             }
         }
@@ -687,13 +687,13 @@ fn extract_exif_data(path: &Path) -> ExifData {
         .and_then(|f| f.value.get_uint(0));
 
     // If EXIF didn't have dimensions, try reading image dimensions from file header
-    if width.is_none() || height.is_none() {
-        if let Ok(mut reader) = image::ImageReader::open(path) {
-            reader.limits(image::Limits::no_limits());
-            if let Ok(dimensions) = reader.into_dimensions() {
-                width = Some(dimensions.0);
-                height = Some(dimensions.1);
-            }
+    if (width.is_none() || height.is_none())
+        && let Ok(mut reader) = image::ImageReader::open(path)
+    {
+        reader.limits(image::Limits::no_limits());
+        if let Ok(dimensions) = reader.into_dimensions() {
+            width = Some(dimensions.0);
+            height = Some(dimensions.1);
         }
     }
 
@@ -860,29 +860,29 @@ pub fn load_galleries() -> Vec<GalleryInfo> {
 
     for base_path in gallery_roots {
         let path = Path::new(&base_path);
-        if path.exists() {
-            if let Some(dir_name) = path.file_name() {
-                let name = dir_name.to_string_lossy().to_string();
-                let slug = name.to_lowercase().replace(' ', "-");
+        if path.exists()
+            && let Some(dir_name) = path.file_name()
+        {
+            let name = dir_name.to_string_lossy().to_string();
+            let slug = name.to_lowercase().replace(' ', "-");
 
-                // Skip "home" since it's shown on the home page
-                if slug == "home" {
-                    continue;
-                }
+            // Skip "home" since it's shown on the home page
+            if slug == "home" {
+                continue;
+            }
 
-                // Count photos in this directory (recursively)
-                let mut photo_count = 0;
-                count_images_recursive(path, &mut photo_count);
+            // Count photos in this directory (recursively)
+            let mut photo_count = 0;
+            count_images_recursive(path, &mut photo_count);
 
-                if photo_count > 0 {
-                    let config = load_gallery_config(path);
-                    galleries.push(GalleryInfo {
-                        name: name.replace(['-', '_'], " "),
-                        slug,
-                        photo_count,
-                        config,
-                    });
-                }
+            if photo_count > 0 {
+                let config = load_gallery_config(path);
+                galleries.push(GalleryInfo {
+                    name: name.replace(['-', '_'], " "),
+                    slug,
+                    photo_count,
+                    config,
+                });
             }
         }
     }
@@ -1127,10 +1127,10 @@ mod tests {
     #[serial]
     fn test_get_default_image_params_defaults() {
         // Ensure env vars are not set
-        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
-        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_WIDTH") };
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_QUALITY") };
         // Also ensure IMAGE_PRESETS doesn't override
-        std::env::remove_var("IMAGE_PRESETS");
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
 
         let (width, quality) = get_default_image_params();
         // Should use 2400px at 90 quality (the default)
@@ -1141,12 +1141,12 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_default_image_params_custom_width() {
-        std::env::set_var("DEFAULT_IMAGE_WIDTH", "1200");
-        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+        unsafe { std::env::set_var("DEFAULT_IMAGE_WIDTH", "1200") };
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_QUALITY") };
 
         let (width, quality) = get_default_image_params();
 
-        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_WIDTH") };
 
         // On SSR builds, env vars don't affect get_default_image_params (it uses presets)
         // On client builds, env vars override defaults
@@ -1165,12 +1165,12 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_default_image_params_custom_quality() {
-        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
-        std::env::set_var("DEFAULT_IMAGE_QUALITY", "90");
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_WIDTH") };
+        unsafe { std::env::set_var("DEFAULT_IMAGE_QUALITY", "90") };
 
         let (width, quality) = get_default_image_params();
 
-        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_QUALITY") };
 
         // On SSR builds, env vars don't affect get_default_image_params (it uses presets)
         // On client builds, env vars override defaults
@@ -1189,13 +1189,13 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_default_image_params_both_custom() {
-        std::env::set_var("DEFAULT_IMAGE_WIDTH", "1200");
-        std::env::set_var("DEFAULT_IMAGE_QUALITY", "85");
+        unsafe { std::env::set_var("DEFAULT_IMAGE_WIDTH", "1200") };
+        unsafe { std::env::set_var("DEFAULT_IMAGE_QUALITY", "85") };
 
         let (width, quality) = get_default_image_params();
 
-        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
-        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_WIDTH") };
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_QUALITY") };
 
         // On SSR builds, env vars don't affect get_default_image_params (it uses presets)
         // On client builds, env vars override defaults
@@ -1214,13 +1214,13 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_default_image_params_invalid_values() {
-        std::env::set_var("DEFAULT_IMAGE_WIDTH", "invalid");
-        std::env::set_var("DEFAULT_IMAGE_QUALITY", "not_a_number");
+        unsafe { std::env::set_var("DEFAULT_IMAGE_WIDTH", "invalid") };
+        unsafe { std::env::set_var("DEFAULT_IMAGE_QUALITY", "not_a_number") };
 
         let (width, quality) = get_default_image_params();
 
-        std::env::remove_var("DEFAULT_IMAGE_WIDTH");
-        std::env::remove_var("DEFAULT_IMAGE_QUALITY");
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_WIDTH") };
+        unsafe { std::env::remove_var("DEFAULT_IMAGE_QUALITY") };
 
         // Should fall back to defaults
         assert_eq!(width, 2400);
@@ -1316,7 +1316,7 @@ mod tests {
         fs::remove_dir_all(&temp_path).ok();
         fs::create_dir_all(&temp_path).unwrap();
 
-        std::env::set_var("ABOUT_CONTENT_PATH", temp_path.to_str().unwrap());
+        unsafe { std::env::set_var("ABOUT_CONTENT_PATH", temp_path.to_str().unwrap()) };
 
         let about = load_about_content();
 
@@ -1325,7 +1325,7 @@ mod tests {
         // Should contain default text since no about.txt exists
         assert!(about.content.contains("photographer"));
 
-        std::env::remove_var("ABOUT_CONTENT_PATH");
+        unsafe { std::env::remove_var("ABOUT_CONTENT_PATH") };
         // Cleanup
         fs::remove_dir_all(&temp_path).ok();
     }
@@ -1339,14 +1339,14 @@ mod tests {
         let custom_text = "This is my custom about text!";
         fs::write(temp_dir.join("about.txt"), custom_text).unwrap();
 
-        std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap());
+        unsafe { std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap()) };
 
         let about = load_about_content();
 
         assert_eq!(about.content, custom_text);
         assert_eq!(about.image_url, None);
 
-        std::env::remove_var("ABOUT_CONTENT_PATH");
+        unsafe { std::env::remove_var("ABOUT_CONTENT_PATH") };
         fs::remove_dir_all(&temp_dir).ok();
     }
 
@@ -1359,14 +1359,14 @@ mod tests {
         fs::write(temp_dir.join("about.txt"), "Custom text").unwrap();
         fs::write(temp_dir.join("profile.jpg"), b"fake jpg").unwrap();
 
-        std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap());
+        unsafe { std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap()) };
 
         let about = load_about_content();
 
         assert_eq!(about.image_url, Some("/content/profile.jpg".to_string()));
         assert_eq!(about.content, "Custom text");
 
-        std::env::remove_var("ABOUT_CONTENT_PATH");
+        unsafe { std::env::remove_var("ABOUT_CONTENT_PATH") };
         fs::remove_dir_all(&temp_dir).ok();
     }
 
@@ -1380,14 +1380,14 @@ mod tests {
         fs::write(temp_dir.join("profile.jpg"), b"fake jpg").unwrap();
         fs::write(temp_dir.join("profile.png"), b"fake png").unwrap();
 
-        std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap());
+        unsafe { std::env::set_var("ABOUT_CONTENT_PATH", temp_dir.to_str().unwrap()) };
 
         let about = load_about_content();
 
         // Should prefer .jpg as it's first in the array
         assert_eq!(about.image_url, Some("/content/profile.jpg".to_string()));
 
-        std::env::remove_var("ABOUT_CONTENT_PATH");
+        unsafe { std::env::remove_var("ABOUT_CONTENT_PATH") };
         fs::remove_dir_all(&temp_dir).ok();
     }
 
@@ -1399,7 +1399,7 @@ mod tests {
         // Make sure it doesn't exist
         fs::remove_dir_all(&temp_gallery).ok();
 
-        std::env::set_var("GALLERY_PATH", temp_gallery.to_str().unwrap());
+        unsafe { std::env::set_var("GALLERY_PATH", temp_gallery.to_str().unwrap()) };
 
         let photos = load_home_photos();
 
@@ -1407,7 +1407,7 @@ mod tests {
         assert!(temp_gallery.exists());
         assert!(photos.is_empty()); // No photos in new directory
 
-        std::env::remove_var("GALLERY_PATH");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
         fs::remove_dir_all(&temp_gallery).ok();
     }
 

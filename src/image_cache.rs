@@ -396,12 +396,11 @@ fn is_cache_file_old(
     max_age: std::time::Duration,
     now: std::time::SystemTime,
 ) -> bool {
-    if let Ok(metadata) = cache_file.metadata() {
-        if let Ok(accessed) = metadata.accessed() {
-            if let Ok(age) = now.duration_since(accessed) {
-                return age > max_age;
-            }
-        }
+    if let Ok(metadata) = cache_file.metadata()
+        && let Ok(accessed) = metadata.accessed()
+        && let Ok(age) = now.duration_since(accessed)
+    {
+        return age > max_age;
     }
     false
 }
@@ -457,22 +456,30 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
 
     std::thread::scope(|scope| {
         for _ in 0..workers {
-            scope.spawn(|| loop {
-                let idx = next.fetch_add(1, Ordering::Relaxed);
-                let Some(image_path) = image_paths.get(idx) else {
-                    break;
-                };
-                // Strip extension to get the base path.
-                let path_without_ext = match image_path.rfind('.') {
-                    Some(dot) => &image_path[..dot],
-                    None => image_path.as_str(),
-                };
-                if process_and_cache_image(images_dir, cache_dir, path_without_ext, width, quality)
+            scope.spawn(|| {
+                loop {
+                    let idx = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(image_path) = image_paths.get(idx) else {
+                        break;
+                    };
+                    // Strip extension to get the base path.
+                    let path_without_ext = match image_path.rfind('.') {
+                        Some(dot) => &image_path[..dot],
+                        None => image_path.as_str(),
+                    };
+                    if process_and_cache_image(
+                        images_dir,
+                        cache_dir,
+                        path_without_ext,
+                        width,
+                        quality,
+                    )
                     .is_some()
-                {
-                    processed.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    errors.fetch_add(1, Ordering::Relaxed);
+                    {
+                        processed.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        errors.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             });
         }
@@ -507,10 +514,9 @@ fn collect_image_paths_recursive(dir: &std::path::Path, base: &str, paths: &mut 
                 if matches!(
                     ext.as_ref(),
                     "jxl" | "avif" | "jpg" | "jpeg" | "webp" | "png" | "gif"
-                ) {
-                    if let Ok(relative) = path.strip_prefix(base) {
-                        paths.push(relative.to_string_lossy().to_string());
-                    }
+                ) && let Ok(relative) = path.strip_prefix(base)
+                {
+                    paths.push(relative.to_string_lossy().to_string());
                 }
             }
         }

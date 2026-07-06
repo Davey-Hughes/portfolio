@@ -7,14 +7,14 @@
 #[tokio::main]
 async fn main() {
     use axum::{
-        extract::{Path, Query},
-        http::{header, StatusCode},
-        response::IntoResponse,
         Router,
+        extract::{Path, Query},
+        http::{StatusCode, header},
+        response::IntoResponse,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::*;
     use portfolio::image_cache::{cleanup_cache, prewarm_cache, process_and_cache_image};
     use portfolio::image_params::ImageParams;
