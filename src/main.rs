@@ -147,6 +147,11 @@ async fn main() {
             let leptos_options = leptos_options.clone();
             move || shell(leptos_options.clone())
         })
+        // Lightweight liveness probe for Docker HEALTHCHECK / load-balancers.
+        .route(
+            "/healthz",
+            axum::routing::get(|| async { (StatusCode::OK, "ok") }),
+        )
         // Compressed image endpoint
         .route(
             "/images/compressed/{*image_path}",

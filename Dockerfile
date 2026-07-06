@@ -30,6 +30,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM alpine:latest AS runner
 
+RUN apk add --no-cache curl
+
 WORKDIR /app
 
 COPY --from=builder /out/portfolio /app/
@@ -54,5 +56,8 @@ ENV LEPTOS_HASH_FILES="true"
 VOLUME ["/app/public"]
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8080/healthz || exit 1
 
 CMD ["/app/portfolio"]
