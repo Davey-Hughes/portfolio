@@ -51,7 +51,8 @@ webp = { version = "0.3", optional = true }
 notify = { version = "8", optional = true }
 fast_image_resize = { version = "5", optional = true }
 dotenvy = { version = "0.15", optional = true }
-
+mimalloc = { version = "0.1", optional = true }
+moka = { version = "0.12", features = ["future"], optional = true }
 [dev-dependencies]
 serial_test = "3.4"
 tempfile = "3"
@@ -112,6 +113,8 @@ ssr = [
   "dep:notify",
   "dep:fast_image_resize",
   "dep:dotenvy",
+  "dep:mimalloc",
+  "dep:moka",
   "leptos/ssr",
   "leptos_meta/ssr",
   "leptos_router/ssr",

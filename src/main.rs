@@ -4,6 +4,77 @@
 #![recursion_limit = "512"]
 
 #[cfg(feature = "ssr")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(feature = "ssr")]
+mod cache_middleware {
+    use axum::{
+        extract::{Request, State},
+        middleware::Next,
+        response::{IntoResponse, Response},
+    };
+    use moka::future::Cache;
+    use std::sync::Arc;
+
+    pub type HtmlCache = Arc<Cache<String, (axum::http::HeaderMap, axum::body::Bytes)>>;
+
+    pub async fn html_cache_middleware(
+        State(cache): State<HtmlCache>,
+        req: Request,
+        next: Next,
+    ) -> Response {
+        if req.method() != axum::http::Method::GET || req.uri().path().starts_with("/api") {
+            return next.run(req).await;
+        }
+
+        let cookie_str = req
+            .headers()
+            .get(axum::http::header::COOKIE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        let key = format!("{}|{}", req.uri(), cookie_str);
+
+        if let Some((headers, body_bytes)) = cache.get(&key).await {
+            let mut res = body_bytes.into_response();
+            *res.headers_mut() = headers;
+            return res;
+        }
+
+        let res = next.run(req).await;
+
+        if res.status().is_success() {
+            let is_html = res
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .is_some_and(|ct| ct.as_bytes().starts_with(b"text/html"));
+
+            if is_html {
+                let (parts, body) = res.into_parts();
+                match axum::body::to_bytes(body, usize::MAX).await {
+                    Ok(bytes) => {
+                        cache
+                            .insert(key, (parts.headers.clone(), bytes.clone()))
+                            .await;
+                        let mut cached_res = bytes.into_response();
+                        *cached_res.headers_mut() = parts.headers;
+                        return cached_res;
+                    }
+                    Err(_) => {
+                        return axum::response::Response::from_parts(
+                            parts,
+                            axum::body::Body::empty(),
+                        );
+                    }
+                }
+            }
+        }
+
+        res
+    }
+}
+
+#[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
     use axum::{
@@ -142,6 +213,12 @@ async fn main() {
     // matching entries from the on-disk compressed-image cache.
     portfolio::server::spawn_image_watcher(images_dir.clone(), cache_dir.clone());
 
+    let html_cache: cache_middleware::HtmlCache = std::sync::Arc::new(
+        moka::future::Cache::builder()
+            .time_to_live(std::time::Duration::from_secs(15))
+            .build(),
+    );
+
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
@@ -177,6 +254,10 @@ async fn main() {
         )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options)
+        .layer(axum::middleware::from_fn_with_state(
+            html_cache,
+            cache_middleware::html_cache_middleware,
+        ))
         .layer(CompressionLayer::new());
 
     // run our app with hyper
