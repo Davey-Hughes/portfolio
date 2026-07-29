@@ -20,7 +20,13 @@ tower-http = { version = "0.7", features = [
   "set-header",
   "compression-gzip",
 ], optional = true }
-wasm-bindgen = { version = "0.2", optional = true }
+# Pinned exactly, not caret. wasm-bindgen's generated output carries a schema version
+# that must match the wasm-bindgen-cli-support compiled into cargo-leptos byte for byte;
+# a caret "0.2" lets `cargo update` drift the two apart. The failure is a hard error at
+# the JS/WASM generation step ("rust Wasm file schema version: X / this binary schema
+# version: Y"), so it lands in `cargo leptos build` and the image build while
+# `cargo test` stays green. Bump this in step with the cargo-leptos version.
+wasm-bindgen = { version = "=0.2.126", optional = true }
 js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", features = [
   "Touch",
