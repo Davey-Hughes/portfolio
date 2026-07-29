@@ -1,4 +1,15 @@
 target/
+# Gallery images, page content and the transcode cache all live under public/, so this
+# one rule is what keeps photos out of the build context. Galleries go in
+# public/images/<gallery>/ — IMAGES_DIR defaults to public/images and GALLERY_PATH to
+# public/images/home — which mirrors the `public/images/*` rule in .gitignore. Add
+# images there and they are excluded from the image build automatically; a gallery
+# dropped at the repo root instead is outside the convention and the app will not read
+# it either.
+#
+# The image genuinely never needs them: the runner mounts /app/public as a volume at
+# runtime and the runner stage only copies /out, so shipping photos into the builder
+# would be pure transfer and layer cost.
 public/
 end2end/
 .git/
