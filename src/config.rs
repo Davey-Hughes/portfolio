@@ -7,7 +7,13 @@ use chrono::Datelike;
 /// Get the current year for copyright notice
 /// Uses JavaScript Date API on client, chrono on server
 fn get_current_year() -> i32 {
-    #[cfg(feature = "hydrate")]
+    // Gated on the target, not just the feature: js-sys' imports only exist on wasm, so
+    // calling Date::new_0() from a host binary panics with "cannot call wasm-bindgen
+    // imported functions on non-wasm targets". The hydrate test job does exactly that —
+    // it compiles the lib under `hydrate` but runs the tests natively — so without the
+    // target_arch check this arm is selected there and every test touching SiteConfig
+    // panics.
+    #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
     {
         js_sys::Date::new_0().get_full_year() as i32
     }
@@ -17,7 +23,10 @@ fn get_current_year() -> i32 {
         chrono::Local::now().year()
     }
 
-    #[cfg(not(any(feature = "hydrate", feature = "ssr")))]
+    // Reached by host-target test runs, including `hydrate` ones (see above). The tests
+    // that assert on the year compare against this same function rather than a literal,
+    // so they stay correct as it goes stale.
+    #[cfg(not(any(all(feature = "hydrate", target_arch = "wasm32"), feature = "ssr")))]
     {
         2025 // Fallback for tests
     }

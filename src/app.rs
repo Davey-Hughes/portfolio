@@ -1081,10 +1081,10 @@ fn FullscreenViewer(
         show_zoom_controls.set(true);
         #[cfg(feature = "hydrate")]
         {
-            if let Some(timeout_id) = _hide_controls_timeout.get_value() {
-                if let Some(window) = web_sys::window() {
-                    window.clear_timeout_with_handle(timeout_id);
-                }
+            if let Some(timeout_id) = _hide_controls_timeout.get_value()
+                && let Some(window) = web_sys::window()
+            {
+                window.clear_timeout_with_handle(timeout_id);
             }
             if let Some(window) = web_sys::window() {
                 let timeout_id = window
@@ -1161,16 +1161,16 @@ fn FullscreenViewer(
             #[cfg(feature = "hydrate")]
             {
                 let mouse_event = ev.unchecked_ref::<web_sys::MouseEvent>();
-                if let Some(target) = mouse_event.target() {
-                    if let Some(element) = target.dyn_ref::<web_sys::Element>() {
-                        let rect = element.get_bounding_client_rect();
-                        let img_center_x = rect.left() + rect.width() / 2.0;
-                        let img_center_y = rect.top() + rect.height() / 2.0;
-                        let click_x = f64::from(mouse_event.client_x());
-                        let click_y = f64::from(mouse_event.client_y());
-                        pan_x.set((img_center_x - click_x) * 2.0);
-                        pan_y.set((img_center_y - click_y) * 2.0);
-                    }
+                if let Some(target) = mouse_event.target()
+                    && let Some(element) = target.dyn_ref::<web_sys::Element>()
+                {
+                    let rect = element.get_bounding_client_rect();
+                    let img_center_x = rect.left() + rect.width() / 2.0;
+                    let img_center_y = rect.top() + rect.height() / 2.0;
+                    let click_x = f64::from(mouse_event.client_x());
+                    let click_y = f64::from(mouse_event.client_y());
+                    pan_x.set((img_center_x - click_x) * 2.0);
+                    pan_y.set((img_center_y - click_y) * 2.0);
                 }
             }
             zoom_level.set(2.0);
@@ -1468,37 +1468,31 @@ fn PhotoDetailPage() -> impl IntoView {
                     // Get current photo list and params
                     if let (Some(photo_list), Ok(current_params)) =
                         (photos.get().and_then(std::result::Result::ok), params.get())
-                    {
-                        if let Some((idx, _)) = photo_list
+                        && let Some((idx, _)) = photo_list
                             .iter()
                             .enumerate()
                             .find(|(_, p)| p.slug == current_params.photo)
-                        {
-                            match key.as_str() {
-                                "ArrowLeft" => {
-                                    if idx > 0 {
-                                        if let Some(prev) = photo_list.get(idx - 1) {
-                                            let url = format!(
-                                                "/gallery/{}/{}",
-                                                prev.gallery_name, prev.slug
-                                            );
-                                            navigate(&url, Default::default());
-                                        }
-                                    }
+                    {
+                        match key.as_str() {
+                            "ArrowLeft" => {
+                                if idx > 0
+                                    && let Some(prev) = photo_list.get(idx - 1)
+                                {
+                                    let url =
+                                        format!("/gallery/{}/{}", prev.gallery_name, prev.slug);
+                                    navigate(&url, Default::default());
                                 }
-                                "ArrowRight" => {
-                                    if idx < photo_list.len() - 1 {
-                                        if let Some(next) = photo_list.get(idx + 1) {
-                                            let url = format!(
-                                                "/gallery/{}/{}",
-                                                next.gallery_name, next.slug
-                                            );
-                                            navigate(&url, Default::default());
-                                        }
-                                    }
-                                }
-                                _ => {}
                             }
+                            "ArrowRight" => {
+                                if idx < photo_list.len() - 1
+                                    && let Some(next) = photo_list.get(idx + 1)
+                                {
+                                    let url =
+                                        format!("/gallery/{}/{}", next.gallery_name, next.slug);
+                                    navigate(&url, Default::default());
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 },
@@ -1526,12 +1520,11 @@ fn PhotoDetailPage() -> impl IntoView {
     {
         use leptos::prelude::Effect;
         Effect::new(move |_| {
-            if let Some(window) = web_sys::window() {
-                if let Ok(width) = window.inner_width() {
-                    if let Some(width_f64) = width.as_f64() {
-                        viewport_width.set(width_f64);
-                    }
-                }
+            if let Some(window) = web_sys::window()
+                && let Ok(width) = window.inner_width()
+                && let Some(width_f64) = width.as_f64()
+            {
+                viewport_width.set(width_f64);
             }
         });
     }
