@@ -140,12 +140,25 @@ jobs:
           # wasm-release profile, which the `rust` job above never builds.
           key: cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-wasm-
-      # Same installer the Dockerfile uses, so CI and the image agree on version.
-      # The Dockerfile additionally apk-adds sass + binaryen because it builds on
-      # musl; on this glibc runner image cargo-leptos fetches dart-sass (for
-      # style/main.scss) and wasm-opt itself.
+      # The version is read out of the Dockerfile's CARGO_LEPTOS_VERSION ARG rather than
+      # duplicated here, so CI and the image cannot drift: cargo-leptos embeds a
+      # wasm-bindgen schema that must match the crate exactly, and a copy of the number
+      # in two files is a copy that eventually disagrees. Bump it in the Dockerfile.
+      #
+      # The Dockerfile additionally apk-adds sass + binaryen because it builds on musl;
+      # on this glibc runner image cargo-leptos fetches dart-sass (for style/main.scss)
+      # and wasm-opt itself.
       - name: Install cargo-leptos
-        run: curl --proto '=https' --tlsv1.3 -LsSf https://github.com/leptos-rs/cargo-leptos/releases/latest/download/cargo-leptos-installer.sh | sh
+        run: |
+          set -eu
+          V="$(grep -m1 '^ARG CARGO_LEPTOS_VERSION=' Dockerfile | cut -d= -f2)"
+          if [ -z "$V" ]; then
+            echo "could not read CARGO_LEPTOS_VERSION from Dockerfile" >&2
+            exit 1
+          fi
+          echo "installing cargo-leptos $V (pinned in Dockerfile)"
+          curl --proto '=https' --tlsv1.3 -LsSf \
+            "https://github.com/leptos-rs/cargo-leptos/releases/download/v${V}/cargo-leptos-installer.sh" | sh
       # Only a release build emits the optimized, wasm-opt'd bundle wasm_size.sh
       # measures (lib-profile-release = "wasm-release"); a dev build is much larger.
       - name: Build
