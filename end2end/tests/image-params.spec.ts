@@ -128,8 +128,11 @@ test.describe("Image Parameter Environment Variables", () => {
   test("should use compressed images in photo gallery", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
     
-    // Find a gallery link if it exists
-    const galleryLinks = page.locator('a[href^="/gallery/"]');
+    // Scoped to the nav on purpose. A bare a[href^="/gallery/"] also matches every photo
+    // thumbnail, because those are /gallery/<gallery>/<photo> (src/app.rs:283/378) — so
+    // `.first()` could land on a photo detail page, which has no grid at all. The nav
+    // lists only gallery indexes.
+    const galleryLinks = page.locator('nav a[href^="/gallery/"]');
     const linkCount = await galleryLinks.count();
     
     if (linkCount > 0) {

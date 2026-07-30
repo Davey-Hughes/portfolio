@@ -5,8 +5,11 @@
 //! and three in photo-gallery.spec.ts open with an unguarded
 //! `waitForSelector(".photo-hero-link")`, which throws on an empty gallery. (The
 //! `if (count > 0)` checks that follow are unreachable in that case, so they do not
-//! save us.) Three of those tests additionally guard on `count > 1`, hence three
-//! photos rather than one.
+//! save us.) Three of those tests additionally guard on `count > 1`, so one photo is not
+//! enough either.
+//!
+//! Writes two galleries: `home` (the homepage grid) and a second one, which is required
+//! rather than decorative — see the `gallery` field below.
 //!
 //! Run: `cargo run --release --example gen_fixtures --features ssr`
 //!
@@ -26,6 +29,16 @@ use little_exif::rational::uR64;
 /// One fixture photo. Dimensions vary so the mosaic bin-packer in `src/mosaic.rs` has
 /// real aspect-ratio variety to work with instead of three identical squares.
 struct Fixture {
+    /// Which gallery directory under the images root this photo belongs to.
+    ///
+    /// At least one gallery other than `home` is required, not decorative: discovery
+    /// deliberately omits `home` from the nav list (src/gallery.rs:869 — it is the
+    /// homepage), so with only a `home` gallery the nav has no gallery links at all.
+    /// Specs that go looking for one then fall through to the photo thumbnails, which
+    /// share the `/gallery/` href prefix, and end up on a photo detail page instead of
+    /// a gallery index. That is exactly how CI run 113 failed while passing locally,
+    /// where an untracked `city` gallery happened to supply a real nav link.
+    gallery: &'static str,
     /// Gallery-relative name; also the visible photo title.
     name: &'static str,
     /// `true` puts the file at `<gallery>/<name>/<name>.jpg` (the nested form the
@@ -58,6 +71,7 @@ struct Fixture {
 
 const FIXTURES: &[Fixture] = &[
     Fixture {
+        gallery: "home",
         name: "laika",
         nested: true,
         width: 1200,
@@ -75,6 +89,7 @@ const FIXTURES: &[Fixture] = &[
         lenstagger: None,
     },
     Fixture {
+        gallery: "home",
         name: "blue-angels",
         nested: true,
         width: 1000,
@@ -94,6 +109,7 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         // Flat layout on purpose — production has a bare contrail.jpg beside the
         // nested directories, so the discovery code must handle both.
+        gallery: "home",
         name: "contrail",
         nested: false,
         width: 800,
@@ -110,6 +126,46 @@ const FIXTURES: &[Fixture] = &[
         description: "Fixture: manual prime, portrait orientation",
         // Mirrors what LensTagger writes when the values were entered by hand.
         lenstagger: Some("-FNumber=11.0\n-ExposureTime=1/2000\n-LensModel=85mm f/1.4D"),
+    },
+    // A second gallery, so `get_galleries()` returns something and the nav renders a
+    // real gallery link. Named "nature" to match one of the production galleries; it
+    // also gives abuse-cases.spec.ts's "non-existent photo slug" case a real gallery to
+    // miss inside, which exercises PhotoNotFound rather than a missing gallery.
+    Fixture {
+        gallery: "nature",
+        name: "bee",
+        nested: true,
+        width: 1400,
+        height: 900,
+        rgb: [70, 104, 62],
+        make: "NIKON CORPORATION",
+        model: "NIKON D850",
+        lens: "70.0-200.0 mm f/2.8",
+        focal_mm: 200,
+        f_number: (28, 10),
+        exposure: (1, 320),
+        iso: 640,
+        taken: "2023:06:29 21:16:40",
+        description: "Fixture: second gallery, telephoto close-up",
+        lenstagger: None,
+    },
+    Fixture {
+        gallery: "nature",
+        name: "bird",
+        nested: false,
+        width: 900,
+        height: 1400,
+        rgb: [104, 88, 62],
+        make: "NIKON CORPORATION",
+        model: "NIKON Z f",
+        lens: "85mm f/1.4D",
+        focal_mm: 85,
+        f_number: (14, 10),
+        exposure: (1, 250),
+        iso: 400,
+        taken: "2026:05:11 11:02:03",
+        description: "Fixture: second gallery, wide-aperture prime",
+        lenstagger: None,
     },
 ];
 
@@ -203,13 +259,17 @@ fn write_exif(path: &Path, fixture: &Fixture) -> Result<(), Box<dyn std::error::
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // GALLERY_PATH's default. Overridable so this can also seed a scratch gallery.
-    let gallery =
-        std::env::var("FIXTURE_GALLERY").unwrap_or_else(|_| "public/images/home".to_string());
-    let gallery = PathBuf::from(gallery);
-    fs::create_dir_all(&gallery)?;
+    // IMAGES_DIR's default. Overridable so a local run can seed a scratch tree instead
+    // of public/images — which is how CI's gallery set gets reproduced exactly, without
+    // a developer's own galleries in the way.
+    let images_root =
+        std::env::var("FIXTURE_IMAGES_DIR").unwrap_or_else(|_| "public/images".to_string());
+    let images_root = PathBuf::from(images_root);
 
     for fixture in FIXTURES {
+        let gallery = images_root.join(fixture.gallery);
+        fs::create_dir_all(&gallery)?;
+
         let path = if fixture.nested {
             let dir = gallery.join(fixture.name);
             fs::create_dir_all(&dir)?;
@@ -234,10 +294,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    let mut galleries: Vec<&str> = FIXTURES.iter().map(|f| f.gallery).collect();
+    galleries.sort_unstable();
+    galleries.dedup();
     println!(
-        "\n{} fixture photos in {}",
+        "\n{} fixture photos across {} galleries ({}) in {}",
         FIXTURES.len(),
-        gallery.display()
+        galleries.len(),
+        galleries.join(", "),
+        images_root.display()
     );
 
     // Content fixtures live outside public/ so this never overwrites a real config.

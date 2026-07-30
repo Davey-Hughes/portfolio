@@ -198,10 +198,12 @@ jobs:
       - name: Build
         run: cargo leptos build --release
       # public/images/* is gitignored, so this is the only source of photos in CI. Writes
-      # 3 JPEGs with EXIF lifted from real frames into public/images/home/, plus a
-      # config.toml + about.txt into target/e2e-fixtures/ (consumed by CONFIG_PATH and
-      # ABOUT_CONTENT_PATH below) so the site name — and therefore every title assertion
-      # — is deterministic instead of depending on SiteConfig::default().
+      # 5 JPEGs with EXIF lifted from real frames across two galleries — `home` plus a
+      # second one, because discovery omits `home` from the nav gallery list, and specs
+      # looking for a gallery link otherwise fall through to a photo thumbnail. Also
+      # writes config.toml + about.txt into target/e2e-fixtures/ (consumed by CONFIG_PATH
+      # and ABOUT_CONTENT_PATH below) so the site name — and therefore every title
+      # assertion — is deterministic instead of depending on SiteConfig::default().
       - name: Generate the fixture gallery
         run: cargo run --release --example gen_fixtures --features ssr
       # 52 MB, and `npm ci` deletes and rebuilds node_modules from scratch, so the
