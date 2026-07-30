@@ -168,6 +168,120 @@ jobs:
       - name: Bundle size vs budget
         run: scripts/perf/wasm_size.sh
 
+  # Playwright end-to-end suite: 9 specs, 118 tests across chromium + firefox. Nothing
+  # ran them before this job, and they had rotted accordingly — the path-traversal spec
+  # pinned a status code the server never returns, and every photo-detail test plus three
+  # gallery tests open with an unguarded waitForSelector(".photo-hero-link"), which throws
+  # on an empty gallery. public/images/* is gitignored, so a fresh checkout has no photos
+  # at all; the fixture step below generates them.
+  #
+  # Deliberately NOT a gate on the docker job below. Browser tests are the flakiest thing
+  # in this workflow and an image build should not queue behind them; playwright.config.ts
+  # already sets retries: 2 and workers: 1 under CI to absorb the ordinary noise, and a
+  # genuine regression still shows up as a red e2e job.
+  e2e:
+    runs-on: docker
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          . "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup show
+      - uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Its own namespace: this job builds the release binary plus the gen_fixtures
+          # example, which neither the rust nor the wasm job produces.
+          key: cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-e2e-
+      # Same pin the Dockerfile and the wasm job use — read from the Dockerfile so the
+      # version lives in exactly one place. See the ARGs at the top of the Dockerfile.
+      - name: Install cargo-leptos
+        run: |
+          set -eu
+          V="$(grep -m1 '^ARG CARGO_LEPTOS_VERSION=' Dockerfile | cut -d= -f2)"
+          if [ -z "$V" ]; then
+            echo "could not read CARGO_LEPTOS_VERSION from Dockerfile" >&2
+            exit 1
+          fi
+          curl --proto '=https' --tlsv1.3 -LsSf \
+            "https://github.com/leptos-rs/cargo-leptos/releases/download/v${V}/cargo-leptos-installer.sh" | sh
+      # Release, not debug: hash-files=true only resolves correctly against the hashed
+      # assets a release build emits, which is also what the image ships.
+      - name: Build
+        run: cargo leptos build --release
+      # public/images/* is gitignored, so this is the only source of photos in CI. Writes
+      # 3 JPEGs with EXIF lifted from real frames into public/images/home/, plus a
+      # config.toml + about.txt into target/e2e-fixtures/ (consumed by CONFIG_PATH and
+      # ABOUT_CONTENT_PATH below) so the site name — and therefore every title assertion
+      # — is deterministic instead of depending on SiteConfig::default().
+      - name: Generate the fixture gallery
+        run: cargo run --release --example gen_fixtures --features ssr
+      - name: Install e2e dependencies
+        working-directory: end2end
+        run: npm ci
+      # ~400 MB of browsers; keyed on the lockfile because the required builds are
+      # pinned by the @playwright/test version recorded there.
+      - uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('end2end/package-lock.json') }}
+          restore-keys: playwright-
+      # --with-deps also apt-installs the shared libraries the browsers link against,
+      # which a cache restore does not provide, so it runs even on a cache hit.
+      - name: Install browsers
+        working-directory: end2end
+        run: npx playwright install --with-deps chromium firefox
+      # The server is started here rather than via `cargo leptos end-to-end` on purpose:
+      # in cargo-leptos 0.3.7 that command panics on teardown after playwright exits
+      # ("ProcessHandle should not have been dropped", end2end.rs:27), which would turn a
+      # green suite into a failed job. Port 4000 is playwright.config.ts's baseURL, set by
+      # site-addr in Cargo.toml.
+      #
+      # CONFIG_PATH / ABOUT_CONTENT_PATH point at the generated fixtures. Without them
+      # load_config() falls through to SiteConfig::default(), whose site_name is the
+      # placeholder "Your Name" — so the specs' "Photography Portfolio" title assertions
+      # would only pass if config loading *failed*, which is not something a test should
+      # rely on.
+      #
+      # --reporter=line because the configured `html` reporter writes a directory nobody
+      # collects here; line puts failures directly in the job log.
+      - name: Run Playwright
+        env:
+          CONFIG_PATH: target/e2e-fixtures/config.toml
+          ABOUT_CONTENT_PATH: target/e2e-fixtures
+        run: |
+          set -u
+          cargo leptos serve --release > /tmp/e2e-server.log 2>&1 &
+          SRV=$!
+          cleanup() {
+            kill "$SRV" 2>/dev/null || true
+            wait "$SRV" 2>/dev/null || true
+          }
+          trap cleanup EXIT INT TERM
+
+          ready=0
+          i=0
+          while [ "$i" -lt 180 ]; do
+            if curl -sf http://127.0.0.1:4000/healthz >/dev/null 2>&1; then ready=1; break; fi
+            i=$((i + 1))
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "server never became ready; last 40 lines of its log:" >&2
+            tail -40 /tmp/e2e-server.log >&2
+            exit 1
+          fi
+          echo "server ready after ${i}s"
+
+          cd end2end
+          CI=1 npx playwright test --reporter=line
+
   # Build + publish the container image to the Forgejo registry — but ONLY after the rust +
   # hydrate checks pass (a red build never ships an image), and never on a pull request.
   # Tags: latest (default branch), branch name, short SHA, and full semver on a v* tag. The
