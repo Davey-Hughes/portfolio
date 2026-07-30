@@ -243,8 +243,9 @@ jobs:
       # would only pass if config loading *failed*, which is not something a test should
       # rely on.
       #
-      # --reporter=line because the configured `html` reporter writes a directory nobody
-      # collects here; line puts failures directly in the job log.
+      # Both reporters: `line` puts failures directly in the job log, `html` writes the
+      # report the upload step below collects. The config's default is html alone, which
+      # in CI meant failures were only visible if you went and fetched the report.
       - name: Run Playwright
         env:
           CONFIG_PATH: target/e2e-fixtures/config.toml
@@ -274,7 +275,29 @@ jobs:
           echo "server ready after ${i}s"
 
           cd end2end
-          CI=1 npx playwright test --reporter=line
+          CI=1 npx playwright test --reporter=line,html
+      # On failure, keep the traces and the HTML report. Without this a red suite is only
+      # as debuggable as whatever made it into the log text — and this Forgejo version
+      # exposes no job-log API at all (every /actions/**/logs route 404s), so diagnosing
+      # the first red run meant asking a human to paste it out of the web UI.
+      # playwright.config.ts sets `trace: "on-first-retry"`, so a failure that survives
+      # its two retries leaves a trace worth opening with `npx playwright show-trace`.
+      #
+      # forgejo/upload-artifact rather than actions/upload-artifact: upstream v4+ refuses
+      # to run against a non-GitHub server, and this fork exists to disable that check.
+      # continue-on-error because an unavailable artifact backend must not add a second
+      # failure on top of the real one — the artifact is a debugging aid, not a gate.
+      - name: Upload Playwright traces and report
+        if: failure()
+        continue-on-error: true
+        uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5
+        with:
+          name: playwright-${{ github.run_number }}
+          path: |
+            end2end/test-results
+            end2end/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
       # Last, and `!cancelled()` so it reports regardless of how the suite above went.
       # Order matters both ways: earlier in the job an oversized bundle would fail the
       # step and skip the entire e2e run, and without the condition an e2e failure would
