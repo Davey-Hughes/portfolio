@@ -11,8 +11,8 @@
 # pin in Cargo.toml. The builder stage asserts that against Cargo.lock instead of
 # trusting this comment — see "verify the pinned pair" below.
 #
-# .forgejo/workflows/ci.yml's wasm job greps CARGO_LEPTOS_VERSION out of this file, so
-# there is no second copy to keep in sync: change it here and CI follows.
+# .forgejo/workflows/ci.yml's release-checks job greps CARGO_LEPTOS_VERSION out of this
+# file, so there is no second copy to keep in sync: change it here and CI follows.
 ARG CARGO_LEPTOS_VERSION=0.3.7
 ARG WASM_BINDGEN_VERSION=0.2.126
 
