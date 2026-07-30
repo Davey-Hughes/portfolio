@@ -13,11 +13,16 @@
     "test:webkit": "playwright test --project=webkit",
     "report": "playwright show-report"
   },
-  "keywords": ["playwright", "e2e", "testing", "portfolio"],
+  "keywords": [
+    "playwright",
+    "e2e",
+    "testing",
+    "portfolio"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@playwright/test": "^1.44.1",
+    "@playwright/test": "^1.62.0",
     "@types/node": "^20.12.12",
     "typescript": "^5.4.5"
   }
