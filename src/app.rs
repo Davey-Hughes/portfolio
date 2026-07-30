@@ -58,10 +58,16 @@ fn PageTitle() -> impl IntoView {
     view! {
         <Suspense>
             {move || {
+                // Fall back to SiteConfig::default() rather than a literal. There are two
+                // ways to end up without a usable config — the load errored, or no
+                // config.toml exists — and they used to produce different site names
+                // ("Photography Portfolio" here vs. the default's "Your Name"), which is
+                // confusing to debug and meant no single title held across both.
                 let title = config
                     .get()
                     .and_then(std::result::Result::ok)
-                    .map_or_else(|| "Photography Portfolio".to_string(), |cfg| cfg.title());
+                    .unwrap_or_default()
+                    .title();
                 view! { <Title text=title /> }
             }}
         </Suspense>

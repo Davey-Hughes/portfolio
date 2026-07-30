@@ -13,8 +13,12 @@ pub struct ImageParams {
 #[cfg(feature = "ssr")]
 impl ImageParams {
     pub fn get_valid_presets() -> Vec<(u32, u8)> {
-        // Check for environment variable override
-        // Format: "1200,80;2400,100;3600,100"
+        // Check for environment variable override. This is the *format* only — the
+        // actual defaults are below. The example used to read
+        // "1200,80;2400,100;3600,100", none of which are served any more, and the
+        // end-to-end suite was written against those values and quietly asserted the
+        // wrong thing for a long time.
+        // Format: "<width>,<quality>;<width>,<quality>" e.g. "2400,90;4000,90"
         if let Ok(env_presets) = std::env::var("IMAGE_PRESETS") {
             let mut presets = Vec::new();
             for pair in env_presets.split(';') {

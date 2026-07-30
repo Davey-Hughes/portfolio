@@ -23,12 +23,28 @@ fn get_current_year() -> i32 {
         chrono::Local::now().year()
     }
 
-    // Reached by host-target test runs, including `hydrate` ones (see above). The tests
-    // that assert on the year compare against this same function rather than a literal,
-    // so they stay correct as it goes stale.
+    // Reached by host-target builds with neither feature — in practice the `hydrate`
+    // test run (see above). Derived from the clock rather than hardcoded: this used to
+    // return a literal `2025`, which was silently wrong the moment the year turned.
+    // chrono is an ssr-only dependency and js-sys needs wasm, so neither is available
+    // here; walking the epoch by hand is exact and costs nothing at this call rate.
     #[cfg(not(any(all(feature = "hydrate", target_arch = "wasm32"), feature = "ssr")))]
     {
-        2025 // Fallback for tests
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let mut days = i64::try_from(secs / 86_400).unwrap_or(0);
+        let mut year: i32 = 1970;
+        loop {
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+            let year_len = if leap { 366 } else { 365 };
+            if days < year_len {
+                break;
+            }
+            days -= year_len;
+            year += 1;
+        }
+        year
     }
 }
 
