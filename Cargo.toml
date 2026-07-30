@@ -64,6 +64,10 @@ serial_test = "3.4"
 tempfile = "3"
 criterion = "0.5"
 dhat = "0.3"
+# Pure-Rust EXIF writer, used only by the gen_fixtures example. kamadak-exif (the
+# runtime dep) reads EXIF but cannot write it, and this stays out of the shipped
+# binary by living in dev-dependencies.
+little_exif = "0.6"
 
 # Hot-path microbenchmarks. Run: `cargo bench --features ssr`.
 # The per-request image endpoint decodes -> resizes (Lanczos3) -> encodes WebP;
@@ -90,6 +94,13 @@ required-features = ["ssr"]
 # Run: `cargo run --release --example alloc_profile --features ssr`.
 [[example]]
 name = "alloc_profile"
+required-features = ["ssr"]
+
+# Writes the e2e fixture gallery into public/images/home/. CI runs this before the
+# Playwright suite, because public/images/* is gitignored and a fresh checkout has no
+# photos — without it every gallery/photo-detail spec fails on a missing selector.
+[[example]]
+name = "gen_fixtures"
 required-features = ["ssr"]
 
 [features]

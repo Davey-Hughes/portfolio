@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { visibleGrid } from "./helpers";
 
 test.describe("Homepage", () => {
   test("should load and display the homepage", async ({ page }) => {
@@ -37,12 +38,8 @@ test.describe("Homepage", () => {
   test("should display home gallery photos", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    // Wait for photos to load
-    await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
-
-    // Check if photo grid exists
-    const photoGrid = page.locator(".photo-grid-home");
-    await expect(photoGrid).toBeVisible();
+    // Whichever grid container this gallery/viewport renders.
+    await visibleGrid(page);
   });
 
   test("should have footer on homepage", async ({ page }) => {

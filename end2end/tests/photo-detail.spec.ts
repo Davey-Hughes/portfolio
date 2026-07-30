@@ -1,20 +1,20 @@
 import { test, expect } from "@playwright/test";
+import { PHOTO_DETAIL_URL, visiblePhotoLinks } from "./helpers";
 
 test.describe("Photo Detail Page", () => {
   test("should display photo detail page", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    // Wait for photos and click on first one
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 0) {
       await photos.first().click();
 
       // Wait for navigation to photo detail
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
 
       // Photo detail container should be visible
       await expect(page.locator(".photo-detail-container")).toBeVisible();
@@ -24,14 +24,14 @@ test.describe("Photo Detail Page", () => {
   test("should display full-size image", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 0) {
       await photos.first().click();
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
       
       // Wait for network to be idle to ensure image has loaded
       await page.waitForLoadState("networkidle");
@@ -46,14 +46,14 @@ test.describe("Photo Detail Page", () => {
   test("should show EXIF data if available", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 0) {
       await photos.first().click();
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
 
       // Check if EXIF data section exists
       const exifData = page.locator(".photo-exif");
@@ -68,14 +68,14 @@ test.describe("Photo Detail Page", () => {
   test("should not show footer on photo detail page", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 0) {
       await photos.first().click();
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
 
       // Footer should not be visible on photo detail page
       const footer = page.locator("footer");
@@ -90,14 +90,14 @@ test.describe("Photo Detail Page", () => {
   test("should have navigation controls", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 1) {
       await photos.first().click();
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
 
       // Check for next/previous navigation
       const navControls = page.locator(".photo-navigation");
@@ -112,14 +112,14 @@ test.describe("Photo Detail Page", () => {
   test("should support keyboard navigation", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 1) {
       await photos.first().click();
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
 
       const currentUrl = page.url();
 
@@ -141,14 +141,14 @@ test.describe("Photo Detail Page", () => {
     
     await page.goto("/", { waitUntil: "networkidle" });
 
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-    
-    const photos = page.locator(".photo-hero-link");
+    // Scoped to the visible layout: every layout container holds a copy of each
+    // photo, so a bare .photo-hero-link can resolve to a hidden one.
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 1) {
       await photos.first().click();
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
 
       // Photo should be visible
       const photoImage = page.locator(".photo-detail-image");

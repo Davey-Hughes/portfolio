@@ -1,24 +1,18 @@
 import { test, expect } from "@playwright/test";
+import { PHOTO_DETAIL_URL, visibleGrid, visiblePhotoLinks } from "./helpers";
 
 test.describe("Photo Gallery", () => {
   test("should display photo grid on homepage", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    // Wait for photo grid to load
-    await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
-
-    const photoGrid = page.locator(".photo-grid-home");
-    await expect(photoGrid).toBeVisible();
+    // Whichever grid container this gallery/viewport renders.
+    await visibleGrid(page);
   });
 
   test("should display photo thumbnails", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    // Wait for photos to load
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-
-    // Check that at least one photo exists
-    const photos = page.locator(".photo-hero-link");
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 0) {
@@ -34,32 +28,27 @@ test.describe("Photo Gallery", () => {
   test("should open photo detail when clicking on thumbnail", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    // Wait for photos to load
-    await page.waitForSelector(".photo-hero-link", { timeout: 10000 });
-
-    const photos = page.locator(".photo-hero-link");
+    const photos = await visiblePhotoLinks(page);
     const count = await photos.count();
     
     if (count > 0) {
       // Click on first photo
       await photos.first().click();
 
-      // Should navigate to photo detail page
-      await page.waitForURL(/\/photo\//, { timeout: 5000 });
-      
-      // URL should contain /photo/
-      expect(page.url()).toContain("/photo/");
+      // Should navigate to photo detail page, which is /gallery/<gallery>/<photo>
+      // (src/app.rs:83-91) — there is no /photo/ route.
+      await page.waitForURL(PHOTO_DETAIL_URL, { timeout: 5000 });
+
+      expect(page.url()).toMatch(PHOTO_DETAIL_URL);
     }
   });
 
   test("should prevent right-click on images", async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
 
-    // Wait for photos to load
-    await page.waitForSelector(".photo-hero-link img", { timeout: 10000 });
-
-    const firstImage = page.locator(".photo-hero-link img").first();
-    const imageCount = await page.locator(".photo-hero-link img").count();
+    const links = await visiblePhotoLinks(page);
+    const firstImage = links.locator("img").first();
+    const imageCount = await links.locator("img").count();
     
     if (imageCount > 0) {
       // Try to right-click on image
@@ -75,10 +64,10 @@ test.describe("Photo Gallery", () => {
     await page.goto("/", { waitUntil: "networkidle" });
 
     // Wait for photo grid
-    await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
+    await visibleGrid(page);
 
     // Check that images have loading="lazy" attribute (if implemented)
-    const images = page.locator(".photo-hero-link img");
+    const images = (await visiblePhotoLinks(page)).locator("img");
     const count = await images.count();
     
     // Just verify images are present

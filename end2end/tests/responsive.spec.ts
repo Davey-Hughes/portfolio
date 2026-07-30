@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { visibleGrid, visiblePhotoLinks } from "./helpers";
 
 test.describe("Responsive Design", () => {
   const viewports = [
@@ -16,9 +17,9 @@ test.describe("Responsive Design", () => {
       // Navigation should be visible
       await expect(page.locator("nav.navbar")).toBeVisible();
 
-      // Photo grid should be visible
-      await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
-      await expect(page.locator(".photo-grid-home")).toBeVisible();
+      // Photo grid should be visible — which container that is depends on the
+      // viewport being set above, so resolve it rather than naming one.
+      await visibleGrid(page);
 
       // Footer should be visible
       await expect(page.locator("footer")).toBeVisible();
@@ -59,13 +60,10 @@ test.describe("Responsive Design", () => {
       await page.setViewportSize({ width, height: 1080 });
       await page.goto("/", { waitUntil: "networkidle" });
 
-      await page.waitForSelector(".photo-grid-home", { timeout: 10000 });
-      
-      const photoGrid = page.locator(".photo-grid-home");
-      await expect(photoGrid).toBeVisible();
-
-      // Grid should adapt to different screen sizes
-      const photos = page.locator(".photo-hero-link");
+      // Grid should adapt to different screen sizes. Scoped to the visible layout —
+      // at narrow viewports the first .photo-hero-link overall sits in the hidden
+      // desktop container.
+      const photos = await visiblePhotoLinks(page);
       const count = await photos.count();
       
       if (count > 0) {
