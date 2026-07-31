@@ -377,6 +377,46 @@ cargo leptos end-to-end             # builds the site, then runs Playwright
 cargo leptos end-to-end --release   # against a release build
 ```
 
+Everything CI gates on, in one command:
+
+```bash
+scripts/check-all.sh                # fmt, clippy + tests under ssr AND hydrate, release build
+scripts/check-all.sh --no-release   # ...minus the release build and fixture generation
+```
+
+---
+
+## Contributing
+
+`main` is **linear** — no merge commits — and every commit on it is an **atomic unit**: it
+builds and passes the gate on its own. Work happens on a feature branch, which lands as
+**one squashed commit**.
+
+```bash
+scripts/land.sh                     # land the current branch (opens an editor for the subject)
+scripts/land.sh -- --no-release     # same, skipping the slow leg
+```
+
+`land.sh` refuses a dirty tree, a `main` that differs from `origin/main`, and a branch that
+is behind `main`. It then squash-merges, runs `scripts/check-all.sh` **on the merged tree
+before the commit exists**, and commits only if that passes — which is what makes "every
+commit on `main` passes CI" a property rather than a hope. The branch is deleted once its
+tree matches `main`.
+
+A plain `git merge --squash` discards every commit message on the branch, so `land.sh`
+prefills the message with all of them under a `--- Squashed from N commits ---` marker.
+Delete what you do not want; what is left is kept verbatim.
+
+Once per clone, so a non-fast-forward merge fails rather than quietly creating a merge
+commit:
+
+```bash
+git config merge.ff only && git config pull.ff only
+```
+
+That is convenience — `.git/config` is untracked and binds nobody. The remote is the real
+constraint: it allows only squash and fast-forward merges, and deletes the branch on merge.
+
 ---
 
 ## Performance
