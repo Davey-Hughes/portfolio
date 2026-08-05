@@ -392,20 +392,58 @@ scripts/check-all.sh --no-release   # ...minus the release build and fixture gen
 builds and passes the gate on its own. Work happens on a feature branch, which lands as
 **one squashed commit**.
 
+Pull requests are the only route to `main` — there is no local landing script. Push the
+branch, open a PR, and squash-merge it in the Forgejo web UI once CI is green:
+
 ```bash
-scripts/land.sh                     # land the current branch (opens an editor for the subject)
-scripts/land.sh -- --no-release     # same, skipping the slow leg
+git push -u origin my-branch
+# open a PR at forge.daveynet.xyz, squash-merge once CI is green
 ```
 
-`land.sh` refuses a dirty tree, a `main` that differs from `origin/main`, and a branch that
-is behind `main`. It then squash-merges, runs `scripts/check-all.sh` **on the merged tree
-before the commit exists**, and commits only if that passes — which is what makes "every
-commit on `main` passes CI" a property rather than a hope. The branch is deleted once its
-tree matches `main`.
+CI runs against the PR head on every push, so its result describes the commit you are about
+to merge: `rust` (fmt, clippy and tests under `ssr`), `hydrate` (the same tests recompiled
+under the client feature set) and `release-checks` (the release build, the fixture gallery,
+the Playwright suite across chromium and firefox, and the bundle-size budget).
 
-A plain `git merge --squash` discards every commit message on the branch, so `land.sh`
-prefills the message with all of them under a `--- Squashed from N commits ---` marker.
-Delete what you do not want; what is left is kept verbatim.
+What a web-UI merge does **not** do, the way the retired `scripts/land.sh` did, is check the
+**merged tree**. `land.sh` ran the gate on the merged tree *before the commit existed* and
+refused to commit on failure — that ordering is what made "every commit on `main` passes the
+gate" a property rather than a hope. A squash-merge inverts it: the commit is built from the
+PR head, and merging is a decision a person makes by reading CI's result, not a check the
+merge itself re-runs.
+
+**`main` is branch-protected** (enabled 2026-08-04), which is what stands in for that
+ordering:
+
+- direct pushes are off — a PR is the only way in
+- `ci / rust`, `ci / hydrate` and `ci / release-checks`, in their `(pull_request)` form, are
+  required status checks
+- `ci / docker` is deliberately **not** required. It is skipped on pull requests, and Forgejo
+  reports a skipped job as `success` on the commit-status API — so requiring it would gate on
+  nothing at all. The three jobs above carry no `if:` condition, which is what makes requiring
+  them directly safe here.
+- `block_on_outdated_branch` is on, so a PR green against a `main` that has since moved cannot
+  merge
+- `apply_to_admins` is on, so the rule binds the repository owner too — without it the whole
+  rule is advisory for the only account that merges
+
+Requiring `release-checks` is the deliberate strict choice, and it is worth naming the cost:
+the Playwright suite is the flakiest thing in this repository, and a flake now blocks a merge
+until the job is re-run. `playwright.config.ts` sets `retries: 2` and `workers: 1` under CI to
+absorb the ordinary noise. Note this is a *stricter* stance than the `docker` job takes — that
+one deliberately does not wait on `release-checks`, because shipping an image and merging a
+commit are different decisions.
+
+That is not identical to gating the merged tree — the merge commit itself is still never
+tested before it exists — but it removes the two ways the gap actually bites: a red head, and
+a stale base.
+
+A plain `git merge --squash` discards every commit message on the branch, so `land.sh` used to
+prefill the message with all of them under a `--- Squashed from N commits ---` marker. A PR's
+written body does that job now, and does it better as prose. What moves is *where* the
+intermediate messages live: they are no longer inside the commit object that lands on `main`.
+They still exist, on the PR page and under `refs/pull/N/head` — but only on
+`forge.daveynet.xyz`, a dependency the git history alone did not previously have.
 
 Once per clone, so a non-fast-forward merge fails rather than quietly creating a merge
 commit:
