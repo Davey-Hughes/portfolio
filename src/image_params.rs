@@ -49,6 +49,13 @@ impl ImageParams {
         vec![(2400, 90), (4000, 90)]
     }
 
+    /// Resolve the requested query parameters to a `(width, quality)` preset.
+    ///
+    /// # Errors
+    ///
+    /// Returns a caller-facing message when the request names a width/quality pair
+    /// that is not in `IMAGE_PRESETS`, names a quality without a width, or when the
+    /// preset list is empty and there is no default to fall back on.
     pub fn validate(&self) -> Result<(u32, u8), &'static str> {
         let valid_presets = Self::get_valid_presets();
 

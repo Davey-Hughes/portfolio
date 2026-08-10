@@ -2,7 +2,7 @@
 //!
 //! On discovery every photo has its EXIF `UserComment`/`ImageDescription`
 //! parsed for film stock (two export formats: the current pipe-delimited one
-//! and the legacy LensTagger one) and its filename turned into a title + slug.
+//! and the legacy `LensTagger` one) and its filename turned into a title + slug.
 //! These are pure string transforms run once per file when a gallery is
 //! (re)loaded; this bench measures them so a parsing change can be verified not
 //! to regress bulk-load time.

@@ -4,19 +4,17 @@ use leptos::prelude::*;
 use std::sync::Arc;
 
 #[cfg(feature = "ssr")]
-use once_cell::sync::Lazy;
-#[cfg(feature = "ssr")]
 use std::sync::Mutex;
 #[cfg(feature = "ssr")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "ssr")]
-static MOSAIC_CACHE: Lazy<Arc<Mutex<MosaicCache>>> =
-    Lazy::new(|| Arc::new(Mutex::new(MosaicCache::new())));
+static MOSAIC_CACHE: std::sync::LazyLock<Arc<Mutex<MosaicCache>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(MosaicCache::new())));
 
 #[cfg(feature = "ssr")]
-static ALL_PHOTOS_CACHE: Lazy<Arc<Mutex<AllPhotosCache>>> =
-    Lazy::new(|| Arc::new(Mutex::new(AllPhotosCache::new())));
+static ALL_PHOTOS_CACHE: std::sync::LazyLock<Arc<Mutex<AllPhotosCache>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(AllPhotosCache::new())));
 
 #[cfg(feature = "ssr")]
 struct CachedMosaic {
@@ -136,17 +134,20 @@ fn generate_mosaic_layout_for_size(
     container_width: f64,
     base_height: f64,
 ) -> (crate::types::MosaicLayout, Vec<usize>) {
-    use crate::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
+    use crate::mosaic::{
+        MosaicConfig, calculate_orientation_bias, count_as_f64, generate_mosaic_with_images,
+    };
+
+    // How many photos we want to fit per `base_height` slice of the canvas. Used
+    // below to scale container height linearly with photo count, so average cell
+    // area stays roughly constant as the gallery grows.
+    const PHOTOS_PER_BASE_HEIGHT: f64 = 3.0;
 
     let num_images = photos.len();
     let image_aspects = image_aspects(photos);
 
-    // Scale container height linearly with photo count so average cell area
-    // stays roughly constant as the gallery grows. `PHOTOS_PER_BASE_HEIGHT` is
-    // how many photos we want to fit per `base_height` slice of the canvas.
     // The floor of 2.0 keeps small galleries from looking cramped.
-    const PHOTOS_PER_BASE_HEIGHT: f64 = 3.0;
-    let scale = (num_images as f64 / PHOTOS_PER_BASE_HEIGHT).max(2.0);
+    let scale = (count_as_f64(num_images) / PHOTOS_PER_BASE_HEIGHT).max(2.0);
     let container_height = base_height * scale;
 
     // Calculate orientation bias from the actual images
@@ -161,7 +162,7 @@ fn generate_mosaic_layout_for_size(
         orientation_bias: Some(orientation_bias),
     };
 
-    generate_mosaic_with_images(num_images, &image_aspects, mosaic_config, 100)
+    generate_mosaic_with_images(num_images, &image_aspects, &mosaic_config, 100)
 }
 
 /// Server function to get site configuration
@@ -371,7 +372,7 @@ pub async fn get_gallery_data_by_name(
         use leptos::logging::log;
         use std::path::Path;
 
-        let cache_key = format!("gallery_{}", gallery_name);
+        let cache_key = format!("gallery_{gallery_name}");
 
         match MOSAIC_CACHE.lock() {
             Ok(mut cache) => {
@@ -707,46 +708,42 @@ mod tests {
     fn watch_event_is_relevant_includes_create_and_remove() {
         use notify::EventKind;
         use notify::event::{CreateKind, RemoveKind};
-        assert!(watch_event_is_relevant(&EventKind::Create(
-            CreateKind::File
-        )));
-        assert!(watch_event_is_relevant(&EventKind::Create(
+        assert!(watch_event_is_relevant(EventKind::Create(CreateKind::File)));
+        assert!(watch_event_is_relevant(EventKind::Create(
             CreateKind::Folder
         )));
-        assert!(watch_event_is_relevant(&EventKind::Create(CreateKind::Any)));
-        assert!(watch_event_is_relevant(&EventKind::Remove(
-            RemoveKind::File
-        )));
-        assert!(watch_event_is_relevant(&EventKind::Remove(
+        assert!(watch_event_is_relevant(EventKind::Create(CreateKind::Any)));
+        assert!(watch_event_is_relevant(EventKind::Remove(RemoveKind::File)));
+        assert!(watch_event_is_relevant(EventKind::Remove(
             RemoveKind::Folder
         )));
-        assert!(watch_event_is_relevant(&EventKind::Remove(RemoveKind::Any)));
+        assert!(watch_event_is_relevant(EventKind::Remove(RemoveKind::Any)));
     }
 
     #[test]
     fn watch_event_is_relevant_includes_data_and_rename_modifies() {
         use notify::EventKind;
         use notify::event::{DataChange, ModifyKind, RenameMode};
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Data(DataChange::Content)
         )));
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Data(DataChange::Size)
         )));
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Data(DataChange::Any)
         )));
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Name(RenameMode::From)
         )));
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Name(RenameMode::To)
         )));
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Name(RenameMode::Both)
         )));
-        assert!(watch_event_is_relevant(&EventKind::Modify(ModifyKind::Any)));
-        assert!(watch_event_is_relevant(&EventKind::Modify(
+        assert!(watch_event_is_relevant(EventKind::Modify(ModifyKind::Any)));
+        assert!(watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Other
         )));
     }
@@ -757,22 +754,22 @@ mod tests {
         // these and the watcher was treating them as content changes.
         use notify::EventKind;
         use notify::event::{MetadataKind, ModifyKind};
-        assert!(!watch_event_is_relevant(&EventKind::Modify(
+        assert!(!watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::AccessTime)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Modify(
+        assert!(!watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::WriteTime)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Modify(
+        assert!(!watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::Permissions)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Modify(
+        assert!(!watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::Ownership)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Modify(
+        assert!(!watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::Extended)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Modify(
+        assert!(!watch_event_is_relevant(EventKind::Modify(
             ModifyKind::Metadata(MetadataKind::Any)
         )));
     }
@@ -783,26 +780,24 @@ mod tests {
         // (cache prewarm, every HTTP image serve) generates these.
         use notify::EventKind;
         use notify::event::{AccessKind, AccessMode};
-        assert!(!watch_event_is_relevant(&EventKind::Access(
+        assert!(!watch_event_is_relevant(EventKind::Access(
             AccessKind::Read
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Access(
+        assert!(!watch_event_is_relevant(EventKind::Access(
             AccessKind::Open(AccessMode::Read)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Access(
+        assert!(!watch_event_is_relevant(EventKind::Access(
             AccessKind::Close(AccessMode::Read)
         )));
-        assert!(!watch_event_is_relevant(&EventKind::Access(
-            AccessKind::Any
-        )));
+        assert!(!watch_event_is_relevant(EventKind::Access(AccessKind::Any)));
     }
 
     #[test]
     fn watch_event_is_relevant_excludes_any_and_other_top_level() {
         // Be conservative on uncategorized events.
         use notify::EventKind;
-        assert!(!watch_event_is_relevant(&EventKind::Any));
-        assert!(!watch_event_is_relevant(&EventKind::Other));
+        assert!(!watch_event_is_relevant(EventKind::Any));
+        assert!(!watch_event_is_relevant(EventKind::Other));
     }
 }
 
@@ -817,7 +812,7 @@ mod tests {
 /// - `Any` / `Other` at the top level — we'd rather miss an exotic event
 ///   than invalidate on something we can't classify.
 #[cfg(feature = "ssr")]
-fn watch_event_is_relevant(kind: &notify::EventKind) -> bool {
+fn watch_event_is_relevant(kind: notify::EventKind) -> bool {
     use notify::EventKind;
     use notify::event::ModifyKind;
     matches!(
@@ -919,7 +914,7 @@ fn delete_matching_cache_files(
         };
         if needles.iter().any(|n| name.starts_with(n)) {
             match std::fs::remove_file(&path) {
-                Ok(_) => deleted += 1,
+                Ok(()) => deleted += 1,
                 Err(err) => log!("Image watcher: failed to remove {}: {err}", path.display()),
             }
         }
@@ -994,11 +989,9 @@ pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
 
         let quiet = Duration::from_millis(500);
         loop {
-            // Block until something happens.
-            let first = match rx.recv() {
-                Ok(ev) => ev,
-                Err(_) => return, // sender dropped; watcher gone
-            };
+            // Block until something happens. A recv error means the sender was
+            // dropped, i.e. the watcher is gone — nothing left to do.
+            let Ok(first) = rx.recv() else { return };
 
             let mut events = Vec::new();
             match first {
@@ -1021,7 +1014,7 @@ pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
             let mut needles: HashSet<String> = HashSet::new();
             let mut had_relevant_event = false;
             for event in &events {
-                if !watch_event_is_relevant(&event.kind) {
+                if !watch_event_is_relevant(event.kind) {
                     continue;
                 }
                 had_relevant_event = true;
@@ -1050,10 +1043,10 @@ pub fn spawn_image_watcher(images_dir: String, cache_dir: String) {
 }
 
 /// Spawn a background task that periodically evicts expired entries from
-/// `MOSAIC_CACHE`. The work is O(num_galleries) per tick, so we keep it off
+/// `MOSAIC_CACHE`. The work is `O(num_galleries)` per tick, so we keep it off
 /// the request path. Tick interval is intentionally coarser than the
 /// shortest TTL (5 min) — a stale entry waiting an extra minute to be
-/// evicted is harmless; the per-key get() also evicts on access.
+/// evicted is harmless; the per-key `get()` also evicts on access.
 #[cfg(feature = "ssr")]
 pub fn spawn_cache_sweeper() {
     use leptos::logging::log;

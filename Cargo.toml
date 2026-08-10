@@ -137,6 +137,28 @@ ssr = [
   "leptos_router/ssr",
 ]
 
+# `priority = -1` lets the individual `allow`s below override the group; without it
+# Cargo rejects the table as ambiguous. Everything not listed here is expected to be
+# fixed rather than silenced — reach for a scoped `#[allow]` with a comment at the
+# offending site before adding a line to this list.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# An app crate, not a library: nothing downstream can ignore a return value, so the
+# 42 candidates this flagged were all noise.
+must_use_candidate = "allow"
+# `#[server]` requires `async fn`, and the generated body only awaits under one
+# feature set — every hit was a server function that cannot drop the `async`. The
+# `_trait_impl` variant is the same functions seen from the `hydrate` side, where
+# the macro expands them into a trait impl instead.
+unused_async = "allow"
+unused_async_trait_impl = "allow"
+# The cfg-gated binding pattern in src/app.rs: a `_`-prefixed `let` read only inside
+# `#[cfg(feature = "hydrate")]` blocks. The prefix is what silences `unused_variables`
+# under `ssr`, so these two lints and that warning cannot all be satisfied at once.
+used_underscore_binding = "allow"
+no_effect_underscore_binding = "allow"
+
 # Defines a size-optimized profile for the WASM bundle in release mode
 [profile.wasm-release]
 inherits = "release"

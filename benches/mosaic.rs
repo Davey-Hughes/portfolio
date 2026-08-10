@@ -11,7 +11,9 @@
 //! Run: `cargo bench --features ssr --bench mosaic`
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use portfolio::mosaic::{MosaicConfig, calculate_orientation_bias, generate_mosaic_with_images};
+use portfolio::mosaic::{
+    MosaicConfig, calculate_orientation_bias, count_as_f64, generate_mosaic_with_images,
+};
 
 /// Deterministic mix of landscape / portrait / square aspect ratios.
 fn synthetic_aspects(n: usize) -> Vec<(usize, f64)> {
@@ -25,7 +27,7 @@ fn config_for(aspects: &[(usize, f64)]) -> MosaicConfig {
     const CONTAINER_WIDTH: f64 = 1200.0;
     const BASE_HEIGHT: f64 = 600.0;
     const PHOTOS_PER_BASE_HEIGHT: f64 = 3.0;
-    let scale = (aspects.len() as f64 / PHOTOS_PER_BASE_HEIGHT).max(2.0);
+    let scale = (count_as_f64(aspects.len()) / PHOTOS_PER_BASE_HEIGHT).max(2.0);
     MosaicConfig {
         container_width: CONTAINER_WIDTH,
         container_height: BASE_HEIGHT * scale,
@@ -46,7 +48,7 @@ fn bench_mosaic(c: &mut Criterion) {
                 generate_mosaic_with_images(
                     black_box(aspects.len()),
                     black_box(aspects),
-                    config_for(aspects),
+                    &config_for(aspects),
                     100,
                 )
             });

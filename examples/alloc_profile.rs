@@ -7,7 +7,7 @@
 //! encode over a deterministic in-memory source, and prints total allocations +
 //! bytes: a hard, re-runnable number to verify allocation-reduction work
 //! against. Also writes `dhat-heap.json` for the dhat viewer
-//! (https://nnethercote.github.io/dh_view/dh_view.html).
+//! (<https://nnethercote.github.io/dh_view/dh_view.html>).
 //!
 //! Run: `cargo run --release --example alloc_profile --features ssr`
 //!      `cargo run --release --example alloc_profile --features ssr 4000`  (custom width)
@@ -25,12 +25,19 @@ const SRC_H: u32 = 4000;
 
 /// Deterministic source (matches `benches/image_pipeline.rs`): gradient + a
 /// small high-frequency term, no RNG.
+#[expect(
+    clippy::many_single_char_names,
+    reason = "x/y/w/h and r/g/b are the conventional names for pixel coordinates and channels"
+)]
 fn synthetic_source(w: u32, h: u32) -> DynamicImage {
     let mut buf = image::RgbImage::new(w, h);
     for (x, y, px) in buf.enumerate_pixels_mut() {
-        let r = ((x * 255) / w) as u8;
-        let g = ((y * 255) / h) as u8;
-        let b = (((x + y) * 255) / (w + h)) as u8 ^ (((x ^ y) & 0x1f) as u8);
+        // `x < w` and `y < h`, so each quotient is at most 254, and the xor operand is
+        // masked to five bits — every value below provably fits in a u8.
+        let r = u8::try_from((x * 255) / w).unwrap();
+        let g = u8::try_from((y * 255) / h).unwrap();
+        let b = u8::try_from(((x + y) * 255) / (w + h)).unwrap()
+            ^ u8::try_from((x ^ y) & 0x1f).unwrap();
         *px = image::Rgb([r, g, b]);
     }
     DynamicImage::ImageRgb8(buf)

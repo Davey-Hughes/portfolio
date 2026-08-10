@@ -58,6 +58,15 @@ pub struct OrientationBias {
     pub num_square: usize,    // Number of square-ish images
 }
 
+/// Convert a count to `f64` without a lossy `as` cast.
+///
+/// `usize as f64` silently rounds above 2^53, which is why clippy flags it. Going
+/// through `u32` avoids that: `f64::from(u32)` is exact for every input, and the
+/// saturation ceiling is ~4.3 billion — orders of magnitude beyond any gallery.
+pub fn count_as_f64(count: usize) -> f64 {
+    f64::from(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
 /// Tracks how many rectangles of each orientation have been created
 #[derive(Debug, Clone)]
 struct OrientationTracker {
@@ -94,7 +103,7 @@ impl OrientationTracker {
     }
 
     /// Returns a preference for which orientation to create next
-    /// Returns None if no strong preference, or Some((prefer_horizontal, strength))
+    /// Returns None if no strong preference, or `Some((prefer_horizontal`, strength))
     /// where strength is 0.0-1.0
     fn get_split_preference(&self) -> Option<(bool, f64)> {
         let portrait_deficit = self.target_portrait.saturating_sub(self.current_portrait);
@@ -112,11 +121,11 @@ impl OrientationTracker {
 
         if portrait_deficit > landscape_deficit && portrait_deficit > square_deficit {
             // Prefer vertical splits to create tall rectangles
-            let strength = (portrait_deficit as f64) / (total_deficit as f64);
+            let strength = count_as_f64(portrait_deficit) / count_as_f64(total_deficit);
             Some((false, strength * 0.7)) // false = prefer vertical split
         } else if landscape_deficit > portrait_deficit && landscape_deficit > square_deficit {
             // Prefer horizontal splits to create wide rectangles
-            let strength = (landscape_deficit as f64) / (total_deficit as f64);
+            let strength = count_as_f64(landscape_deficit) / count_as_f64(total_deficit);
             Some((true, strength * 0.7)) // true = prefer horizontal split
         } else {
             None
@@ -149,7 +158,7 @@ impl Default for MosaicConfig {
 }
 
 /// Generate a mosaic layout for a given number of images
-pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Rectangle> {
+pub fn generate_mosaic_layout(num_images: usize, config: &MosaicConfig) -> Vec<Rectangle> {
     if num_images == 0 {
         return Vec::new();
     }
@@ -187,7 +196,7 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
 
     for _ in 0..num_splits {
         // Calculate weights for each rectangle based on area (bias toward larger)
-        let total_area: f64 = rectangles.iter().map(|r| r.area()).sum();
+        let total_area: f64 = rectangles.iter().map(Rectangle::area).sum();
         let weights: Vec<f64> = rectangles.iter().map(|r| r.area() / total_area).collect();
 
         // Select a rectangle to split based on weighted random selection
@@ -198,7 +207,7 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
         if let Some((rect1, rect2, new_line)) = try_split_rectangle_with_bias(
             &rect_to_split,
             &lines,
-            &config,
+            config,
             &mut rng,
             orientation_tracker.as_ref(),
         ) {
@@ -224,7 +233,7 @@ pub fn generate_mosaic_layout(num_images: usize, config: MosaicConfig) -> Vec<Re
                 if let Some((rect1, rect2, new_line)) = try_split_rectangle_with_bias(
                     rect,
                     &lines,
-                    &config,
+                    config,
                     &mut rng,
                     orientation_tracker.as_ref(),
                 ) {
@@ -411,7 +420,7 @@ fn try_horizontal_split(
 /// deterministic fallback when biased random sampling fails to find a split.
 fn scan_for_valid_split(min: f64, max: f64, is_valid: impl Fn(f64) -> bool) -> Option<f64> {
     const FALLBACK_STEPS: u32 = 64;
-    let center = (min + max) / 2.0;
+    let center = f64::midpoint(min, max);
     let mut best: Option<f64> = None;
     for i in 1..FALLBACK_STEPS {
         let pos = min + (max - min) * f64::from(i) / f64::from(FALLBACK_STEPS);
@@ -694,35 +703,63 @@ fn calculate_match_score(
     score
 }
 
+/// Normalize `value` against the bounding-box `extent` and snap it to a CSS Grid line.
+///
+/// Grid lines are 1-based, hence the `+ 1`. For any rectangle inside the bounding box
+/// the quotient is in `[0, 1]`, so the scaled result lands in `[0, grid_precision]`.
+///
+/// The `as` cast is unavoidable — std has no checked float-to-integer conversion, and
+/// the alternatives (`to_int_unchecked`, or searching the integer range) are worse than
+/// the thing they replace. What the NaN guard buys is that the cast's safety follows
+/// from the two lines above it rather than from language trivia: `f64::clamp`
+/// *propagates* NaN, so without the guard a zero `extent` would reach the cast as NaN
+/// and land on line 1 only because float-to-int `as` happens to saturate. Guarded, the
+/// clamp is a real bound, and the cast is exact on a value already proven finite,
+/// non-negative, integral, and `<= grid_precision`.
+fn grid_line(value: f64, extent: f64, grid_precision: u32) -> u32 {
+    let precision = f64::from(grid_precision);
+    let scaled = (value / extent) * precision;
+    if scaled.is_nan() {
+        return 1;
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "guarded non-NaN, then clamped to [0, grid_precision] and rounded to an \
+                  integer — the cast is exact, not merely saturating"
+    )]
+    let line = scaled.round().clamp(0.0, precision) as u32;
+    line + 1
+}
+
 /// Convert mosaic rectangles to CSS Grid coordinates
 pub fn rectangles_to_grid_layout(
     rectangles: &[Rectangle],
     grid_precision: u32,
     container_height: f64,
 ) -> MosaicLayout {
-    // Find the bounding box
+    // Find the bounding box. `total_cmp` rather than `partial_cmp().unwrap()`: a NaN
+    // edge would otherwise panic here, and `grid_line` already absorbs a NaN extent.
     let max_x = rectangles
         .iter()
         .map(|r| r.x + r.width)
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .max_by(f64::total_cmp)
         .unwrap_or(1.0);
     let max_y = rectangles
         .iter()
         .map(|r| r.y + r.height)
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .max_by(f64::total_cmp)
         .unwrap_or(1.0);
 
     // Convert each rectangle to grid coordinates
     let cells: Vec<MosaicCell> = rectangles
         .iter()
         .map(|rect| {
-            // Normalize to 0-1 range then scale to grid
-            let col_start = ((rect.x / max_x) * f64::from(grid_precision)).round() as u32 + 1;
-            let col_end =
-                (((rect.x + rect.width) / max_x) * f64::from(grid_precision)).round() as u32 + 1;
-            let row_start = ((rect.y / max_y) * f64::from(grid_precision)).round() as u32 + 1;
-            let row_end =
-                (((rect.y + rect.height) / max_y) * f64::from(grid_precision)).round() as u32 + 1;
+            let col_start = grid_line(rect.x, max_x, grid_precision);
+            let col_end = grid_line(rect.x + rect.width, max_x, grid_precision);
+            let row_start = grid_line(rect.y, max_y, grid_precision);
+            let row_end = grid_line(rect.y + rect.height, max_y, grid_precision);
 
             MosaicCell {
                 row_start,
@@ -745,7 +782,7 @@ pub fn rectangles_to_grid_layout(
 pub fn generate_mosaic_with_images(
     num_images: usize,
     image_aspects: &[(usize, f64)],
-    config: MosaicConfig,
+    config: &MosaicConfig,
     grid_precision: u32,
 ) -> (MosaicLayout, Vec<usize>) {
     // Store the container height from config
@@ -805,7 +842,7 @@ mod tests {
     #[test]
     fn test_generate_single_image() {
         let config = MosaicConfig::default();
-        let layout = generate_mosaic_layout(1, config.clone());
+        let layout = generate_mosaic_layout(1, &config);
         assert_eq!(layout.len(), 1);
         assert_eq!(layout[0].width, config.container_width);
         assert_eq!(layout[0].height, config.container_height);
@@ -821,7 +858,7 @@ mod tests {
             max_aspect_ratio: 2.5,
             orientation_bias: None,
         };
-        let layout = generate_mosaic_layout(5, config);
+        let layout = generate_mosaic_layout(5, &config);
 
         // Should have at least 2 rectangles and attempt to get close to 5
         // The algorithm may not always achieve exactly 5 due to constraints
@@ -852,7 +889,7 @@ mod tests {
             orientation_bias: None,
         };
         for _ in 0..300 {
-            let layout = generate_mosaic_layout(23, config.clone());
+            let layout = generate_mosaic_layout(23, &config);
             assert_eq!(layout.len(), 23, "every photo must get its own cell");
         }
     }
@@ -872,7 +909,7 @@ mod tests {
     #[test]
     fn test_assign_images_to_layout() {
         let config = MosaicConfig::default();
-        let layout = generate_mosaic_layout(3, config);
+        let layout = generate_mosaic_layout(3, &config);
 
         // Create some test images with different aspect ratios
         let images = vec![
@@ -888,7 +925,7 @@ mod tests {
 
         // Each image should be assigned
         let mut assigned_images: Vec<usize> = assignments.iter().map(|(_, idx)| *idx).collect();
-        assigned_images.sort();
+        assigned_images.sort_unstable();
         assert_eq!(assigned_images, vec![0, 1, 2]);
     }
 
@@ -918,7 +955,7 @@ mod tests {
     #[test]
     fn test_image_assignment_prioritizes_extreme_aspects() {
         let config = MosaicConfig::default();
-        let layout = generate_mosaic_layout(4, config);
+        let layout = generate_mosaic_layout(4, &config);
 
         // Create images: one very extreme, one somewhat extreme, two nearly square
         let images = vec![
@@ -935,7 +972,7 @@ mod tests {
 
         // Verify all images are present
         let mut assigned_images: Vec<usize> = assignments.iter().map(|(_, idx)| *idx).collect();
-        assigned_images.sort();
+        assigned_images.sort_unstable();
         assert_eq!(assigned_images, vec![0, 1, 2, 3]);
     }
 
@@ -1011,9 +1048,28 @@ mod tests {
         // Portrait rectangle should score much higher for portrait image
         assert!(
             portrait_score > landscape_score * 10.0,
-            "Portrait match score {} should be much higher than landscape mismatch score {}",
-            portrait_score,
-            landscape_score
+            "Portrait match score {portrait_score} should be much higher than landscape mismatch score {landscape_score}"
         );
+    }
+
+    #[test]
+    fn grid_line_maps_the_normal_range() {
+        assert_eq!(grid_line(0.0, 100.0, 100), 1, "start of the axis");
+        assert_eq!(grid_line(100.0, 100.0, 100), 101, "end of the axis");
+        assert_eq!(grid_line(50.0, 100.0, 100), 51, "midpoint rounds cleanly");
+    }
+
+    /// A degenerate layout must still yield a valid 1-based grid line. NaN is handled
+    /// by an explicit guard rather than by the clamp, because `f64::clamp` propagates
+    /// NaN — this case is what stops that guard being deleted as redundant.
+    #[test]
+    fn grid_line_survives_degenerate_extents() {
+        assert_eq!(grid_line(0.0, 0.0, 100), 1, "0/0 is NaN, guarded to line 1");
+        assert_eq!(
+            grid_line(5.0, 0.0, 100),
+            101,
+            "x/0 is +inf, clamped to the end"
+        );
+        assert_eq!(grid_line(-5.0, 100.0, 100), 1, "negatives floor at line 1");
     }
 }

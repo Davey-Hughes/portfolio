@@ -755,21 +755,21 @@ fn format_aperture(aperture: &str) -> String {
 /// Preserves acronyms (2-4 letter words) and words with numbers
 fn to_title_case_if_uppercase(s: &str) -> String {
     // Check if the string is entirely uppercase (ignoring whitespace and punctuation)
-    let has_letters = s.chars().any(|c| c.is_alphabetic());
+    let has_letters = s.chars().any(char::is_alphabetic);
     let all_uppercase = s
         .chars()
         .filter(|c| c.is_alphabetic())
-        .all(|c| c.is_uppercase());
+        .all(char::is_uppercase);
 
     if has_letters && all_uppercase {
         // Convert to smart title case
         s.split_whitespace()
             .map(|word| {
                 let letter_count = word.chars().filter(|c| c.is_alphabetic()).count();
-                let has_digit = word.chars().any(|c| c.is_numeric());
+                let has_digit = word.chars().any(char::is_numeric);
 
                 // Keep acronyms (2-4 letters) and words with numbers in uppercase
-                if ((2..=4).contains(&letter_count) && !has_digit) || has_digit {
+                if (2..=4).contains(&letter_count) || has_digit {
                     word.to_string()
                 } else {
                     // Convert longer words to title case
@@ -905,7 +905,7 @@ fn InvalidPhotoId() -> impl IntoView {
 }
 
 /// Bundle of signals shared between the zoom/pan event handlers and the
-/// fullscreen view. Held by value (RwSignal is Copy).
+/// fullscreen view. Held by value (`RwSignal` is Copy).
 #[derive(Clone, Copy)]
 struct ZoomPanState {
     zoom_level: RwSignal<f64>,
@@ -1269,8 +1269,10 @@ fn FullscreenViewer(
                 let dx = f64::from(touch1.client_x() - touch0.client_x());
                 let dy = f64::from(touch1.client_y() - touch0.client_y());
                 let distance = (dx * dx + dy * dy).sqrt();
-                let center_x = (f64::from(touch0.client_x()) + f64::from(touch1.client_x())) / 2.0;
-                let center_y = (f64::from(touch0.client_y()) + f64::from(touch1.client_y())) / 2.0;
+                let center_x =
+                    f64::midpoint(f64::from(touch0.client_x()), f64::from(touch1.client_x()));
+                let center_y =
+                    f64::midpoint(f64::from(touch0.client_y()), f64::from(touch1.client_y()));
                 _initial_pinch_distance.set(distance);
                 _initial_zoom.set(zoom_level.get());
                 _initial_pinch_center_x.set(center_x);
@@ -1391,11 +1393,7 @@ fn FullscreenViewer(
                                 on:input=on_zoom_change
                             />
                             <label class="zoom-label">
-                                {move || {
-                                    #[allow(clippy::cast_possible_truncation)]
-                                    let zoom_int = max_zoom.get() as i32;
-                                    format!("{zoom_int}×")
-                                }}
+                                {move || format!("{:.0}×", max_zoom.get())}
                             </label>
                         </div>
                     </div>
@@ -1486,7 +1484,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                 {
                                     let url =
                                         format!("/gallery/{}/{}", prev.gallery_name, prev.slug);
-                                    navigate(&url, Default::default());
+                                    navigate(&url, leptos_router::NavigateOptions::default());
                                 }
                             }
                             "ArrowRight" => {
@@ -1495,7 +1493,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                 {
                                     let url =
                                         format!("/gallery/{}/{}", next.gallery_name, next.slug);
-                                    navigate(&url, Default::default());
+                                    navigate(&url, leptos_router::NavigateOptions::default());
                                 }
                             }
                             _ => {}

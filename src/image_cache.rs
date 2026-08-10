@@ -60,16 +60,13 @@ fn find_image_file(
     extensions: &[&str],
 ) -> Option<PathBuf> {
     let images_root = std::path::PathBuf::from(images_dir).canonicalize().ok()?;
-    extensions
-        .iter()
-        .filter_map(|ext| {
-            let candidate = images_root.join(format!("{}.{}", path_without_ext, ext));
-            // canonicalize() requires the file to exist; that doubles as an
-            // existence check.
-            let resolved = candidate.canonicalize().ok()?;
-            resolved.starts_with(&images_root).then_some(resolved)
-        })
-        .next()
+    extensions.iter().find_map(|ext| {
+        let candidate = images_root.join(format!("{path_without_ext}.{ext}"));
+        // canonicalize() requires the file to exist; that doubles as an
+        // existence check.
+        let resolved = candidate.canonicalize().ok()?;
+        resolved.starts_with(&images_root).then_some(resolved)
+    })
 }
 
 /// Try to use a cached image if it exists and is up-to-date
@@ -130,7 +127,11 @@ pub fn resize_for_width(img: &image::DynamicImage, width: u32) -> image::Dynamic
 
     let (sw, sh) = (img.width(), img.height());
     let dw = width;
-    let dh = ((u64::from(sh) * u64::from(dw)) / u64::from(sw).max(1)).max(1) as u32;
+    // Widened to u64 so the multiply cannot overflow; the quotient is bounded by the
+    // source aspect ratio times `dw`, so the saturating narrowing is unreachable in
+    // practice and only there to keep the cast total.
+    let dh = u32::try_from(((u64::from(sh) * u64::from(dw)) / u64::from(sw).max(1)).max(1))
+        .unwrap_or(u32::MAX);
 
     // libwebp (and fir) work on packed RGB/RGBA8; convert once up front so both
     // the resize and the later encode operate on the same layout.
@@ -180,7 +181,7 @@ fn load_standard_image(path: &PathBuf) -> Option<image::DynamicImage> {
             reader.limits(image::Limits::no_limits());
             reader.decode()
         })
-        .and_then(|r| r.ok())
+        .and_then(std::result::Result::ok)
 }
 
 /// Convert an image to lossy WebP at the given quality (0-100). Uses
@@ -251,7 +252,7 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
     let mut error_count = 0;
 
     // Cache files not accessed in 30 days will be removed
-    let max_age = Duration::from_secs(30 * 24 * 60 * 60); // 30 days
+    let max_age = Duration::from_hours(720); // 30 days
     let now = SystemTime::now();
 
     let cache_entries = match fs::read_dir(cache_path) {
@@ -269,9 +270,8 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
             continue;
         }
 
-        let filename = match cache_file.file_name().and_then(|n| n.to_str()) {
-            Some(name) => name,
-            None => continue,
+        let Some(filename) = cache_file.file_name().and_then(|n| n.to_str()) else {
+            continue;
         };
 
         let Some(prefix) = cache_file_prefix(filename) else {
@@ -282,7 +282,7 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
 
         if !valid_prefixes.contains(prefix) {
             match fs::remove_file(&cache_file) {
-                Ok(_) => {
+                Ok(()) => {
                     log!("Removed orphaned cache file: {}", filename);
                     orphaned_count += 1;
                 }
@@ -296,7 +296,7 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
 
         if is_cache_file_old(&cache_file, max_age, now) {
             match fs::remove_file(&cache_file) {
-                Ok(_) => {
+                Ok(()) => {
                     let age_days = get_file_age_days(&cache_file, now);
                     log!("Removed old cache file ({}d old): {}", age_days, filename);
                     old_count += 1;
@@ -412,8 +412,7 @@ fn get_file_age_days(cache_file: &Path, now: std::time::SystemTime) -> u64 {
         .ok()
         .and_then(|m| m.accessed().ok())
         .and_then(|accessed| now.duration_since(accessed).ok())
-        .map(|age| age.as_secs() / 86400)
-        .unwrap_or(0)
+        .map_or(0, |age| age.as_secs() / 86400)
 }
 
 /// Pre-generate cache images for all existing photos
@@ -425,12 +424,11 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
 
     let valid_presets = ImageParams::get_valid_presets();
     // Only use the first (default) preset for prewarming
-    let (width, quality) = match valid_presets.first() {
-        Some(preset) => *preset,
-        None => {
-            log!("No valid presets configured, skipping cache prewarming");
-            return;
-        }
+    let (width, quality) = if let Some(preset) = valid_presets.first() {
+        *preset
+    } else {
+        log!("No valid presets configured, skipping cache prewarming");
+        return;
     };
 
     log!("Prewarming cache with default preset: {width}px @ quality {quality}");
@@ -446,8 +444,7 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
     // cost stays balanced. Each image maps to a distinct cache file, so the
     // concurrent `process_and_cache_image` calls never contend.
     let workers = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
+        .map_or(1, std::num::NonZeroUsize::get)
         .min(4);
 
     let next = AtomicUsize::new(0);
@@ -803,7 +800,7 @@ mod tests {
         // 1-day max age should not.
         assert!(!is_cache_file_old(
             &f,
-            Duration::from_secs(86_400),
+            Duration::from_hours(24),
             SystemTime::now()
         ));
     }

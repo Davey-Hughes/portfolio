@@ -1,12 +1,11 @@
 use crate::types::{GalleryInfo, ImageSource, PhotoConfig, PhotoInfo};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-static LEADING_NUMBER_DASH: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[\d.]+\s*-\s*").expect("valid regex"));
+static LEADING_NUMBER_DASH: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^[\d.]+\s*-\s*").expect("valid regex"));
 
 /// URL-encode a path component, preserving forward slashes
 fn url_encode_path(path: &str) -> String {
@@ -40,7 +39,7 @@ fn load_photo_config(photo_path: &Path) -> PhotoConfig {
     let Some(parent) = photo_path.parent() else {
         return PhotoConfig::default();
     };
-    let config_path = parent.join(format!("{}.toml", stem));
+    let config_path = parent.join(format!("{stem}.toml"));
 
     fs::read_to_string(&config_path)
         .ok()
@@ -209,13 +208,13 @@ fn find_images_recursive_with_gallery(
 
         // Create slug from filename (without extension), stripping leading numbers
         let slug = strip_leading_number_and_dash(&filename_str)
-            .trim_end_matches(&format!(".{}", primary_ext))
+            .trim_end_matches(&format!(".{primary_ext}"))
             .to_lowercase()
             .replace([' ', '_'], "-");
 
         // Strip leading numbers and dashes, then convert to title
         let derived_title = strip_leading_number_and_dash(&filename_str)
-            .trim_end_matches(&format!(".{}", primary_ext))
+            .trim_end_matches(&format!(".{primary_ext}"))
             .replace(['-', '_'], " ");
 
         // Load per-photo config (focal point, title override) from sibling TOML
@@ -239,10 +238,9 @@ fn find_images_recursive_with_gallery(
                 // Add as alternative source (URL-encode the path)
                 let encoded_path = url_encode_path(relative_path);
                 let compressed_url = format!(
-                    "/images/compressed/{}?width={}&quality={}",
-                    encoded_path, img_width, img_quality
+                    "/images/compressed/{encoded_path}?width={img_width}&quality={img_quality}"
                 );
-                let original_url = format!("/images/{}", encoded_path);
+                let original_url = format!("/images/{encoded_path}");
                 let mime_type = get_mime_type(ext).to_string();
 
                 sources.push(ImageSource {
@@ -259,14 +257,10 @@ fn find_images_recursive_with_gallery(
         // Primary image URLs (URL-encode the path)
         let encoded_primary_path = url_encode_path(primary_relative_path);
         let compressed_url = format!(
-            "/images/compressed/{}?width={}&quality={}",
-            encoded_primary_path, img_width, img_quality
+            "/images/compressed/{encoded_primary_path}?width={img_width}&quality={img_quality}"
         );
-        let original_url = format!("/images/{}", encoded_primary_path);
-        let detail_url = format!(
-            "/images/compressed/{}?width=4000&quality=90",
-            encoded_primary_path
-        );
+        let original_url = format!("/images/{encoded_primary_path}");
+        let detail_url = format!("/images/compressed/{encoded_primary_path}?width=4000&quality=90");
         let srcset = build_compressed_srcset(&encoded_primary_path);
 
         // Extract subfolder from relative path
@@ -342,13 +336,13 @@ fn collect_image_files(
 
                     // Create base path without extension
                     let base_path = relative_path
-                        .trim_end_matches(&format!(".{}", ext))
+                        .trim_end_matches(&format!(".{ext}"))
                         .to_string();
 
                     groups
                         .entry(base_path)
                         .or_default()
-                        .push((relative_path, ext.to_string()));
+                        .push((relative_path, ext.clone()));
                 }
             }
         }
@@ -371,10 +365,10 @@ fn format_priority(ext: &str) -> u8 {
 /// Find images for a specific gallery (with different base path handling)
 pub fn find_images_for_gallery(dir: &Path, base_root: &Path, photos: &mut Vec<PhotoInfo>) {
     // Extract gallery name from directory path (as slug format)
-    let gallery_name = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase().replace(' ', "-"))
-        .unwrap_or_else(|| "unknown".to_string());
+    let gallery_name = dir.file_name().map_or_else(
+        || "unknown".to_string(),
+        |n| n.to_string_lossy().to_lowercase().replace(' ', "-"),
+    );
 
     find_images_recursive_with_gallery(dir, base_root, photos, &gallery_name);
 }
@@ -469,7 +463,7 @@ fn is_lens_profile_placeholder(s: &str) -> bool {
 
 /// Lens-name candidates recoverable from XMP. Returned separately so the
 /// caller can interleave them with the EXIF `LensModel` tag in priority
-/// order — `aux:Lens` is authoritative (LensTagger writes the taking lens
+/// order — `aux:Lens` is authoritative (`LensTagger` writes the taking lens
 /// here even on film scans), while `crs:LensProfileName` is Lightroom's
 /// optical-correction profile, which for film scans names the *scanning*
 /// lens rather than the lens that took the photo.
@@ -484,7 +478,7 @@ impl XmpLensCandidates {
     /// different lenses — the fingerprint of a camera-scanned film frame,
     /// where `aux:Lens` is the taking lens and `crs:LensProfileName` is the
     /// macro lens whose optical-correction profile Lightroom applies to the
-    /// scan. EXIF exposure values (FNumber, ExposureTime) in that case
+    /// scan. EXIF exposure values (`FNumber`, `ExposureTime`) in that case
     /// belong to the scanning camera, not the original photograph.
     fn looks_like_film_scan(&self) -> bool {
         let (Some(aux), Some(profile)) = (&self.aux_lens, &self.profile_lens) else {
@@ -496,9 +490,9 @@ impl XmpLensCandidates {
     }
 }
 
-/// Which EXIF fields LensTagger explicitly wrote, recovered from its
+/// Which EXIF fields `LensTagger` explicitly wrote, recovered from its
 /// `-Key=Value` annotation lines in `UserComment`. When the user enters a
-/// value in LensTagger (aperture, shutter, etc.), the plugin records the
+/// value in `LensTagger` (aperture, shutter, etc.), the plugin records the
 /// override here as well as updating the corresponding EXIF tag, so a
 /// present flag means the EXIF value reflects the user's input rather than
 /// the scanning camera's auto-exposure.
@@ -509,8 +503,8 @@ struct LenstaggerOverrides {
 }
 
 impl LenstaggerOverrides {
-    /// Parse `UserComment` text for LensTagger's `-Key=Value` override
-    /// lines. Accepts the case-insensitive aliases LensTagger uses across
+    /// Parse `UserComment` text for `LensTagger`'s `-Key=Value` override
+    /// lines. Accepts the case-insensitive aliases `LensTagger` uses across
     /// versions (`-FNumber=` / `-Aperture=`, `-ExposureTime=` / `-Shutter*=`).
     fn from_user_comment(text: &str) -> Self {
         let mut out = Self::default();
@@ -533,9 +527,9 @@ impl LenstaggerOverrides {
     }
 }
 
-/// Read LensTagger override annotations out of the EXIF `UserComment` tag.
+/// Read `LensTagger` override annotations out of the EXIF `UserComment` tag.
 /// Returns an all-false struct when the tag is absent or doesn't decode as
-/// the ASCII-prefixed undefined-bytes form LensTagger writes.
+/// the ASCII-prefixed undefined-bytes form `LensTagger` writes.
 fn read_lenstagger_overrides(exif_reader: &exif::Exif) -> LenstaggerOverrides {
     let Some(field) = exif_reader.get_field(exif::Tag::UserComment, exif::In::PRIMARY) else {
         return LenstaggerOverrides::default();
@@ -570,7 +564,7 @@ pub fn parse_film_stock_from_comment(text: &str) -> Option<String> {
     }
 }
 
-/// Old LensTagger format: newline-delimited annotations. Assemble the film
+/// Old `LensTagger` format: newline-delimited annotations. Assemble the film
 /// stock from `Film Make:`, `Film Type:` and the `-ISO=` override. Falls
 /// back to the full comment text when no film fields are present.
 fn parse_film_stock_lenstagger(text: &str) -> Option<String> {
@@ -592,7 +586,7 @@ fn parse_film_stock_lenstagger(text: &str) -> Option<String> {
 
     // Combine film make, type, and ISO if present
     let film_stock = match (film_make, film_type) {
-        (Some(make), Some(typ)) => format!("{} {}", make, typ),
+        (Some(make), Some(typ)) => format!("{make} {typ}"),
         (Some(make), None) => make.to_string(),
         (None, Some(typ)) => typ.to_string(),
         (None, None) => text.to_string(), // Return full text if no specific fields found
@@ -602,7 +596,7 @@ fn parse_film_stock_lenstagger(text: &str) -> Option<String> {
     // already contains it (e.g. "Ilford Delta 400 Professional" with ISO 400).
     let combined = match film_iso {
         Some(iso_value) if !film_stock.split_whitespace().any(|tok| tok == iso_value) => {
-            format!("{} {}", film_stock, iso_value)
+            format!("{film_stock} {iso_value}")
         }
         _ => film_stock,
     };
@@ -625,7 +619,7 @@ fn parse_film_stock_pipe_delimited(text: &str) -> Option<String> {
 /// Recover human-readable lens names from XMP metadata. Lightroom often
 /// strips the camera maker note, but writes the matched lens profile as
 /// `crs:LensProfileName="Adobe (<lens name>) v<n>"` and tools like
-/// LensTagger write the taking lens directly to `aux:Lens`. Values that
+/// `LensTagger` write the taking lens directly to `aux:Lens`. Values that
 /// only stringify focal length/aperture (which EXIF `LensModel` already
 /// exposes) are filtered out.
 fn extract_lens_candidates_from_xmp(path: &Path) -> XmpLensCandidates {
@@ -662,6 +656,87 @@ fn extract_lens_candidates_from_xmp(path: &Path) -> XmpLensCandidates {
     out
 }
 
+/// Pixel dimensions from EXIF, falling back to the image header.
+///
+/// A surprising number of exports carry EXIF but omit the dimension tags, so the
+/// header read is the common path rather than an exotic fallback.
+fn exif_dimensions(exif_reader: &exif::Exif, path: &Path) -> (Option<u32>, Option<u32>) {
+    let mut width = exif_reader
+        .get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::ImageWidth, exif::In::PRIMARY))
+        .and_then(|f| f.value.get_uint(0));
+
+    let mut height = exif_reader
+        .get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::ImageLength, exif::In::PRIMARY))
+        .and_then(|f| f.value.get_uint(0));
+
+    if (width.is_none() || height.is_none())
+        && let Ok(mut reader) = image::ImageReader::open(path)
+    {
+        reader.limits(image::Limits::no_limits());
+        if let Ok(dimensions) = reader.into_dimensions() {
+            width = Some(dimensions.0);
+            height = Some(dimensions.1);
+        }
+    }
+
+    (width, height)
+}
+
+/// Film stock name, which scanners and taggers stash in `ImageDescription` or
+/// `UserComment` because EXIF has no dedicated tag for it.
+fn exif_film_stock(exif_reader: &exif::Exif) -> Option<String> {
+    exif_reader
+        .get_field(exif::Tag::ImageDescription, exif::In::PRIMARY)
+        .or_else(|| exif_reader.get_field(exif::Tag::UserComment, exif::In::PRIMARY))
+        .and_then(|f| match &f.value {
+            exif::Value::Ascii(vec) => {
+                // Concatenate all ASCII strings and decode as UTF-8
+                let bytes: Vec<u8> = vec.iter().flat_map(|s| s.iter().copied()).collect();
+                String::from_utf8(bytes)
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            }
+            exif::Value::Undefined(bytes, _) => {
+                // UserComment has an 8-byte character code followed by the actual text
+                // The character code is typically "ASCII\0\0\0" or "UNICODE\0"
+                if bytes.len() > 8 {
+                    let text = String::from_utf8_lossy(&bytes[8..]).trim().to_string();
+                    if text.is_empty() {
+                        None
+                    } else {
+                        parse_film_stock_from_comment(&text)
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => {
+                let display = f.display_value().to_string();
+                if display.trim().is_empty() {
+                    None
+                } else {
+                    Some(display)
+                }
+            }
+        })
+}
+
+/// Copyright string, decoded from the multi-part ASCII form when present.
+fn exif_copyright(exif_reader: &exif::Exif) -> Option<String> {
+    exif_reader
+        .get_field(exif::Tag::Copyright, exif::In::PRIMARY)
+        .and_then(|f| match &f.value {
+            exif::Value::Ascii(vec) => {
+                // Concatenate all ASCII strings and decode as UTF-8
+                let bytes: Vec<u8> = vec.iter().flat_map(|s| s.iter().copied()).collect();
+                String::from_utf8(bytes).ok()
+            }
+            _ => Some(f.display_value().to_string()),
+        })
+}
+
 /// Extract EXIF metadata from an image file
 fn extract_exif_data(path: &Path) -> ExifData {
     use std::fs::File;
@@ -676,26 +751,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
         return ExifData::default();
     };
 
-    let mut width = exif_reader
-        .get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
-        .or_else(|| exif_reader.get_field(exif::Tag::ImageWidth, exif::In::PRIMARY))
-        .and_then(|f| f.value.get_uint(0));
-
-    let mut height = exif_reader
-        .get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
-        .or_else(|| exif_reader.get_field(exif::Tag::ImageLength, exif::In::PRIMARY))
-        .and_then(|f| f.value.get_uint(0));
-
-    // If EXIF didn't have dimensions, try reading image dimensions from file header
-    if (width.is_none() || height.is_none())
-        && let Ok(mut reader) = image::ImageReader::open(path)
-    {
-        reader.limits(image::Limits::no_limits());
-        if let Ok(dimensions) = reader.into_dimensions() {
-            width = Some(dimensions.0);
-            height = Some(dimensions.1);
-        }
-    }
+    let (width, height) = exif_dimensions(&exif_reader, path);
 
     let date_taken = exif_reader
         .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
@@ -740,7 +796,7 @@ fn extract_exif_data(path: &Path) -> ExifData {
             if val.contains("mm") {
                 val
             } else {
-                format!("{} mm", val)
+                format!("{val} mm")
             }
         });
 
@@ -764,10 +820,10 @@ fn extract_exif_data(path: &Path) -> ExifData {
             .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
             .map(|f| {
                 let val = f.display_value().to_string();
-                if val.contains("s") {
+                if val.contains('s') {
                     val
                 } else {
-                    format!("{} s", val)
+                    format!("{val} s")
                 }
             })
     } else {
@@ -778,53 +834,8 @@ fn extract_exif_data(path: &Path) -> ExifData {
         .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
         .map(|f| format!("ISO {}", f.display_value()));
 
-    // Extract film stock from ImageDescription or UserComment tags
-    // These are commonly used for film stock information in scanned film photos
-    let film_stock = exif_reader
-        .get_field(exif::Tag::ImageDescription, exif::In::PRIMARY)
-        .or_else(|| exif_reader.get_field(exif::Tag::UserComment, exif::In::PRIMARY))
-        .and_then(|f| match &f.value {
-            exif::Value::Ascii(vec) => {
-                // Concatenate all ASCII strings and decode as UTF-8
-                let bytes: Vec<u8> = vec.iter().flat_map(|s| s.iter().copied()).collect();
-                String::from_utf8(bytes)
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            }
-            exif::Value::Undefined(bytes, _) => {
-                // UserComment has an 8-byte character code followed by the actual text
-                // The character code is typically "ASCII\0\0\0" or "UNICODE\0"
-                if bytes.len() > 8 {
-                    let text = String::from_utf8_lossy(&bytes[8..]).trim().to_string();
-                    if text.is_empty() {
-                        None
-                    } else {
-                        parse_film_stock_from_comment(&text)
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => {
-                let display = f.display_value().to_string();
-                if display.trim().is_empty() {
-                    None
-                } else {
-                    Some(display)
-                }
-            }
-        });
-
-    let copyright = exif_reader
-        .get_field(exif::Tag::Copyright, exif::In::PRIMARY)
-        .and_then(|f| match &f.value {
-            exif::Value::Ascii(vec) => {
-                // Concatenate all ASCII strings and decode as UTF-8
-                let bytes: Vec<u8> = vec.iter().flat_map(|s| s.iter().copied()).collect();
-                String::from_utf8(bytes).ok()
-            }
-            _ => Some(f.display_value().to_string()),
-        });
+    let film_stock = exif_film_stock(&exif_reader);
+    let copyright = exif_copyright(&exif_reader);
 
     ExifData {
         width,
@@ -992,10 +1003,10 @@ pub fn load_all_gallery_photos() -> Vec<PhotoInfo> {
         let gallery_path_buf = Path::new(&gallery_path);
         if gallery_path_buf.exists() {
             // Extract gallery name from directory path
-            let gallery_name = gallery_path_buf
-                .file_name()
-                .map(|n| n.to_string_lossy().to_lowercase().replace(' ', "-"))
-                .unwrap_or_else(|| "home".to_string());
+            let gallery_name = gallery_path_buf.file_name().map_or_else(
+                || "home".to_string(),
+                |n| n.to_string_lossy().to_lowercase().replace(' ', "-"),
+            );
 
             find_images_recursive_with_gallery(
                 gallery_path_buf,
@@ -1063,7 +1074,7 @@ pub fn load_about_content() -> crate::types::AboutContent {
         .map(|name| Path::new(&content_path).join(name))
         .find(|path| path.exists())
         .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
-        .map(|filename| format!("/content/{}", filename));
+        .map(|filename| format!("/content/{filename}"));
 
     crate::types::AboutContent {
         image_url,
@@ -1230,7 +1241,7 @@ mod tests {
     #[test]
     fn test_default_about_text() {
         let text = default_about_text();
-        assert!(!text.is_empty());
+        assert!(!text.is_empty(), "default about text should not be empty");
         assert!(text.contains("photographer"));
         assert!(text.contains("10 years"));
     }
@@ -1405,7 +1416,10 @@ mod tests {
 
         // Directory should be created
         assert!(temp_gallery.exists());
-        assert!(photos.is_empty()); // No photos in new directory
+        assert!(
+            photos.is_empty(),
+            "a freshly created gallery directory has no photos, got {photos:?}"
+        );
 
         unsafe { std::env::remove_var("GALLERY_PATH") };
         fs::remove_dir_all(&temp_gallery).ok();
@@ -1471,7 +1485,7 @@ mod tests {
         let ext = "jpg";
 
         let slug = filename
-            .trim_end_matches(&format!(".{}", ext))
+            .trim_end_matches(&format!(".{ext}"))
             .to_lowercase()
             .replace(['/', '\\', ' '], "-");
 
@@ -1484,7 +1498,7 @@ mod tests {
         let ext = "jpg";
 
         let title = filename
-            .trim_end_matches(&format!(".{}", ext))
+            .trim_end_matches(&format!(".{ext}"))
             .replace(['-', '_'], " ");
 
         assert_eq!(title, "test photo 2024");
@@ -1668,14 +1682,16 @@ mod tests {
         // Header (8) + count (2) + 2 entries × 12 + next-IFD ptr (4) = 38
         let data_pool_start: u32 = 8 + 2 + 24 + 4;
 
-        let make_bytes: Vec<u8> = format!("{}\0", make).into_bytes();
-        let model_bytes: Vec<u8> = format!("{}\0", model).into_bytes();
+        let make_bytes: Vec<u8> = format!("{make}\0").into_bytes();
+        let model_bytes: Vec<u8> = format!("{model}\0").into_bytes();
+        let make_len = u32::try_from(make_bytes.len()).unwrap();
+        let model_len = u32::try_from(model_bytes.len()).unwrap();
         let make_off = data_pool_start;
-        let model_off = data_pool_start + u32::try_from(make_bytes.len()).unwrap();
+        let model_off = data_pool_start + make_len;
 
         tiff.extend_from_slice(&entry_count.to_le_bytes());
-        write_ifd_entry(&mut tiff, 0x010f, 2, make_bytes.len() as u32, make_off); // Make
-        write_ifd_entry(&mut tiff, 0x0110, 2, model_bytes.len() as u32, model_off); // Model
+        write_ifd_entry(&mut tiff, 0x010f, 2, make_len, make_off); // Make
+        write_ifd_entry(&mut tiff, 0x0110, 2, model_len, model_off); // Model
         tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
 
         tiff.extend_from_slice(&make_bytes);
@@ -1922,7 +1938,7 @@ mod tests {
 
     /// For a film scan the Lightroom `crs:LensProfileName` describes the
     /// macro lens used to capture the scan, while `aux:Lens` (set by
-    /// LensTagger) carries the actual taking lens. The taking lens must win.
+    /// `LensTagger`) carries the actual taking lens. The taking lens must win.
     #[test]
     fn extract_lens_candidates_from_xmp_exposes_aux_and_profile_independently() {
         let dir = tempfile::TempDir::new().unwrap();

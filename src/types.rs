@@ -60,7 +60,7 @@ pub struct PhotoConfig {
     /// Display title override. When set, this replaces the title derived from the filename.
     pub title: Option<String>,
     /// Lens name override. Useful when metadata is missing, ambiguous (e.g. Nikon
-    /// LensID maps to multiple physical lenses) or contains a placeholder like
+    /// `LensID` maps to multiple physical lenses) or contains a placeholder like
     /// Lightroom's "Camera Settings".
     pub lens_model: Option<String>,
 }

@@ -33,12 +33,19 @@ const PRESETS: &[(u32, u8)] = &[(2400, 90), (4000, 90)];
 /// Deterministic source image: a smooth gradient plus a small high-frequency
 /// term so the WebP encoder sees realistic (non-flat) entropy. No RNG, so the
 /// pixels — and therefore decode/encode cost — are identical every run.
+#[expect(
+    clippy::many_single_char_names,
+    reason = "x/y/w/h and r/g/b are the conventional names for pixel coordinates and channels"
+)]
 fn synthetic_source(w: u32, h: u32) -> DynamicImage {
     let mut buf = image::RgbImage::new(w, h);
     for (x, y, px) in buf.enumerate_pixels_mut() {
-        let r = ((x * 255) / w) as u8;
-        let g = ((y * 255) / h) as u8;
-        let b = (((x + y) * 255) / (w + h)) as u8 ^ (((x ^ y) & 0x1f) as u8);
+        // `x < w` and `y < h`, so each quotient is at most 254, and the xor operand is
+        // masked to five bits — every value below provably fits in a u8.
+        let r = u8::try_from((x * 255) / w).unwrap();
+        let g = u8::try_from((y * 255) / h).unwrap();
+        let b = u8::try_from(((x + y) * 255) / (w + h)).unwrap()
+            ^ u8::try_from((x ^ y) & 0x1f).unwrap();
         *px = image::Rgb([r, g, b]);
     }
     DynamicImage::ImageRgb8(buf)

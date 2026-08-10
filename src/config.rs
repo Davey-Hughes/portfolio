@@ -526,7 +526,11 @@ site_tagline = "Test"
         unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
 
         let config = load_config();
-        assert!(config.gallery_order.is_empty());
+        assert!(
+            config.gallery_order.is_empty(),
+            "expected no gallery_order, got {:?}",
+            config.gallery_order
+        );
 
         unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();

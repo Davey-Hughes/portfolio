@@ -78,6 +78,105 @@ mod cache_middleware {
     }
 }
 
+/// Resolve a directory path from an env var, falling back to the first
+/// existing path in `fallbacks` (last entry is used if none exist).
+#[cfg(feature = "ssr")]
+fn resolve_dir(env_var: &str, fallbacks: &[&str]) -> String {
+    if let Ok(val) = std::env::var(env_var) {
+        return val;
+    }
+    for candidate in fallbacks {
+        if std::path::Path::new(candidate).exists() {
+            return (*candidate).to_string();
+        }
+    }
+    fallbacks.last().copied().unwrap_or(".").to_string()
+}
+
+/// Bounded in-memory cache for rendered HTML responses.
+///
+/// The cache key embeds the client-supplied Cookie header, so a flood of distinct
+/// cookies could otherwise grow the cache without limit within the TTL window.
+/// Entries are weighed by body size and evicted once the total exceeds the ceiling.
+#[cfg(feature = "ssr")]
+fn build_html_cache() -> cache_middleware::HtmlCache {
+    std::sync::Arc::new(
+        moka::future::Cache::builder()
+            .time_to_live(std::time::Duration::from_secs(15))
+            .max_capacity(64 * 1024 * 1024)
+            .weigher(
+                |_key: &String, value: &(axum::http::HeaderMap, axum::body::Bytes)| {
+                    value.1.len().try_into().unwrap_or(u32::MAX)
+                },
+            )
+            .build(),
+    )
+}
+
+/// Transcode-on-demand image endpoint.
+///
+/// Image processing is CPU/IO heavy, so the work goes to the blocking pool rather
+/// than tying up a tokio worker thread.
+#[cfg(feature = "ssr")]
+async fn serve_compressed_image(
+    images_dir: std::sync::Arc<str>,
+    cache_dir: std::sync::Arc<str>,
+    image_path: String,
+    params: portfolio::image_params::ImageParams,
+) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    use leptos::logging::log;
+
+    let (width, quality) = match params.validate() {
+        Ok(values) => values,
+        Err(err_msg) => return (StatusCode::BAD_REQUEST, err_msg).into_response(),
+    };
+
+    let path_without_ext = match image_path.rfind('.') {
+        Some(dot) => image_path[..dot].to_string(),
+        None => image_path.clone(),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        portfolio::image_cache::process_and_cache_image(
+            &images_dir,
+            &cache_dir,
+            &path_without_ext,
+            width,
+            quality,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Some(webp_data)) => {
+            log!("Serving image: {}", image_path);
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/webp"),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
+                webp_data,
+            )
+                .into_response()
+        }
+        Ok(None) => {
+            log!("Failed to process image: {}", image_path);
+            (
+                StatusCode::NOT_FOUND,
+                "Image not found or failed to process",
+            )
+                .into_response()
+        }
+        Err(err) => {
+            log!("Image worker panicked: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed").into_response()
+        }
+    }
+}
+
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
@@ -85,33 +184,18 @@ async fn main() {
         Router,
         extract::{Path, Query},
         http::{StatusCode, header},
-        response::IntoResponse,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
-    use portfolio::app::*;
-    use portfolio::image_cache::{cleanup_cache, prewarm_cache, process_and_cache_image};
+    use portfolio::app::{App, shell};
+    use portfolio::image_cache::{cleanup_cache, prewarm_cache};
     use portfolio::image_params::ImageParams;
     use std::sync::Arc;
     use tower::ServiceBuilder;
     use tower_http::{
         compression::CompressionLayer, services::ServeDir, set_header::SetResponseHeaderLayer,
     };
-
-    /// Resolve a directory path from an env var, falling back to the first
-    /// existing path in `fallbacks` (last entry is used if none exist).
-    fn resolve_dir(env_var: &str, fallbacks: &[&str]) -> String {
-        if let Ok(val) = std::env::var(env_var) {
-            return val;
-        }
-        for candidate in fallbacks {
-            if std::path::Path::new(candidate).exists() {
-                return (*candidate).to_string();
-            }
-        }
-        fallbacks.last().copied().unwrap_or(".").to_string()
-    }
 
     // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
     // content-hashed pkg filenames). Never present in the Docker image
@@ -136,64 +220,16 @@ async fn main() {
     let images_dir_arc: Arc<str> = Arc::from(images_dir.as_str());
     let cache_dir_arc: Arc<str> = Arc::from(cache_dir.as_str());
 
-    let serve_compressed_image = {
+    let image_handler = {
         let images_dir = Arc::clone(&images_dir_arc);
         let cache_dir = Arc::clone(&cache_dir_arc);
         move |Path(image_path): Path<String>, Query(params): Query<ImageParams>| {
-            let images_dir = Arc::clone(&images_dir);
-            let cache_dir = Arc::clone(&cache_dir);
-            async move {
-                let (width, quality) = match params.validate() {
-                    Ok(values) => values,
-                    Err(err_msg) => {
-                        return (StatusCode::BAD_REQUEST, err_msg).into_response();
-                    }
-                };
-
-                let path_without_ext = match image_path.rfind('.') {
-                    Some(dot) => image_path[..dot].to_string(),
-                    None => image_path.clone(),
-                };
-
-                let result = tokio::task::spawn_blocking(move || {
-                    process_and_cache_image(
-                        &images_dir,
-                        &cache_dir,
-                        &path_without_ext,
-                        width,
-                        quality,
-                    )
-                })
-                .await;
-
-                match result {
-                    Ok(Some(webp_data)) => {
-                        log!("Serving image: {}", image_path);
-                        (
-                            StatusCode::OK,
-                            [
-                                (header::CONTENT_TYPE, "image/webp"),
-                                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                            ],
-                            webp_data,
-                        )
-                            .into_response()
-                    }
-                    Ok(None) => {
-                        log!("Failed to process image: {}", image_path);
-                        (
-                            StatusCode::NOT_FOUND,
-                            "Image not found or failed to process",
-                        )
-                            .into_response()
-                    }
-                    Err(err) => {
-                        log!("Image worker panicked: {err}");
-                        (StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed")
-                            .into_response()
-                    }
-                }
-            }
+            serve_compressed_image(
+                Arc::clone(&images_dir),
+                Arc::clone(&cache_dir),
+                image_path,
+                params,
+            )
         }
     };
 
@@ -217,21 +253,7 @@ async fn main() {
     // matching entries from the on-disk compressed-image cache.
     portfolio::server::spawn_image_watcher(images_dir.clone(), cache_dir.clone());
 
-    let html_cache: cache_middleware::HtmlCache = std::sync::Arc::new(
-        moka::future::Cache::builder()
-            .time_to_live(std::time::Duration::from_secs(15))
-            // Bound total cached HTML: the cache key embeds the client-supplied
-            // Cookie header, so a flood of distinct cookies could otherwise grow
-            // the cache without limit within the TTL window. Weighed by body
-            // size, evicted once the total exceeds the ceiling.
-            .max_capacity(64 * 1024 * 1024)
-            .weigher(
-                |_key: &String, value: &(axum::http::HeaderMap, axum::body::Bytes)| {
-                    value.1.len().try_into().unwrap_or(u32::MAX)
-                },
-            )
-            .build(),
-    );
+    let html_cache = build_html_cache();
 
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
@@ -246,7 +268,7 @@ async fn main() {
         // Compressed image endpoint
         .route(
             "/images/compressed/{*image_path}",
-            axum::routing::get(serve_compressed_image),
+            axum::routing::get(image_handler),
         )
         .nest_service(
             "/images",
