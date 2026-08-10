@@ -109,8 +109,12 @@ jobs:
       # client-only code — the 15 `#[cfg(feature = "hydrate")]` sites across
       # src/app.rs (the pinch-zoom anchor and touch handlers), src/config.rs and
       # src/lib.rs went unlinted end to end before this job existed.
+      # `--tests` so the #[cfg(test)] modules are linted under `hydrate` too, not just
+      # compiled by the test step below. Without it a warning that only fires in the
+      # client-side test build (an import left unused because every consumer is
+      # ssr-gated, say) shows up in `cargo test` output but fails nothing.
       - name: Clippy (hydrate)
-        run: cargo clippy --lib --no-default-features --features hydrate -- -D warnings
+        run: cargo clippy --lib --tests --no-default-features --features hydrate -- -D warnings
       - name: Test (hydrate)
         run: cargo test --lib --no-default-features --features hydrate
 

@@ -197,6 +197,12 @@ pub fn load_config() -> SiteConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Every `#[serial]` below sits on an `#[cfg(feature = "ssr")]` test, so under
+    // `hydrate` they all compile out and this import goes unused. `config` is one of
+    // the handful of modules that builds under both feature sets (lib.rs gates
+    // gallery/image_cache/image_params/mosaic on `ssr`), which is why it is the only
+    // import that needs the gate.
+    #[cfg(feature = "ssr")]
     use serial_test::serial;
 
     #[test]

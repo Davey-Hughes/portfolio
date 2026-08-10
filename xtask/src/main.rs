@@ -40,9 +40,13 @@ fn main() {
     // client-only code (anything behind #[cfg(feature = "hydrate")]), so without these
     // a green `cargo ci` could still fail CI — which is exactly how 8 clippy warnings
     // accumulated in src/app.rs unnoticed.
+    // --tests so the #[cfg(test)] modules get linted under `hydrate`, not merely
+    // compiled by the test step below. Without it, a warning that only fires in the
+    // client-side test build lands in `cargo test` output and gates nothing.
     step(&[
         "clippy",
         "--lib",
+        "--tests",
         "--no-default-features",
         "--features",
         "hydrate",
