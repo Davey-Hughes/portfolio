@@ -49,4 +49,54 @@ test.describe("About Page", () => {
     const footer = page.locator("footer");
     await expect(footer).toBeVisible();
   });
+
+  test("should display the license section", async ({ page }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    const license = page.locator(".about-license");
+    await expect(license).toBeVisible();
+    await expect(
+      license.getByRole("heading", { name: "License", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("should state terms for the photographs and the code separately", async ({
+    page,
+  }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    const license = page.locator(".about-license");
+
+    // The fixture config sets no [license] table, so this is the default path:
+    // an all-rights-reserved line generated from site_name.
+    await expect(license).toContainText("Photographs");
+    await expect(license).toContainText("Photography Portfolio");
+    await expect(license).toContainText("All rights reserved");
+    await expect(license).toContainText("not licensed for reuse");
+
+    await expect(license).toContainText("Site code");
+    await expect(license).toContainText("General Public License");
+  });
+
+  test("should link the license text and the source", async ({ page }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    const gpl = page.locator(".about-license a[href*='gnu.org']");
+    await expect(gpl).toHaveAttribute("href", /gpl-3\.0/);
+
+    const source = page.locator(".about-license a", { hasText: "Source" });
+    await expect(source).toHaveAttribute("href", /^https?:\/\//);
+  });
+
+  test("should omit the contact sentence when none is configured", async ({
+    page,
+  }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    // The fixture config has no [license].contact. A dangling "email ." sentence
+    // would mean the optional branch rendered anyway.
+    await expect(page.locator(".about-license")).not.toContainText(
+      "commercial use, email",
+    );
+  });
 });

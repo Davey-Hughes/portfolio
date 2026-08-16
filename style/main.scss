@@ -868,6 +868,72 @@ img {
   }
 }
 
+// License notice on the About page. Deliberately quieter than the biography above
+// it — a hairline rule, smaller type, muted colour — so it reads as a notice rather
+// than as body copy, while sharing the .about-container measure.
+.about-license {
+  max-width: 900px;
+  margin: 4rem auto 0;
+  padding-top: 3rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+
+  h2 {
+    font-size: 1.2rem;
+    font-weight: 400;
+    letter-spacing: 3px;
+    margin-bottom: 2rem;
+    color: #1a1a1a;
+    text-transform: uppercase;
+    text-align: center;
+  }
+}
+
+.license-block {
+  margin-bottom: 2rem;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  h3 {
+    font-size: 0.8rem;
+    font-weight: 400;
+    letter-spacing: 2px;
+    margin-bottom: 0.75rem;
+    color: #1a1a1a;
+    text-transform: uppercase;
+  }
+
+  p {
+    font-size: 0.9rem;
+    line-height: 1.8;
+    margin-bottom: 0.5rem;
+    color: #666;
+    font-weight: 300;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  a {
+    color: #666;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color 0.2s ease;
+
+    &:hover {
+      color: #1a1a1a;
+    }
+  }
+}
+
+.license-loading {
+  font-size: 0.9rem;
+  color: #666;
+  font-weight: 300;
+}
+
 .services-list {
   list-style: none;
   margin-top: 1.5rem;
@@ -1306,6 +1372,11 @@ img {
     padding: 2rem 1rem 4rem;
   }
 
+  .about-license {
+    margin-top: 3rem;
+    padding-top: 2rem;
+  }
+
   .contact-page {
     padding: 2rem 1rem 4rem;
   }
@@ -1424,6 +1495,11 @@ img {
 
   .about-content h1 {
     font-size: 1.8rem;
+    letter-spacing: 2px;
+  }
+
+  .about-license h2 {
+    font-size: 1rem;
     letter-spacing: 2px;
   }
 

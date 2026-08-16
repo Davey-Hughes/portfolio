@@ -1743,11 +1743,78 @@ fn AboutContent() -> impl IntoView {
     }
 }
 
+/// Licensing terms for the two works this site is made of: the photographs, which
+/// belong to whoever runs it, and the code, which is GPL-3.0-or-later. They are
+/// stated separately and adjacently on purpose — a lone "licensed under the GPL" on
+/// a photography site invites the reading that the photographs are GPL too.
+#[component]
+fn LicenseSection() -> impl IntoView {
+    let config = Resource::new(|| (), |()| async { get_site_config().await });
+
+    view! {
+        <section class="about-license">
+            <h2>"License"</h2>
+            <Suspense fallback=|| {
+                view! { <p class="license-loading">"Loading..."</p> }
+            }>
+                {move || {
+                    config
+                        .get()
+                        .and_then(std::result::Result::ok)
+                        .map(|cfg| {
+                            let statement = cfg.image_license();
+                            let note = cfg.image_license_note();
+                            let contact = cfg.license_contact().map(str::to_string);
+                            let source = cfg.source_url().to_string();
+                            view! {
+                                <div class="license-block">
+                                    <h3>"Photographs"</h3>
+                                    <p>{statement}</p>
+                                    {note.map(|n| view! { <p>{n}</p> })}
+                                    {contact
+                                        .map(|c| {
+                                            let mailto = format!("mailto:{c}");
+                                            view! {
+                                                <p>
+                                                    "For print, editorial, or commercial use, email "
+                                                    <a href=mailto>{c}</a>
+                                                    "."
+                                                </p>
+                                            }
+                                        })}
+                                </div>
+                                <div class="license-block">
+                                    <h3>"Site code"</h3>
+                                    <p>
+                                        "This site runs on open source software licensed under the "
+                                        <a
+                                            href=crate::config::CODE_LICENSE_URL
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                        >
+                                            {crate::config::CODE_LICENSE_NAME}
+                                        </a>
+                                        " or later. "
+                                        <a href=source target="_blank" rel="noopener noreferrer">
+                                            "Source"
+                                        </a>
+                                        "."
+                                    </p>
+                                </div>
+                            }
+                        })
+                }}
+            </Suspense>
+        </section>
+    }
+}
+
 #[component]
 fn AboutPage() -> impl IntoView {
     view! {
         <div class="about-page">
             <AboutContent />
+            <LicenseSection />
         </div>
     }
 }

@@ -84,6 +84,47 @@ impl SectionValue {
     }
 }
 
+/// Prose name of the code license, shown on the About page.
+///
+/// Deliberately not configurable. The GPL's copyleft means a fork of this
+/// repository cannot relicense it, so this string is true of every deployment —
+/// unlike the photograph terms, which belong to whoever runs the site.
+pub const CODE_LICENSE_NAME: &str = "GNU General Public License v3.0";
+
+/// Canonical URL for the full text of the code license.
+pub const CODE_LICENSE_URL: &str = "https://www.gnu.org/licenses/gpl-3.0.html";
+
+/// Upstream source, used when `[license].source` is unset.
+///
+/// `git.daveynet.xyz`, not the `forge.daveynet.xyz` host `README.md` names for pull
+/// requests: only the former serves the repository to an anonymous reader, and a
+/// source link that lands on a login page is worse than no link at all.
+pub const DEFAULT_SOURCE_URL: &str = "https://git.daveynet.xyz/davey/portfolio";
+
+/// Elaboration rendered under the copyright line while the deployer has supplied no
+/// terms of their own.
+pub const DEFAULT_IMAGE_LICENSE_NOTE: &str = "These photographs are not licensed for reuse.";
+
+/// Licensing details for the About page's license section.
+///
+/// Every field is optional. Omitting the whole `[license]` table yields an
+/// all-rights-reserved statement derived from `site_name` and the current year, so a
+/// fresh deployment is correct with no configuration.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LicenseConfig {
+    /// Terms for the photographs. Replaces the generated copyright line *and*
+    /// suppresses [`DEFAULT_IMAGE_LICENSE_NOTE`] — see
+    /// [`SiteConfig::image_license_note`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<String>,
+    /// Address for licensing enquiries. No contact sentence renders when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
+    /// Public URL for this site's source. Defaults to [`DEFAULT_SOURCE_URL`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
 /// Configuration for the portfolio site loaded from a TOML config file.
 ///
 /// # TOML Format
@@ -96,6 +137,13 @@ impl SectionValue {
 /// # site_copyright is optional - if not specified, it will be auto-generated as:
 /// # "© {current_year} {site_name}. All rights reserved."
 /// # site_copyright = "© 2024 John Doe. All rights reserved."
+///
+/// # [license] is optional. Omit it and the About page states all rights reserved,
+/// # derived from site_name and the current year.
+/// # [license]
+/// # images = "All rights reserved."
+/// # contact = "you@example.com"
+/// # source = "https://git.daveynet.xyz/davey/portfolio"
 ///
 /// [sections]
 /// about_title = "About Me"
@@ -120,6 +168,9 @@ pub struct SiteConfig {
     pub site_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_copyright: Option<String>,
+    /// Licensing terms shown on the About page. Optional; see [`LicenseConfig`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<LicenseConfig>,
     /// Ordered list of gallery slugs controlling nav-bar order.
     /// Galleries listed here appear first in the given order; any galleries
     /// not listed fall through to alphabetical order afterwards.
@@ -149,6 +200,43 @@ impl SiteConfig {
             )
         })
     }
+
+    /// Photograph licensing terms, defaulting to the site copyright line so the
+    /// name and the year are computed in exactly one place.
+    #[must_use]
+    pub fn image_license(&self) -> String {
+        self.license
+            .as_ref()
+            .and_then(|l| l.images.clone())
+            .unwrap_or_else(|| self.copyright())
+    }
+
+    /// The all-rights-reserved elaboration, rendered only while `[license].images`
+    /// is unset. Returning `None` once it is set is what keeps a deployer's own
+    /// license from being contradicted by this crate's boilerplate.
+    #[must_use]
+    pub fn image_license_note(&self) -> Option<&'static str> {
+        self.license
+            .as_ref()
+            .and_then(|l| l.images.as_ref())
+            .is_none()
+            .then_some(DEFAULT_IMAGE_LICENSE_NOTE)
+    }
+
+    /// Address for licensing enquiries, if one is configured.
+    #[must_use]
+    pub fn license_contact(&self) -> Option<&str> {
+        self.license.as_ref().and_then(|l| l.contact.as_deref())
+    }
+
+    /// Public URL for this site's source.
+    #[must_use]
+    pub fn source_url(&self) -> &str {
+        self.license
+            .as_ref()
+            .and_then(|l| l.source.as_deref())
+            .unwrap_or(DEFAULT_SOURCE_URL)
+    }
 }
 
 impl Default for SiteConfig {
@@ -158,6 +246,7 @@ impl Default for SiteConfig {
             site_tagline: "Photography".to_string(),
             site_title: None,
             site_copyright: None,
+            license: None,
             gallery_order: Vec::new(),
             sections: HashMap::new(),
         }
@@ -537,6 +626,139 @@ site_tagline = "Test"
             "expected no gallery_order, got {:?}",
             config.gallery_order
         );
+
+        unsafe { std::env::remove_var("CONFIG_PATH") };
+        fs::remove_file(&config_file).ok();
+    }
+
+    #[test]
+    fn test_image_license_defaults_to_copyright() {
+        let config = SiteConfig::default();
+
+        // The photograph terms and the footer line are the same claim, so they
+        // share one source of truth for the name and the year.
+        assert_eq!(config.image_license(), config.copyright());
+        assert_eq!(
+            config.image_license_note(),
+            Some(DEFAULT_IMAGE_LICENSE_NOTE)
+        );
+    }
+
+    #[test]
+    fn test_explicit_image_license_suppresses_default_note() {
+        let config = SiteConfig {
+            license: Some(LicenseConfig {
+                images: Some("CC BY-SA 4.0".to_string()),
+                ..LicenseConfig::default()
+            }),
+            ..SiteConfig::default()
+        };
+
+        // A deployer who grants a license must not be contradicted by the
+        // boilerplate "not licensed for reuse" sentence.
+        assert_eq!(config.image_license(), "CC BY-SA 4.0");
+        assert_eq!(config.image_license_note(), None);
+    }
+
+    #[test]
+    fn test_source_url_defaults_and_overrides() {
+        let config = SiteConfig::default();
+        assert_eq!(config.source_url(), DEFAULT_SOURCE_URL);
+
+        let forked = SiteConfig {
+            license: Some(LicenseConfig {
+                source: Some("https://example.com/fork".to_string()),
+                ..LicenseConfig::default()
+            }),
+            ..SiteConfig::default()
+        };
+        assert_eq!(forked.source_url(), "https://example.com/fork");
+    }
+
+    #[test]
+    fn test_license_contact_absent_by_default() {
+        assert_eq!(SiteConfig::default().license_contact(), None);
+
+        let config = SiteConfig {
+            license: Some(LicenseConfig {
+                contact: Some("me@example.com".to_string()),
+                ..LicenseConfig::default()
+            }),
+            ..SiteConfig::default()
+        };
+        assert_eq!(config.license_contact(), Some("me@example.com"));
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    #[serial]
+    fn test_load_config_with_license_table() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir();
+        let config_file = temp_dir.join(format!(
+            "test_config_license_{}_{}.toml",
+            std::process::id(),
+            line!()
+        ));
+
+        let content = r#"
+site_name = "John Doe Photography"
+site_tagline = "Capturing Moments"
+
+[license]
+images = "All rights reserved."
+contact = "john@example.com"
+source = "https://example.com/src"
+"#;
+
+        fs::write(&config_file, content).unwrap();
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
+
+        let config = load_config();
+
+        assert_eq!(config.image_license(), "All rights reserved.");
+        assert_eq!(config.image_license_note(), None);
+        assert_eq!(config.license_contact(), Some("john@example.com"));
+        assert_eq!(config.source_url(), "https://example.com/src");
+
+        unsafe { std::env::remove_var("CONFIG_PATH") };
+        fs::remove_file(&config_file).ok();
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    #[serial]
+    fn test_load_config_without_license_table() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir();
+        let config_file = temp_dir.join(format!(
+            "test_config_no_license_{}_{}.toml",
+            std::process::id(),
+            line!()
+        ));
+
+        let content = r#"
+site_name = "John Doe Photography"
+site_tagline = "Capturing Moments"
+"#;
+
+        fs::write(&config_file, content).unwrap();
+        unsafe { std::env::set_var("CONFIG_PATH", config_file.to_str().unwrap()) };
+
+        let config = load_config();
+
+        // Omitting the table entirely is the common case and must still produce a
+        // complete statement.
+        assert!(config.license.is_none());
+        assert!(config.image_license().contains("John Doe Photography"));
+        assert!(config.image_license().contains("All rights reserved"));
+        assert_eq!(
+            config.image_license_note(),
+            Some(DEFAULT_IMAGE_LICENSE_NOTE)
+        );
+        assert_eq!(config.source_url(), DEFAULT_SOURCE_URL);
 
         unsafe { std::env::remove_var("CONFIG_PATH") };
         fs::remove_file(&config_file).ok();

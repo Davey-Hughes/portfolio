@@ -190,6 +190,13 @@ site_tagline = "Photography"
 # fall through alphabetically afterwards. Slug = lowercased dir name, spaces→dashes.
 gallery_order = ["film", "city", "nature", "portraits"]
 
+# Optional: licensing shown on the About page. Omit and it states all rights
+# reserved over the photographs (from site_name + year) plus the code's GPLv3.
+# [license]
+# images  = "All rights reserved."
+# contact = "you@example.com"
+# source  = "https://git.daveynet.xyz/davey/portfolio"
+
 # Arbitrary key/value pairs surfaced on the contact/about pages.
 [sections]
 email     = "you@example.com"
@@ -475,4 +482,13 @@ how to install the tools, and how to read the output.
 
 ## License
 
-See [`LICENSE.md`](LICENSE.md).
+Two works, two licenses:
+
+- **The code** — GNU General Public License v3.0 or later. See [`LICENSE.md`](LICENSE.md).
+- **The photographs** — not covered by that license, and not distributed with this
+  repository (`public/images/` is gitignored). Each deployment states its own terms on
+  its About page; configure them under `[license]` in `config.toml`, or omit the table
+  and the page states all rights reserved.
+
+If you modify the code, set `[license].source` to your own repository — the default
+points at upstream.

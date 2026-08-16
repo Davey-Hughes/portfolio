@@ -16,6 +16,15 @@ site_tagline = "Photography"
 # Uncomment and customize if you want a custom copyright notice:
 # site_copyright = "© 2025 Your Name. All rights reserved."
 
+# Optional: licensing shown on the About page.
+# Omit this table entirely and the page states all rights reserved over your
+# photographs, derived from site_name and the current year, alongside the site
+# code's GPL-3.0-or-later notice.
+# [license]
+# images = "All rights reserved."                        # your photograph terms
+# contact = "you@example.com"                            # licensing enquiries
+# source = "https://git.daveynet.xyz/davey/portfolio"    # where your source lives
+
 # Optional: Control the order galleries appear in the nav bar.
 # Each entry is a gallery slug (the lowercased directory name in public/images/
 # with spaces replaced by dashes). Galleries listed here are shown first in the
