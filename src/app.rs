@@ -230,15 +230,43 @@ fn Footer() -> impl IntoView {
                         .as_ref()
                         .and_then(|c| c.license_footer_text().map(str::to_string));
                     view! {
-                        <p>{copyright}</p>
-                        {license_link
-                            .map(|text| {
-                                view! {
-                                    <p class="footer-license">
-                                        <A href="/about#license">{text}</A>
-                                    </p>
-                                }
-                            })}
+                        <p>
+                            {copyright}
+                            {license_link
+                                .map(|text| {
+                                    view! {
+                                        <span class="footer-license">
+                                            // Decorative: the link's own text carries the
+                                            // meaning, so a screen reader gains nothing
+                                            // from announcing the separator.
+                                            <span class="footer-separator" aria-hidden="true">
+                                                " · "
+                                            </span>
+                                            // A plain anchor with rel="external", not <A>,
+                                            // and the two are load-bearing together.
+                                            //
+                                            // leptos_router intercepts *every* same-origin
+                                            // anchor click, then calls scroll_to_el, which
+                                            // looks up the fragment's element and falls back
+                                            // to scrolling to the top when it is missing. On
+                                            // a cross-page hash link the target page's DOM
+                                            // does not exist yet at that moment, so the
+                                            // lookup fails and the reader lands at the top of
+                                            // /about instead of at the license section.
+                                            //
+                                            // rel="external" is the router's documented
+                                            // escape hatch (see location/mod.rs): it hands the
+                                            // click back to the browser, whose native fragment
+                                            // handling runs after the document has loaded and
+                                            // therefore finds the element. Costs a full page
+                                            // load for this one link.
+                                            <a href="/about#license" rel="external">
+                                                {text}
+                                            </a>
+                                        </span>
+                                    }
+                                })}
+                        </p>
                     }
                 }}
             </Suspense>

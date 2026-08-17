@@ -1127,10 +1127,13 @@ img {
     letter-spacing: 1px;
   }
 
-  // Link to the About page's license section. Sits under the copyright line and
-  // stays dimmer than it until hovered — it is a pointer, not a claim.
+  // Link to the About page's license section. Sits inline after the copyright,
+  // dimmer than it until hovered — it is a pointer, not a claim.
   .footer-license {
-    margin-top: 0.5rem;
+    .footer-separator {
+      opacity: 0.5;
+      padding: 0 0.15rem;
+    }
 
     a {
       color: inherit;

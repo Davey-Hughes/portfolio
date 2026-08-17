@@ -144,19 +144,39 @@ test.describe("Footer license link", () => {
     await expect(link).toBeVisible();
     await expect(link).toHaveText("License");
     await expect(link).toHaveAttribute("href", "/about#license");
+
+    // Inline with the copyright, not on a line of its own: one paragraph holds
+    // both, so a stray <p> would put the link back on its own row.
+    const line = page.locator(".footer p", {
+      has: page.locator(".footer-license"),
+    });
+    await expect(line).toHaveCount(1);
+    await expect(line).toContainText("All rights reserved");
+    await expect(page.locator(".footer p")).toHaveCount(1);
   });
 
   test("should reach the license section when the footer link is clicked", async ({
     page,
   }) => {
+    // A short viewport is load-bearing: it forces the license section below the
+    // fold. An earlier version of this test ran at the default size, where the
+    // fixture's About page fits on one screen — so the section was "in viewport"
+    // without any scrolling and the assertion passed against a link that did not
+    // work at all.
+    await page.setViewportSize({ width: 800, height: 400 });
     await page.goto("/", { waitUntil: "networkidle" });
 
     await page.locator(".footer-license a").click();
 
     await expect(page).toHaveURL(/\/about#license$/);
 
-    // Reaching the URL is not the point — the section has to actually be on screen.
-    // A hash that resolves but never scrolls looks broken to the reader.
+    // Reaching the URL is not the point — the page has to actually move.
+    await expect
+      .poll(() => page.evaluate(() => Math.round(window.scrollY)), {
+        timeout: 5000,
+      })
+      .toBeGreaterThan(0);
+
     await expect(page.locator("section#license.about-license")).toBeInViewport();
   });
 });
