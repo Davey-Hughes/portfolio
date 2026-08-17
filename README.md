@@ -193,9 +193,10 @@ gallery_order = ["film", "city", "nature", "portraits"]
 # Optional: licensing shown on the About page. Omit and it states all rights
 # reserved over the photographs (from site_name + year) plus the code's GPLv3.
 # [license]
-# images  = "All rights reserved."
-# contact = "you@example.com"
-# source  = "https://git.daveynet.xyz/davey/portfolio"
+# images      = "All rights reserved."
+# contact     = "you@example.com"
+# source      = "https://github.com/you/portfolio"
+# footer_text = "License"                  # footer link label; "" hides the link
 
 # Arbitrary key/value pairs surfaced on the contact/about pages.
 [sections]

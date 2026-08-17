@@ -1126,6 +1126,24 @@ img {
     font-weight: 300;
     letter-spacing: 1px;
   }
+
+  // Link to the About page's license section. Sits under the copyright line and
+  // stays dimmer than it until hovered — it is a pointer, not a claim.
+  .footer-license {
+    margin-top: 0.5rem;
+
+    a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      transition: opacity 0.2s ease;
+      opacity: 0.85;
+
+      &:hover {
+        opacity: 1;
+      }
+    }
+  }
 }
 
 // Responsive design

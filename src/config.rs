@@ -96,14 +96,17 @@ pub const CODE_LICENSE_URL: &str = "https://www.gnu.org/licenses/gpl-3.0.html";
 
 /// Upstream source, used when `[license].source` is unset.
 ///
-/// `git.daveynet.xyz`, not the `forge.daveynet.xyz` host `README.md` names for pull
-/// requests: only the former serves the repository to an anonymous reader, and a
-/// source link that lands on a login page is worse than no link at all.
-pub const DEFAULT_SOURCE_URL: &str = "https://git.daveynet.xyz/davey/portfolio";
+/// A fork that modifies the code should point `[license].source` at its own
+/// repository: this default names *upstream*, which is not the source of a modified
+/// deployment.
+pub const DEFAULT_SOURCE_URL: &str = "https://github.com/Davey-Hughes/portfolio";
 
 /// Elaboration rendered under the copyright line while the deployer has supplied no
 /// terms of their own.
 pub const DEFAULT_IMAGE_LICENSE_NOTE: &str = "These photographs are not licensed for reuse.";
+
+/// Label for the footer link pointing at the About page's license section.
+pub const DEFAULT_LICENSE_FOOTER_TEXT: &str = "License";
 
 /// Licensing details for the About page's license section.
 ///
@@ -117,12 +120,20 @@ pub struct LicenseConfig {
     /// [`SiteConfig::image_license_note`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<String>,
-    /// Address for licensing enquiries. No contact sentence renders when unset.
+    /// Address for licensing enquiries. No contact sentence renders when unset, or
+    /// when set to an empty string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact: Option<String>,
-    /// Public URL for this site's source. Defaults to [`DEFAULT_SOURCE_URL`].
+    /// Public URL for this site's source. Defaults to [`DEFAULT_SOURCE_URL`]; an
+    /// empty string falls back to that default rather than emitting `href=""`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Label for the footer link to the license section. Defaults to
+    /// [`DEFAULT_LICENSE_FOOTER_TEXT`]; set it to an empty string to suppress the
+    /// footer link entirely. The empty string means "hide" here rather than "fall
+    /// back" because this is the one field with a hidden state to express.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footer_text: Option<String>,
 }
 
 /// Configuration for the portfolio site loaded from a TOML config file.
@@ -143,7 +154,8 @@ pub struct LicenseConfig {
 /// # [license]
 /// # images = "All rights reserved."
 /// # contact = "you@example.com"
-/// # source = "https://git.daveynet.xyz/davey/portfolio"
+/// # source = "https://github.com/you/portfolio"
+/// # footer_text = "License"
 ///
 /// [sections]
 /// about_title = "About Me"
@@ -224,18 +236,47 @@ impl SiteConfig {
     }
 
     /// Address for licensing enquiries, if one is configured.
+    ///
+    /// An empty or whitespace-only value is treated as unset, so a stray
+    /// `contact = ""` cannot render a sentence that trails off into nothing.
     #[must_use]
     pub fn license_contact(&self) -> Option<&str> {
-        self.license.as_ref().and_then(|l| l.contact.as_deref())
+        self.license
+            .as_ref()
+            .and_then(|l| l.contact.as_deref())
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
     }
 
     /// Public URL for this site's source.
+    ///
+    /// An empty value falls back to the default: `href=""` would render a "Source"
+    /// link that silently reloads the current page, which is worse than one pointing
+    /// at upstream.
     #[must_use]
     pub fn source_url(&self) -> &str {
         self.license
             .as_ref()
             .and_then(|l| l.source.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .unwrap_or(DEFAULT_SOURCE_URL)
+    }
+
+    /// Label for the footer link to the license section, or `None` when the link
+    /// should not render at all.
+    ///
+    /// Unset yields [`DEFAULT_LICENSE_FOOTER_TEXT`]; an empty string suppresses the
+    /// link. That asymmetry with [`Self::source_url`] is deliberate — hiding a
+    /// navigational link is a reasonable thing to want, whereas hiding the source
+    /// link would leave the GPL notice pointing nowhere.
+    #[must_use]
+    pub fn license_footer_text(&self) -> Option<&str> {
+        match self.license.as_ref().and_then(|l| l.footer_text.as_deref()) {
+            None => Some(DEFAULT_LICENSE_FOOTER_TEXT),
+            Some(t) if t.trim().is_empty() => None,
+            Some(t) => Some(t.trim()),
+        }
     }
 }
 
@@ -687,6 +728,62 @@ site_tagline = "Test"
             ..SiteConfig::default()
         };
         assert_eq!(config.license_contact(), Some("me@example.com"));
+    }
+
+    #[test]
+    fn test_empty_strings_are_treated_as_unset() {
+        let config = SiteConfig {
+            license: Some(LicenseConfig {
+                contact: Some("   ".to_string()),
+                source: Some(String::new()),
+                ..LicenseConfig::default()
+            }),
+            ..SiteConfig::default()
+        };
+
+        // A stray empty value must not render a sentence trailing off into nothing,
+        // nor an href="" that silently reloads the current page.
+        assert_eq!(config.license_contact(), None);
+        assert_eq!(config.source_url(), DEFAULT_SOURCE_URL);
+    }
+
+    #[test]
+    fn test_license_footer_text_defaults_and_suppression() {
+        // Unset: the link renders with the default label.
+        assert_eq!(
+            SiteConfig::default().license_footer_text(),
+            Some(DEFAULT_LICENSE_FOOTER_TEXT)
+        );
+
+        let renamed = SiteConfig {
+            license: Some(LicenseConfig {
+                footer_text: Some("Rights".to_string()),
+                ..LicenseConfig::default()
+            }),
+            ..SiteConfig::default()
+        };
+        assert_eq!(renamed.license_footer_text(), Some("Rights"));
+
+        // Empty string means "hide the link", not "fall back to the default" — the
+        // one field where an empty value is a deliberate instruction.
+        let hidden = SiteConfig {
+            license: Some(LicenseConfig {
+                footer_text: Some(String::new()),
+                ..LicenseConfig::default()
+            }),
+            ..SiteConfig::default()
+        };
+        assert_eq!(hidden.license_footer_text(), None);
+    }
+
+    #[test]
+    fn test_default_source_url_points_at_the_public_repo() {
+        // The footer and About page both surface this; a wrong value here ships a
+        // dead link on every deployment that does not override it.
+        assert_eq!(
+            DEFAULT_SOURCE_URL,
+            "https://github.com/Davey-Hughes/portfolio"
+        );
     }
 
     #[cfg(feature = "ssr")]

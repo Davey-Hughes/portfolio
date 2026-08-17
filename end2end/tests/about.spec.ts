@@ -99,4 +99,64 @@ test.describe("About Page", () => {
       "commercial use, email",
     );
   });
+
+  test("should point the source link at the configured repository", async ({
+    page,
+  }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    // The fixture config sets no [license].source, so this is DEFAULT_SOURCE_URL.
+    const source = page.locator(".about-license a", { hasText: "Source" });
+    await expect(source).toHaveAttribute(
+      "href",
+      "https://github.com/Davey-Hughes/portfolio",
+    );
+  });
+
+  test("should expose the license section as an anchor target", async ({
+    page,
+  }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    // The footer links to /about#license, so the id is load-bearing, not decorative.
+    await expect(page.locator("section#license.about-license")).toBeVisible();
+  });
+
+  test("should render the licensing contact as plain text, never a mailto link", async ({
+    page,
+  }) => {
+    await page.goto("/about", { waitUntil: "networkidle" });
+
+    // Deliberately not a link, so the address is not trivially harvestable.
+    await expect(
+      page.locator(".about-license a[href^='mailto:']"),
+    ).toHaveCount(0);
+  });
+});
+
+test.describe("Footer license link", () => {
+  test("should link from the footer to the license section", async ({
+    page,
+  }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+
+    const link = page.locator(".footer-license a");
+    await expect(link).toBeVisible();
+    await expect(link).toHaveText("License");
+    await expect(link).toHaveAttribute("href", "/about#license");
+  });
+
+  test("should reach the license section when the footer link is clicked", async ({
+    page,
+  }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+
+    await page.locator(".footer-license a").click();
+
+    await expect(page).toHaveURL(/\/about#license$/);
+
+    // Reaching the URL is not the point — the section has to actually be on screen.
+    // A hash that resolves but never scrolls looks broken to the reader.
+    await expect(page.locator("section#license.about-license")).toBeInViewport();
+  });
 });

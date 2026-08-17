@@ -1,3 +1,4 @@
+use crate::config::SiteConfig;
 use crate::server::{
     get_about_content, get_all_gallery_photos, get_galleries, get_gallery_data_by_name,
     get_home_gallery_config, get_home_gallery_data, get_site_config,
@@ -218,14 +219,27 @@ fn Footer() -> impl IntoView {
                 view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
             }>
                 {move || {
-                    let copyright = config
-                        .get()
-                        .and_then(std::result::Result::ok)
+                    let cfg = config.get().and_then(std::result::Result::ok);
+                    let copyright = cfg
+                        .as_ref()
                         .map_or_else(
                             || { "© 2025 Your Photography. All rights reserved.".to_string() },
-                            |cfg| cfg.copyright(),
+                            SiteConfig::copyright,
                         );
-                    view! { <p>{copyright}</p> }
+                    let license_link = cfg
+                        .as_ref()
+                        .and_then(|c| c.license_footer_text().map(str::to_string));
+                    view! {
+                        <p>{copyright}</p>
+                        {license_link
+                            .map(|text| {
+                                view! {
+                                    <p class="footer-license">
+                                        <A href="/about#license">{text}</A>
+                                    </p>
+                                }
+                            })}
+                    }
                 }}
             </Suspense>
         </footer>
@@ -1752,7 +1766,7 @@ fn LicenseSection() -> impl IntoView {
     let config = Resource::new(|| (), |()| async { get_site_config().await });
 
     view! {
-        <section class="about-license">
+        <section class="about-license" id="license">
             <h2>"License"</h2>
             <Suspense fallback=|| {
                 view! { <p class="license-loading">"Loading..."</p> }
@@ -1773,11 +1787,10 @@ fn LicenseSection() -> impl IntoView {
                                     {note.map(|n| view! { <p>{n}</p> })}
                                     {contact
                                         .map(|c| {
-                                            let mailto = format!("mailto:{c}");
                                             view! {
                                                 <p>
                                                     "For print, editorial, or commercial use, email "
-                                                    <a href=mailto>{c}</a>
+                                                    <span class="license-contact">{c}</span>
                                                     "."
                                                 </p>
                                             }

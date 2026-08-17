@@ -23,7 +23,8 @@ site_tagline = "Photography"
 # [license]
 # images = "All rights reserved."                        # your photograph terms
 # contact = "you@example.com"                            # licensing enquiries
-# source = "https://git.daveynet.xyz/davey/portfolio"    # where your source lives
+# source = "https://github.com/you/portfolio"            # your source; defaults to upstream
+# footer_text = "License"                                # footer link label; "" hides the link
 
 # Optional: Control the order galleries appear in the nav bar.
 # Each entry is a gallery slug (the lowercased directory name in public/images/
