@@ -1,0 +1,60 @@
+# cargo-deny configuration. .forgejo/workflows/advisories.yml runs the advisories
+# check against it, and so can you, checking the same graph CI does:
+#
+#   cargo deny --locked check advisories
+#
+# Only that check is configured here. A bare `cargo deny check` runs all four, and
+# licenses, which this file does not configure, then rejects every dependency.
+#
+# [graph] turns every feature on. The crate declares no default features, so without
+# it the graph has no ssr half, and tokio (ssr-only) drops out of the check without a
+# word. It is set here rather than on the command line so the local command and CI
+# check the same graph.
+#
+# [advisories] keeps cargo-deny 0.20.2's defaults but one: a vulnerability, notice
+# or unmaintained advisory fails the check, and so does an unsound one on any crate.
+# That is `unsound = "all"`; the default, "workspace", drops unsound advisories on
+# transitive crates without even a note, which is how event-listener's
+# RUSTSEC-2026-0221 passed here before. A yanked crate only warns. How to accept a
+# finding, by an `ignore` entry or for everything at once, is in the workflow's
+# header.
+#
+# An advisory with a semver-compatible fix does not belong here: `cargo update -p`
+# is the fix. That is how crossbeam-epoch (RUSTSEC-2026-0204), tokio
+# (RUSTSEC-2026-0386) and event-listener (RUSTSEC-2026-0221) were cleared on
+# 2026-10-27, when this check was added.
+#
+# Matched against the RustSec database on 2026-10-27.
+
+[graph]
+all-features = true
+
+[advisories]
+unsound = "all"
+ignore = [
+  # paste 1.0.15, via either_of, leptos, reactive_graph, reactive_stores, tachys
+  # and the little_exif dev-dependency.
+  { id = "RUSTSEC-2024-0436", reason = """\
+    Unmaintained, not vulnerable, and no release will follow: its repository is \
+    archived. It is a proc macro, so it runs while Leptos compiles and none of it \
+    ships. Revisit when a Leptos release drops it (pastey is the named successor).""" },
+
+  # proc-macro-error2 2.0.1, via leptos_macro, leptos_router_macro,
+  # reactive_stores_macro and rstml's syn_derive.
+  { id = "RUSTSEC-2026-0173", reason = """\
+    Unmaintained, not vulnerable, with no release to move to. It is a helper for \
+    proc macros, so it runs while Leptos's macros compile and none of it ships. \
+    Revisit when a Leptos release moves its macros off it.""" },
+
+  # quick-xml 0.37.5, via little_exif 0.6.23, a dev-dependency.
+  { id = "RUSTSEC-2026-0194", reason = """\
+    Not shipped: little_exif is a dev-dependency, used only by the gen_fixtures \
+    example to write EXIF into fixture JPEGs it generates itself. The fix is \
+    quick-xml 0.41, and little_exif 0.6.23, the newest release, requires 0.37. \
+    Revisit when a little_exif release moves to quick-xml 0.41.""" },
+  { id = "RUSTSEC-2026-0195", reason = """\
+    Not shipped: little_exif is a dev-dependency, used only by the gen_fixtures \
+    example to write EXIF into fixture JPEGs it generates itself. The fix is \
+    quick-xml 0.41, and little_exif 0.6.23, the newest release, requires 0.37. \
+    Revisit when a little_exif release moves to quick-xml 0.41.""" },
+]
