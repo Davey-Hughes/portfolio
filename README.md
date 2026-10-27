@@ -23,8 +23,10 @@ WebP and cached on disk on first request.
 ## Prerequisites
 
 The Rust toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml)
-(nightly + the `wasm32-unknown-unknown` target), so `rustup` installs the right
-toolchain automatically the first time you build. You also need:
+(a dated nightly + the `wasm32-unknown-unknown` target), so `rustup` installs the right
+toolchain automatically the first time you build. To bump it, change the date and run
+`cargo ci` (CI's fmt, clippy and test commands); fix what it flags, or keep the old date.
+Then let the PR's CI run, since `release-checks` builds the release bundle. You also need:
 
 | Tool | Why | Install |
 | --- | --- | --- |
@@ -89,7 +91,7 @@ portfolio/
 ├── Dockerfile                # multi-stage build → minimal Alpine runtime
 ├── Cargo.toml                # dependencies + [package.metadata.leptos] config
 ├── focal-points.toml.example # reference for per-photo focal_point overrides
-└── rust-toolchain.toml       # pins nightly + wasm32 target
+└── rust-toolchain.toml       # pins a dated nightly + wasm32 target
 ```
 
 > **Note on `.env`:** the only thing the app reads from `.env` (via `dotenvy`)

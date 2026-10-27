@@ -203,8 +203,7 @@ fn find_images_recursive_with_gallery(
         // Extract metadata from the primary image
         let filename_str = primary_full_path
             .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_default();
+            .map_or_default(|f| f.to_string_lossy().to_string());
 
         // Create slug from filename (without extension), stripping leading numbers
         let slug = strip_leading_number_and_dash(&filename_str)

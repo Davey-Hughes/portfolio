@@ -10,9 +10,9 @@
 #    ubuntu-latest had it preinstalled and `rustup show` was enough)
 #  - Swatinem/rust-cache is a GitHub-marketplace action; caching is done with
 #    actions/cache and explicit paths instead. Consequence: an entry is written
-#    once per Cargo.lock hash and never refreshed, so the dep artifacts stay
-#    cached but this crate's own artifacts rebuild each run. The dep tree is the
-#    expensive part, so that is the bulk of the win either way.
+#    once per rust-toolchain.toml + Cargo.lock hash and never refreshed, so the
+#    dep artifacts stay cached but this crate's own artifacts rebuild each run.
+#    The dep tree is the expensive part, so that is the bulk of the win either way.
 #  - the image is built with `docker buildx build --push` against the host Docker
 #    daemon (the runner mounts its socket in), not docker/build-push-action
 #  - the registry is forge.daveynet.xyz — NOT the git host — authed with the
@@ -40,25 +40,29 @@ jobs:
     runs-on: docker # runner default image: node + git + curl, so the JS actions below work
     steps:
       - uses: https://code.forgejo.org/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      # rust-toolchain.toml pins the channel (nightly), the rustfmt/clippy components,
-      # and the wasm32 target; `rustup show` installs exactly that. Installed with
+      # rust-toolchain.toml pins a dated nightly, the rustfmt/clippy components, and the
+      # wasm32 target; `rustup toolchain install` (no argument) installs exactly that, and
+      # unlike `rustup show` it fails the step when the install fails. Installed with
       # `--default-toolchain none` so rustup does NOT first pull stable, then discard it.
       - name: Install Rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          rustup show
+          rustup toolchain install
       # Cache the cargo registry + target dir across runs — a Leptos dep tree is large,
       # so a cold clippy+test compile is minutes; this makes unchanged-dep runs quick.
+      # rust-toolchain.toml is in the key AND the restore prefix (in every job): otherwise
+      # a pin bump restores a target/ the old toolchain built, recompiles all of it, and
+      # never saves the result, because the Cargo.lock-only key still hit exactly.
       - uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-ssr-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-ssr-
+          key: cargo-ssr-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-ssr-${{ hashFiles('rust-toolchain.toml') }}-
       - name: Format
         run: cargo fmt --all --check
       # `ssr` is the server build; the majority of the crate is behind it, so linting
@@ -94,7 +98,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          rustup show
+          rustup toolchain install
       - uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -103,8 +107,8 @@ jobs:
             target
           # Its own key namespace: the whole dep tree compiles under a different
           # feature set here, so these artifacts share nothing with the `rust` job's.
-          key: cargo-hydrate-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-hydrate-
+          key: cargo-hydrate-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-hydrate-${{ hashFiles('rust-toolchain.toml') }}-
       # The `rust` job's clippy runs `--features ssr`, which never compiles the
       # client-only code — the 15 `#[cfg(feature = "hydrate")]` sites across
       # src/app.rs (the pinch-zoom anchor and touch handlers), src/config.rs and
@@ -146,7 +150,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none
           . "$HOME/.cargo/env"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          rustup show
+          rustup toolchain install
       - uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -156,8 +160,8 @@ jobs:
           # Its own namespace: this job compiles the wasm32 target under the wasm-release
           # profile and builds the gen_fixtures example, neither of which the rust or
           # hydrate jobs produce.
-          key: cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-release-
+          key: cargo-release-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-release-${{ hashFiles('rust-toolchain.toml') }}-
       # Read from the Dockerfile's ARG rather than duplicated here, so CI and the image
       # cannot drift: cargo-leptos embeds a wasm-bindgen schema that must match the crate
       # exactly, and a copy of the number in two files is a copy that eventually

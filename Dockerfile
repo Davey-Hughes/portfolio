@@ -32,6 +32,16 @@ RUN curl --proto '=https' --tlsv1.3 -LsSf \
       "https://github.com/leptos-rs/cargo-leptos/releases/download/v${CARGO_LEPTOS_VERSION}/cargo-leptos-installer.sh" | sh
 
 WORKDIR /work
+
+# The base image's nightly floats; rust-toolchain.toml pins a dated one (the same
+# toolchain CI lints with). Install it from the pin alone, in its own layer, so it
+# is cached until the pin changes rather than re-downloaded on every build.
+# With no argument, `rustup toolchain install` installs what the pin names (rustup
+# >= 1.28). Not `rustup show`: it exits 0 even when that install fails, which would
+# cache a layer with no toolchain in it.
+COPY rust-toolchain.toml .
+RUN rustup toolchain install
+
 COPY . .
 
 # Verify the pinned pair before spending minutes on a compile. Without this, drift

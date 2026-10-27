@@ -320,8 +320,7 @@ fn MosaicPhotoGridItem(
     // Build image style with focal point if available
     let img_style = focal_point
         .as_ref()
-        .map(|fp| format!("object-position: {};", fp.to_css_position()))
-        .unwrap_or_default();
+        .map_or_default(|fp| format!("object-position: {};", fp.to_css_position()));
 
     // First 3 images get high priority
     let is_priority = index.is_none_or(|idx| idx < 3);
