@@ -82,7 +82,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM alpine:latest AS runner
 
-RUN apk add --no-cache curl
+# `apk upgrade` first, so a rebuild ships Alpine's security fixes before
+# alpine:latest is republished with them.
+RUN apk upgrade --no-cache && apk add --no-cache curl
 
 WORKDIR /app
 
