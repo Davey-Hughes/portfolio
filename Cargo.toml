@@ -97,7 +97,8 @@ required-features = ["ssr"]
 name = "alloc_profile"
 required-features = ["ssr"]
 
-# Writes the e2e fixture gallery into public/images/home/. CI runs this before the
+# Writes the e2e fixture gallery into $FIXTURE_IMAGES_DIR (default public/images; CI
+# uses target/e2e-fixtures/images and serves it via IMAGES_DIR). CI runs this before the
 # Playwright suite, because public/images/* is gitignored and a fresh checkout has no
 # photos — without it every gallery/photo-detail spec fails on a missing selector.
 [[example]]

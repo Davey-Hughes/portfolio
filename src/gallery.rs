@@ -110,13 +110,9 @@ fn get_default_image_params() -> (u32, u8) {
     }
 }
 
-/// Helper function to discover all gallery directories in public/images/
+/// Helper function to discover all gallery directories under [`crate::paths::images_root`]
 pub fn discover_gallery_directories() -> Vec<String> {
-    let images_base = if Path::new("public/images").exists() {
-        "public/images"
-    } else {
-        "./images"
-    };
+    let images_base = crate::paths::images_root();
 
     let mut gallery_dirs = Vec::new();
 
@@ -921,24 +917,17 @@ pub fn load_galleries() -> Vec<GalleryInfo> {
 
 /// Load photos from home directory
 pub fn load_home_photos() -> Vec<PhotoInfo> {
-    let gallery_path = std::env::var("GALLERY_PATH").unwrap_or_else(|_| {
-        if Path::new("public/images/home").exists() {
-            "public/images/home".to_string()
-        } else {
-            "./images/home".to_string()
-        }
-    });
+    let gallery_path = crate::paths::home_gallery_dir();
 
     // Create directory if it doesn't exist
-    if !Path::new(&gallery_path).exists() {
+    if !gallery_path.exists() {
         fs::create_dir_all(&gallery_path).ok();
     }
 
     let mut photos = Vec::new();
-    let gallery_path_buf = Path::new(&gallery_path).to_path_buf();
-    let images_base = Path::new("public/images");
+    let images_base = crate::paths::images_root();
 
-    find_images_recursive(&gallery_path_buf, images_base, &mut photos);
+    find_images_recursive(&gallery_path, &images_base, &mut photos);
     photos.sort_by(|a, b| {
         // Sort by subfolder first, then by filename
         match (&a.subfolder, &b.subfolder) {
@@ -961,14 +950,14 @@ pub fn load_home_photos() -> Vec<PhotoInfo> {
 pub fn load_gallery_photos(gallery_name: &str) -> Option<Vec<PhotoInfo>> {
     let gallery_roots = discover_gallery_directories();
     let mut photos = Vec::new();
-    let images_base = Path::new("public/images");
+    let images_base = crate::paths::images_root();
 
     for base_path in gallery_roots {
         let base = Path::new(&base_path);
         if let Some(dir_name) = base.file_name() {
             let slug = dir_name.to_string_lossy().to_lowercase().replace(' ', "-");
             if slug == gallery_name {
-                find_images_for_gallery(base, images_base, &mut photos);
+                find_images_for_gallery(base, &images_base, &mut photos);
                 photos.sort_by(|a, b| {
                     // Sort by subfolder first, then by filename
                     match (&a.subfolder, &b.subfolder) {
@@ -995,7 +984,7 @@ pub fn load_gallery_photos(gallery_name: &str) -> Option<Vec<PhotoInfo>> {
 /// Load photos from all galleries
 pub fn load_all_gallery_photos() -> Vec<PhotoInfo> {
     let mut photos = Vec::new();
-    let images_base = Path::new("public/images");
+    let images_base = crate::paths::images_root();
     let gallery_roots = discover_gallery_directories();
 
     for gallery_path in gallery_roots {
@@ -1009,7 +998,7 @@ pub fn load_all_gallery_photos() -> Vec<PhotoInfo> {
 
             find_images_recursive_with_gallery(
                 gallery_path_buf,
-                images_base,
+                &images_base,
                 &mut photos,
                 &gallery_name,
             );
@@ -1111,6 +1100,7 @@ pub fn default_about_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::EnvVarGuard;
     use serial_test::serial;
     use std::fs;
 
@@ -1431,6 +1421,83 @@ mod tests {
 
         unsafe { std::env::remove_var("GALLERY_PATH") };
         fs::remove_dir_all(&temp_gallery).ok();
+    }
+
+    /// An `IMAGES_DIR` tree in a temp dir, well away from `public/images`: `home/`
+    /// and `nature/`, one small JPEG in each.
+    fn images_dir_with_two_galleries() -> tempfile::TempDir {
+        let root = tempfile::TempDir::new().unwrap();
+        for (gallery, photo) in [("home", "contrail.jpg"), ("nature", "bird.jpg")] {
+            let dir = root.path().join(gallery);
+            fs::create_dir_all(&dir).unwrap();
+            image::RgbImage::new(4, 3).save(dir.join(photo)).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    #[serial]
+    fn discover_gallery_directories_lists_images_dir() {
+        let root = images_dir_with_two_galleries();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let mut found = discover_gallery_directories();
+
+        found.sort();
+        let expected: Vec<String> = ["home", "nature"]
+            .iter()
+            .map(|g| root.path().join(g).to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    #[serial]
+    fn load_gallery_photos_finds_photos_under_images_dir() {
+        let root = images_dir_with_two_galleries();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let photos = load_gallery_photos("nature");
+
+        // The URL is relative to IMAGES_DIR, which is what the /images mount serves.
+        let urls: Option<Vec<String>> =
+            photos.map(|photos| photos.into_iter().map(|p| p.original_url).collect());
+        assert_eq!(urls, Some(vec!["/images/nature/bird.jpg".to_string()]));
+    }
+
+    #[test]
+    #[serial]
+    fn load_home_photos_reads_home_under_images_dir() {
+        let root = images_dir_with_two_galleries();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let urls: Vec<String> = load_home_photos()
+            .into_iter()
+            .map(|p| p.original_url)
+            .collect();
+
+        assert_eq!(urls, vec!["/images/home/contrail.jpg".to_string()]);
+    }
+
+    #[test]
+    #[serial]
+    fn load_all_gallery_photos_reads_every_gallery_under_images_dir() {
+        let root = images_dir_with_two_galleries();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let urls: Vec<String> = load_all_gallery_photos()
+            .into_iter()
+            .map(|p| p.original_url)
+            .collect();
+
+        assert_eq!(
+            urls,
+            vec![
+                "/images/home/contrail.jpg".to_string(),
+                "/images/nature/bird.jpg".to_string()
+            ]
+        );
     }
 
     #[test]

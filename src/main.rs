@@ -78,21 +78,6 @@ mod cache_middleware {
     }
 }
 
-/// Resolve a directory path from an env var, falling back to the first
-/// existing path in `fallbacks` (last entry is used if none exist).
-#[cfg(feature = "ssr")]
-fn resolve_dir(env_var: &str, fallbacks: &[&str]) -> String {
-    if let Ok(val) = std::env::var(env_var) {
-        return val;
-    }
-    for candidate in fallbacks {
-        if std::path::Path::new(candidate).exists() {
-            return (*candidate).to_string();
-        }
-    }
-    fallbacks.last().copied().unwrap_or(".").to_string()
-}
-
 /// Response compression for the whole router: tower-http's default rules (which already
 /// leave images alone), plus video.
 #[cfg(feature = "ssr")]
@@ -253,6 +238,7 @@ async fn main() {
     use portfolio::app::{App, shell};
     use portfolio::image_cache::{cleanup_cache, prewarm_cache};
     use portfolio::image_params::ImageParams;
+    use portfolio::paths::{images_root, resolve_dir};
     use std::sync::Arc;
     use tower::ServiceBuilder;
     use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
@@ -267,7 +253,10 @@ async fn main() {
     let leptos_options = conf.leptos_options;
     let routes = generate_route_list(App);
 
-    let images_dir = resolve_dir("IMAGES_DIR", &["public/images", "./images"]);
+    // The gallery code reads images_root() too, so the /images mount below and the
+    // gallery listing agree on where the photos are, as long as the root does not
+    // change while the server runs: this resolves it once, the gallery code per call.
+    let images_dir = images_root().to_string_lossy().into_owned();
     let content_dir = resolve_dir("ABOUT_CONTENT_PATH", &["public/content", "./content"]);
     let cache_dir = resolve_dir("IMAGE_CACHE_DIR", &["public/cache", "./cache"]);
     let readme_dir = resolve_dir("README_ASSETS_DIR", &["public/readme", "./readme"]);

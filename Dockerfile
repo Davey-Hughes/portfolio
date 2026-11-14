@@ -108,8 +108,8 @@ ENV LEPTOS_HASH_FILES="true"
 # settle on ./readme for the life of the process. With the path fixed, a folder created
 # on the volume later is served without a restart.
 ENV README_ASSETS_DIR=/app/public/readme
-# ENV IMAGES_DIR=/app/images
-# ENV GALLERY_PATH=/app/public/home
+# The /images mount resolves once at boot, gallery listing per call: pin both to the volume.
+ENV IMAGES_DIR=/app/public/images
 
 # Volume for mounting images at runtime
 VOLUME ["/app/public"]

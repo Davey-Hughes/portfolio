@@ -8,11 +8,13 @@
 - Playwright end-to-end tests (`end2end/`, 168 tests over chromium + firefox). Run by
   CI's `release-checks` job. Locally, generate the fixture gallery first — most of the
   suite needs photos and `public/images/*` is gitignored, so without them ~30 tests fail
-  on a missing selector:
+  on a missing selector. Everything below lives in `target/e2e-fixtures/`, as in CI, so
+  it is safe in a checkout whose `public/` holds real photos: keep `IMAGE_CACHE_DIR`,
+  or the server prunes `public/cache` of every entry the fixtures don't account for.
   ```
-  cargo run --release --example gen_fixtures --features ssr
-  CONFIG_PATH=target/e2e-fixtures/config.toml ABOUT_CONTENT_PATH=target/e2e-fixtures \
-    README_ASSETS_DIR=target/e2e-fixtures/readme cargo leptos serve --release &
+  rm -rf target/e2e-fixtures
+  FIXTURE_IMAGES_DIR=target/e2e-fixtures/images cargo run --release --example gen_fixtures --features ssr
+  CONFIG_PATH=target/e2e-fixtures/config.toml ABOUT_CONTENT_PATH=target/e2e-fixtures IMAGES_DIR=target/e2e-fixtures/images IMAGE_CACHE_DIR=target/e2e-fixtures/cache README_ASSETS_DIR=target/e2e-fixtures/readme cargo leptos serve --release &
   cd end2end && npm ci && npx playwright install chromium firefox && CI=1 npx playwright test
   ```
   Prefer that over `cargo leptos end-to-end`: in cargo-leptos 0.3.7 it panics on teardown

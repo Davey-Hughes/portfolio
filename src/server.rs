@@ -204,9 +204,8 @@ pub async fn get_home_gallery_config() -> Result<Option<crate::types::GalleryCon
 {
     #[cfg(feature = "ssr")]
     {
-        use std::path::Path;
-        let home_path = Path::new("public/images/home");
-        Ok(crate::gallery::load_gallery_config(home_path))
+        let home_path = crate::paths::home_gallery_dir();
+        Ok(crate::gallery::load_gallery_config(&home_path))
     }
     #[cfg(not(feature = "ssr"))]
     {
@@ -276,7 +275,6 @@ pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> 
     #[cfg(feature = "ssr")]
     {
         use leptos::logging::log;
-        use std::path::Path;
 
         let cache_key = "home_gallery".to_string();
 
@@ -290,8 +288,8 @@ pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> 
         }
 
         let photos = crate::gallery::load_home_photos();
-        let home_path = Path::new("public/images/home");
-        let config = crate::gallery::load_gallery_config(home_path);
+        let home_path = crate::paths::home_gallery_dir();
+        let config = crate::gallery::load_gallery_config(&home_path);
 
         let (data, ttl) = build_gallery_data(photos, config.as_ref());
         let result = Arc::new(data);
@@ -371,7 +369,6 @@ pub async fn get_gallery_data_by_name(
     #[cfg(feature = "ssr")]
     {
         use leptos::logging::log;
-        use std::path::Path;
 
         let cache_key = format!("gallery_{gallery_name}");
 
@@ -387,7 +384,7 @@ pub async fn get_gallery_data_by_name(
         let photos = crate::gallery::load_gallery_photos(&gallery_name)
             .ok_or_else(|| ServerFnError::new("Gallery not found"))?;
 
-        let gallery_path = Path::new("public/images").join(&gallery_name);
+        let gallery_path = crate::paths::images_root().join(&gallery_name);
         let config = crate::gallery::load_gallery_config(&gallery_path);
 
         let (data, ttl) = build_gallery_data(photos, config.as_ref());
@@ -480,6 +477,7 @@ pub fn prewarm_all_photos_cache() {
 #[cfg(all(feature = "ssr", test))]
 mod tests {
     use super::*;
+    use crate::test_support::EnvVarGuard;
     use crate::types::{GalleryData, PhotoInfo};
 
     fn empty_gallery_data() -> Arc<GalleryData> {
@@ -830,6 +828,82 @@ mod tests {
         use notify::EventKind;
         assert!(!watch_event_is_relevant(EventKind::Any));
         assert!(!watch_event_is_relevant(EventKind::Other));
+    }
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    /// A one-gallery `IMAGES_DIR` in a temp dir: `<gallery>/` holding one small JPEG
+    /// and a `gallery.toml` with the given contents.
+    fn images_dir_with_gallery(gallery: &str, gallery_toml: &str) -> tempfile::TempDir {
+        let root = tempfile::TempDir::new().unwrap();
+        let dir = root.path().join(gallery);
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(dir.join("photo.jpg"))
+            .unwrap();
+        std::fs::write(dir.join("gallery.toml"), gallery_toml).unwrap();
+        root
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn home_gallery_config_is_read_from_images_dir() {
+        // The checked-in public/images/home/gallery.toml sets columns = 4.
+        let root = images_dir_with_gallery("home", "columns = 7\n");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let config = block_on(get_home_gallery_config());
+
+        assert_eq!(config.unwrap().and_then(|c| c.columns), Some(7));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn home_gallery_data_uses_the_home_config_under_images_dir() {
+        // The checked-in public/images/home/gallery.toml turns the mosaic on, so a
+        // config lookup that still went there would lay this photo out as a mosaic.
+        let root = images_dir_with_gallery("home", "use_mosaic = false\n");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        // MOSAIC_CACHE is process-wide: clear it first so a leftover "home_gallery"
+        // entry cannot stand in for this load, and again before asserting so no entry
+        // is left pointing at a temp dir that is about to be deleted.
+        invalidate_caches();
+        let data = block_on(get_home_gallery_data());
+        invalidate_caches();
+
+        let data = data.unwrap();
+        assert_eq!(data.photos.len(), 1);
+        assert!(
+            data.mosaic_layout.is_none(),
+            "its gallery.toml says no mosaic"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn gallery_data_uses_the_gallery_config_under_images_dir() {
+        let root = images_dir_with_gallery("images-dir-mosaic", "use_mosaic = true\n");
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        // Cleared on both sides for the same reason as the home gallery test above.
+        invalidate_caches();
+        let data = block_on(get_gallery_data_by_name("images-dir-mosaic".to_string()));
+        invalidate_caches();
+
+        let data = data.unwrap();
+        assert_eq!(data.photos.len(), 1);
+        assert!(
+            data.mosaic_layout.is_some(),
+            "its gallery.toml asks for a mosaic"
+        );
     }
 }
 

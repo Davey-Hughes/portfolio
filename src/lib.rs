@@ -11,6 +11,12 @@ pub mod mosaic;
 pub mod gallery;
 
 #[cfg(feature = "ssr")]
+pub mod paths;
+
+#[cfg(all(test, feature = "ssr"))]
+mod test_support;
+
+#[cfg(feature = "ssr")]
 pub mod image_params;
 
 #[cfg(feature = "ssr")]

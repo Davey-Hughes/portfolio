@@ -216,16 +216,25 @@ jobs:
       # public/images/* is gitignored, so this is the only source of photos in CI. Writes
       # 5 JPEGs with EXIF lifted from real frames across two galleries — `home` plus a
       # second one, because discovery omits `home` from the nav gallery list, and specs
-      # looking for a gallery link otherwise fall through to a photo thumbnail. Also
-      # writes config.toml + about.txt into target/e2e-fixtures/ (consumed by CONFIG_PATH
-      # and ABOUT_CONTENT_PATH below) so the site name — and therefore every title
+      # looking for a gallery link otherwise fall through to a photo thumbnail — and a
+      # home/gallery.toml mirroring the checked-in one, so the homepage keeps its mosaic.
+      # They go into target/e2e-fixtures/images rather than public/images, so the server
+      # can only find them through IMAGES_DIR (set below): this run is the regression
+      # guard for gallery listing following IMAGES_DIR. Also writes config.toml +
+      # about.txt into target/e2e-fixtures/ (consumed by CONFIG_PATH and
+      # ABOUT_CONTENT_PATH below) so the site name — and therefore every title
       # assertion — is deterministic instead of depending on SiteConfig::default(). And
       # writes target/e2e-fixtures/readme/fixture/ (consumed by README_ASSETS_DIR below):
       # an image and a video the /readme mount serves, plus a .toml and a directory
       # named like an image that it must refuse; and readme-outside.webp beside
       # readme/, a real file for the traversal test to aim at.
       - name: Generate the fixture gallery
-        run: cargo run --release --example gen_fixtures --features ssr
+        env:
+          FIXTURE_IMAGES_DIR: target/e2e-fixtures/images
+        run: |
+          # target/ is restored from cache: start clean, or files gen_fixtures stopped writing linger.
+          rm -rf target/e2e-fixtures
+          cargo run --release --example gen_fixtures --features ssr
       # 52 MB, and `npm ci` deletes and rebuilds node_modules from scratch, so the
       # install is skipped entirely on a hit. If this runner's actions/cache does not
       # populate cache-hit, the condition is simply false and npm ci runs as before — no
@@ -264,6 +273,12 @@ jobs:
       # rely on. README_ASSETS_DIR points the /readme mount at its fixtures; without it
       # the mount has nothing to serve and readme-assets.spec.ts fails.
       #
+      # IMAGES_DIR points at the fixture gallery generated above; public/images holds no
+      # photos here, so a server that listed galleries from anywhere else would show
+      # none. IMAGE_CACHE_DIR keeps the transcoded copies beside the fixtures, which is
+      # the same recipe CLAUDE.md gives for a local run: there, the default public/cache
+      # would be pruned of every entry the fixture photos do not account for.
+      #
       # Both reporters: `line` puts failures directly in the job log, `html` writes the
       # report the upload step below collects. The config's default is html alone, which
       # in CI meant failures were only visible if you went and fetched the report.
@@ -272,6 +287,8 @@ jobs:
           CONFIG_PATH: target/e2e-fixtures/config.toml
           ABOUT_CONTENT_PATH: target/e2e-fixtures
           README_ASSETS_DIR: target/e2e-fixtures/readme
+          IMAGES_DIR: target/e2e-fixtures/images
+          IMAGE_CACHE_DIR: target/e2e-fixtures/cache
         run: |
           set -u
           cargo leptos serve --release > /tmp/e2e-server.log 2>&1 &

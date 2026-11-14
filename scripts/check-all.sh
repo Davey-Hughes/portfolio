@@ -55,7 +55,9 @@ else
   run cargo leptos build --release
   # Fixture generation is gated in CI too: it is the step that fails when an example stops building
   # against the real feature set, which the test run above does not exercise.
-  run cargo run --release --example gen_fixtures --features ssr
+  # Into target/, as CI does: the default would write fixture photos into public/images.
+  run env FIXTURE_IMAGES_DIR=target/e2e-fixtures/images \
+    cargo run --release --example gen_fixtures --features ssr
 fi
 
 echo
