@@ -95,7 +95,7 @@ COPY --from=builder /out/site /app/site
 COPY --from=builder /out/hash.txt /app/
 
 # Create images directory for runtime mounting
-RUN mkdir -p /app/public/images /app/public/content
+RUN mkdir -p /app/public/images /app/public/content /app/public/readme
 
 ENV RUST_LOG="info"
 ENV LEPTOS_SITE_ADDR="0.0.0.0:8080"
@@ -103,6 +103,11 @@ ENV LEPTOS_SITE_ROOT=./site
 # Match hash-files=true so HydrationScripts/HashedStylesheet emit the hashed pkg
 # names (resolved via the hash.txt copied above). Local dev opts out via .env.
 ENV LEPTOS_HASH_FILES="true"
+# Set outright rather than left to the default lookup: on an existing volume the mkdir
+# above never lands, so public/readme can be missing at boot, and the lookup would then
+# settle on ./readme for the life of the process. With the path fixed, a folder created
+# on the volume later is served without a restart.
+ENV README_ASSETS_DIR=/app/public/readme
 # ENV IMAGES_DIR=/app/images
 # ENV GALLERY_PATH=/app/public/home
 

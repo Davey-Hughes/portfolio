@@ -14,6 +14,9 @@ pub mod gallery;
 pub mod image_params;
 
 #[cfg(feature = "ssr")]
+pub mod readme_assets;
+
+#[cfg(feature = "ssr")]
 pub mod image_cache;
 
 #[cfg(feature = "hydrate")]

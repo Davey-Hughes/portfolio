@@ -93,6 +93,68 @@ fn resolve_dir(env_var: &str, fallbacks: &[&str]) -> String {
     fallbacks.last().copied().unwrap_or(".").to_string()
 }
 
+/// Response compression for the whole router: tower-http's default rules (which already
+/// leave images alone), plus video.
+#[cfg(feature = "ssr")]
+fn compression_layer()
+-> tower_http::compression::CompressionLayer<impl tower_http::compression::Predicate> {
+    use tower_http::compression::{
+        CompressionLayer, DefaultPredicate, Predicate, predicate::NotForContentType,
+    };
+
+    // Video is compressed already; gzipping it again costs CPU and drops Content-Length and
+    // Accept-Ranges, the header a player needs before it will seek.
+    CompressionLayer::new()
+        .compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/")))
+}
+
+/// The `/readme` mount: screenshots and clips for the READMEs of the owner's repos,
+/// served from `dir` as `/readme/<repo>/<file>`.
+///
+/// `no-cache`, not the year-long `immutable` of `/images` and `/content`: README files
+/// are replaced in place under the same name, and `Last-Modified` turns each
+/// revalidation into a 304 while nothing has changed.
+#[cfg(feature = "ssr")]
+fn readme_routes<S>(dir: &str) -> axum::Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    use axum::http::{HeaderValue, header};
+    use tower::ServiceBuilder;
+    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+
+    axum::Router::new().nest_service(
+        "/readme",
+        ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ))
+            .layer(axum::middleware::from_fn(readme_filter))
+            .service(ServeDir::new(dir).append_index_html_on_directories(false)),
+    )
+}
+
+/// Gate in front of the `/readme` file server: anything but an allowed media file is a
+/// bare 404, decided before the file server looks at the disk.
+#[cfg(feature = "ssr")]
+async fn readme_filter(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if portfolio::readme_assets::is_servable(req.uri().path()) {
+        next.run(req).await
+    } else {
+        axum::http::StatusCode::NOT_FOUND.into_response()
+    }
+}
+
 /// Bounded in-memory cache for rendered HTML responses.
 ///
 /// The cache key embeds the client-supplied Cookie header, so a flood of distinct
@@ -193,9 +255,7 @@ async fn main() {
     use portfolio::image_params::ImageParams;
     use std::sync::Arc;
     use tower::ServiceBuilder;
-    use tower_http::{
-        compression::CompressionLayer, services::ServeDir, set_header::SetResponseHeaderLayer,
-    };
+    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
     // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
     // content-hashed pkg filenames). Never present in the Docker image
@@ -210,9 +270,11 @@ async fn main() {
     let images_dir = resolve_dir("IMAGES_DIR", &["public/images", "./images"]);
     let content_dir = resolve_dir("ABOUT_CONTENT_PATH", &["public/content", "./content"]);
     let cache_dir = resolve_dir("IMAGE_CACHE_DIR", &["public/cache", "./cache"]);
+    let readme_dir = resolve_dir("README_ASSETS_DIR", &["public/readme", "./readme"]);
 
     log!("Serving images from: {}", images_dir);
     log!("Serving content from: {}", content_dir);
+    log!("Serving README assets from: {}", readme_dir);
 
     // Closure captures the Arc'd dirs so the handler doesn't re-resolve them
     // on every request. Image processing is CPU/IO heavy; offload to the
@@ -295,13 +357,14 @@ async fn main() {
                 ))
                 .service(ServeDir::new(&content_dir)),
         )
+        .merge(readme_routes(&readme_dir))
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options)
         .layer(axum::middleware::from_fn_with_state(
             html_cache,
             cache_middleware::html_cache_middleware,
         ))
-        .layer(CompressionLayer::new());
+        .layer(compression_layer());
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
@@ -317,4 +380,74 @@ pub fn main() {
     // no client-side main function
     // unless we want this to work with e.g., Trunk for pure client-side testing
     // see lib.rs for hydration function instead
+}
+
+#[cfg(all(test, feature = "ssr"))]
+mod tests {
+    use super::compression_layer;
+    use axum::body::Body;
+    use axum::http::{Request, Response, header};
+    use std::convert::Infallible;
+    use tower::{Layer, ServiceExt, service_fn};
+
+    /// Comfortably above the default predicate's 32-byte floor.
+    const LARGE: &[u8] = &[b'a'; 1024];
+    /// Under it.
+    const SMALL: &[u8] = b"tiny";
+
+    /// Send one response of `content_type` through the app's compression layer, to a
+    /// client that accepts gzip, and say whether it came back compressed.
+    async fn is_compressed(content_type: &'static str, body: &'static [u8]) -> bool {
+        let inner = service_fn(move |_req: Request<Body>| async move {
+            Ok::<_, Infallible>(
+                Response::builder()
+                    .header(header::CONTENT_TYPE, content_type)
+                    .header(header::CONTENT_LENGTH, body.len())
+                    .body(Body::from(body))
+                    .expect("a valid response"),
+            )
+        });
+        let request = Request::builder()
+            .header(header::ACCEPT_ENCODING, "gzip")
+            .body(Body::empty())
+            .expect("a valid request");
+        let response = compression_layer()
+            .layer(inner)
+            .oneshot(request)
+            .await
+            .expect("the inner service is infallible");
+        response.headers().contains_key(header::CONTENT_ENCODING)
+    }
+
+    #[tokio::test]
+    async fn leaves_video_uncompressed() {
+        for content_type in ["video/mp4", "video/webm"] {
+            assert!(!is_compressed(content_type, LARGE).await, "{content_type}");
+        }
+    }
+
+    #[tokio::test]
+    async fn compresses_html_wasm_and_svg() {
+        for content_type in [
+            "text/html; charset=utf-8",
+            "application/wasm",
+            "image/svg+xml",
+        ] {
+            assert!(is_compressed(content_type, LARGE).await, "{content_type}");
+        }
+    }
+
+    #[tokio::test]
+    async fn keeps_the_default_exclusions() {
+        // Raster images, server-sent events and gRPC are tower-http's own exclusions. The
+        // video rule has to add to them, not replace them.
+        for content_type in ["image/png", "text/event-stream", "application/grpc"] {
+            assert!(!is_compressed(content_type, LARGE).await, "{content_type}");
+        }
+    }
+
+    #[tokio::test]
+    async fn leaves_small_bodies_uncompressed() {
+        assert!(!is_compressed("text/html; charset=utf-8", SMALL).await);
+    }
 }

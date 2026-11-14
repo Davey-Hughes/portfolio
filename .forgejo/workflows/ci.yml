@@ -219,7 +219,11 @@ jobs:
       # looking for a gallery link otherwise fall through to a photo thumbnail. Also
       # writes config.toml + about.txt into target/e2e-fixtures/ (consumed by CONFIG_PATH
       # and ABOUT_CONTENT_PATH below) so the site name — and therefore every title
-      # assertion — is deterministic instead of depending on SiteConfig::default().
+      # assertion — is deterministic instead of depending on SiteConfig::default(). And
+      # writes target/e2e-fixtures/readme/fixture/ (consumed by README_ASSETS_DIR below):
+      # an image and a video the /readme mount serves, plus a .toml and a directory
+      # named like an image that it must refuse; and readme-outside.webp beside
+      # readme/, a real file for the traversal test to aim at.
       - name: Generate the fixture gallery
         run: cargo run --release --example gen_fixtures --features ssr
       # 52 MB, and `npm ci` deletes and rebuilds node_modules from scratch, so the
@@ -257,7 +261,8 @@ jobs:
       # load_config() falls through to SiteConfig::default(), whose site_name is the
       # placeholder "Your Name" — so the specs' "Photography Portfolio" title assertions
       # would only pass if config loading *failed*, which is not something a test should
-      # rely on.
+      # rely on. README_ASSETS_DIR points the /readme mount at its fixtures; without it
+      # the mount has nothing to serve and readme-assets.spec.ts fails.
       #
       # Both reporters: `line` puts failures directly in the job log, `html` writes the
       # report the upload step below collects. The config's default is html alone, which
@@ -266,6 +271,7 @@ jobs:
         env:
           CONFIG_PATH: target/e2e-fixtures/config.toml
           ABOUT_CONTENT_PATH: target/e2e-fixtures
+          README_ASSETS_DIR: target/e2e-fixtures/readme
         run: |
           set -u
           cargo leptos serve --release > /tmp/e2e-server.log 2>&1 &

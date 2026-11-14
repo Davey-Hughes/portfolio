@@ -5,14 +5,14 @@
   `cargo test --lib --no-default-features --features hydrate` (client) — together
   exactly what CI's `rust` and `hydrate` jobs run. The crate declares no default
   features, so `--features ssr` alone is equivalent to the server half.
-- Playwright end-to-end tests (`end2end/`, 154 tests over chromium + firefox). Run by
+- Playwright end-to-end tests (`end2end/`, 168 tests over chromium + firefox). Run by
   CI's `release-checks` job. Locally, generate the fixture gallery first — most of the
   suite needs photos and `public/images/*` is gitignored, so without them ~30 tests fail
   on a missing selector:
   ```
   cargo run --release --example gen_fixtures --features ssr
   CONFIG_PATH=target/e2e-fixtures/config.toml ABOUT_CONTENT_PATH=target/e2e-fixtures \
-    cargo leptos serve --release &
+    README_ASSETS_DIR=target/e2e-fixtures/readme cargo leptos serve --release &
   cd end2end && npm ci && npx playwright install chromium firefox && CI=1 npx playwright test
   ```
   Prefer that over `cargo leptos end-to-end`: in cargo-leptos 0.3.7 it panics on teardown

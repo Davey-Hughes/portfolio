@@ -28,6 +28,9 @@ public/content/*
 !public/content/config.toml.example
 !public/content/opensource.toml.example
 
+# Images for READMEs, served at /readme/ (README_ASSETS_DIR)
+public/readme/
+
 # Image cache
 public/cache/
 cache/

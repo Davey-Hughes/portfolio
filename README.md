@@ -316,6 +316,7 @@ All optional — defaults work for a standard `public/` layout. Paths fall back 
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `IMAGES_DIR` | gallery images root | `public/images` |
+| `README_ASSETS_DIR` | images for READMEs, served at `/readme/` | `public/readme` |
 | `GALLERY_PATH` | home-gallery directory | `public/images/home` |
 | `ABOUT_CONTENT_PATH` | content directory (about/profile/open source) | `public/content` |
 | `CONFIG_PATH` | path to `config.toml` | `public/content/config.toml` |
@@ -377,8 +378,8 @@ docker run --rm -p 8080:8080 \
   portfolio
 ```
 
-That mounts your `public/images`, `public/content`, and `public/cache` into the
-container. The cache is written to the mounted volume so it persists across
+That mounts your `public/images`, `public/content`, `public/readme`, and
+`public/cache` into the container. The cache is written to the mounted volume so it persists across
 restarts. Adjust with the environment variables above as needed (e.g.
 `-e RUST_LOG=debug`, `-e IMAGE_PRESETS=...`).
 
