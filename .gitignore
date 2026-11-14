@@ -26,6 +26,7 @@ public/images/*
 # Other content
 public/content/*
 !public/content/config.toml.example
+!public/content/opensource.toml.example
 
 # Image cache
 public/cache/

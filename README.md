@@ -84,7 +84,7 @@ portfolio/
 ├── style/main.scss           # all site styles (compiled to app.css by cargo-leptos)
 ├── public/                   # runtime content (GITIGNORED except examples/READMEs)
 │   ├── images/               # one subdirectory per gallery (see "Photos")
-│   ├── content/              # config.toml, about.txt, profile image
+│   ├── content/              # config.toml, about.txt, profile image, opensource.toml
 │   └── cache/                # generated compressed WebP images (safe to delete)
 ├── assets/                   # optional static assets copied to the site root
 ├── end2end/                  # Playwright end-to-end tests
@@ -215,6 +215,45 @@ The about page also uses two files in `public/content/`:
 - **`profile.{jpg,jpeg,png,webp}`** — profile photo; the first matching file is
   used (falls back to `/images/profile.jpg`).
 
+### Open source page
+
+**`public/content/opensource.toml`** — a curated list of your own projects and
+your upstream contributions, rendered at `/open-source` (`/os` redirects there,
+for short links). Copy
+[`public/content/opensource.toml.example`](public/content/opensource.toml.example)
+to start. The page, and an "Open source" link under the About text, appear only
+while this file exists, parses, and lists at least one entry; otherwise
+`/open-source` shows "Page not found." and the About page has no link.
+
+```toml
+intro = "Things I've built, and projects I've contributed to."   # optional
+
+[[projects]]                       # your own work; one block per card
+name    = "portfolio"              # required
+url     = "https://github.com/you/portfolio"   # optional; the name links here
+website = "https://you.example"    # optional; shown beside the name as its domain
+summary = "This site."             # required
+tags    = ["Rust", "Leptos"]       # optional
+
+[[contributions]]                  # upstream projects; same fields as [[projects]]
+name    = "Some Upstream"
+url     = "https://github.com/org/some-upstream"
+summary = "What you worked on there."
+
+[[contributions.highlights]]       # optional links under a card; title + url required
+title = "#123 A notable change"
+url   = "https://github.com/org/some-upstream/pull/123"
+```
+
+Cards render in file order. Unknown keys are rejected, so a typo such as
+`highlight` for `highlights` hides the page rather than silently dropping the
+data; the server logs the parse error.
+
+The whole content directory is also served as static files under `/content/`
+(that is how the profile image reaches the browser), so `opensource.toml` is
+downloadable verbatim at `/content/opensource.toml`, **comments and
+commented-out entries included**. Keep drafts and private notes out of it.
+
 ### Per-gallery layout
 
 **`public/images/<gallery>/gallery.toml`** — controls how that gallery's grid is
@@ -278,7 +317,7 @@ All optional — defaults work for a standard `public/` layout. Paths fall back 
 | --- | --- | --- |
 | `IMAGES_DIR` | gallery images root | `public/images` |
 | `GALLERY_PATH` | home-gallery directory | `public/images/home` |
-| `ABOUT_CONTENT_PATH` | content directory (about/profile) | `public/content` |
+| `ABOUT_CONTENT_PATH` | content directory (about/profile/open source) | `public/content` |
 | `CONFIG_PATH` | path to `config.toml` | `public/content/config.toml` |
 | `IMAGE_CACHE_DIR` | compressed-image cache dir | `public/cache` |
 | `IMAGE_PRESETS` | allowed `width,quality` pairs (`;`-separated) | `2400,90;4000,90` |

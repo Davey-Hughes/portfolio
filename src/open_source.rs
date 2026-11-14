@@ -1,0 +1,394 @@
+//! The `/open-source` page's content: a hand-curated `opensource.toml` in the
+//! content directory, listing the deployer's own projects and their upstream
+//! contributions.
+//!
+//! The file is optional. When it is missing, malformed, or lists no entries, the
+//! page renders "Page not found." and the About page omits its link, so a
+//! deployment that never adds the file never shows an empty page.
+
+use serde::{Deserialize, Serialize};
+
+/// File name inside the content directory (see `gallery::content_dir`).
+pub const OPEN_SOURCE_FILE: &str = "opensource.toml";
+
+/// The whole page, parsed from [`OPEN_SOURCE_FILE`].
+///
+/// Unknown keys are rejected rather than ignored: in a hand-edited file a typo like
+/// `highlight` for `highlights` would otherwise drop data without a trace.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenSourceContent {
+    /// Optional paragraph under the page heading.
+    #[serde(default)]
+    pub intro: Option<String>,
+    /// The deployer's own projects, in file order.
+    #[serde(default)]
+    pub projects: Vec<OpenSourceEntry>,
+    /// Upstream projects the deployer has contributed to, in file order.
+    #[serde(default)]
+    pub contributions: Vec<OpenSourceEntry>,
+}
+
+/// One card: a project or an upstream the deployer contributed to.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenSourceEntry {
+    pub name: String,
+    /// Where the name links to. Rendered as plain text when unset or blank.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The project's own site, shown beside the name as its bare domain, so a
+    /// card can link both its source (`url`) and where it runs.
+    #[serde(default)]
+    pub website: Option<String>,
+    pub summary: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub highlights: Vec<Highlight>,
+}
+
+/// A link to one notable piece of work, such as a merged PR, under a card.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Highlight {
+    pub title: String,
+    pub url: String,
+}
+
+/// Trimmed `s`, or `None` when nothing is left. A blank `url` must not become
+/// `href=""`, which renders a link that silently reloads the current page.
+fn non_blank(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+impl OpenSourceContent {
+    /// True when there is nothing to put on the page. An intro alone does not count.
+    pub fn is_empty(&self) -> bool {
+        self.projects.is_empty() && self.contributions.is_empty()
+    }
+
+    pub fn intro_text(&self) -> Option<&str> {
+        self.intro.as_deref().and_then(non_blank)
+    }
+}
+
+impl OpenSourceEntry {
+    pub fn link(&self) -> Option<&str> {
+        self.url.as_deref().and_then(non_blank)
+    }
+
+    /// `(href, label)` for the website link, or `None` when unset or blank. The
+    /// label is the URL without its scheme, a leading `www.` or a trailing slash:
+    /// `https://www.redextape.com/` reads as `redextape.com`.
+    pub fn website(&self) -> Option<(&str, &str)> {
+        let href = self.website.as_deref().and_then(non_blank)?;
+        let label = href
+            .strip_prefix("https://")
+            .or_else(|| href.strip_prefix("http://"))
+            .unwrap_or(href);
+        let label = label.strip_prefix("www.").unwrap_or(label);
+        let label = label.strip_suffix('/').unwrap_or(label);
+        Some((href, label))
+    }
+}
+
+impl Highlight {
+    pub fn link(&self) -> Option<&str> {
+        non_blank(&self.url)
+    }
+}
+
+/// Parse the contents of an `opensource.toml`.
+///
+/// # Errors
+///
+/// Returns the TOML error when the text is not valid TOML, a required field
+/// (`name`, `summary`, a highlight's `title` or `url`) is missing, or a key is
+/// not part of the format.
+#[cfg(feature = "ssr")]
+pub fn parse_open_source(text: &str) -> Result<OpenSourceContent, toml::de::Error> {
+    toml::from_str(text)
+}
+
+/// Load [`OPEN_SOURCE_FILE`] from `dir`.
+///
+/// `None` when the file is missing, unreadable, malformed, or lists no entries.
+/// Read and parse failures are logged, so a broken file is diagnosable from the
+/// server log instead of silently hiding the page.
+#[cfg(feature = "ssr")]
+pub fn load_open_source_from(dir: &std::path::Path) -> Option<OpenSourceContent> {
+    let path = dir.join(OPEN_SOURCE_FILE);
+    if !path.exists() {
+        return None;
+    }
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            leptos::logging::log!(
+                "open source page hidden: cannot read {}: {err}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match parse_open_source(&text) {
+        Ok(content) if content.is_empty() => None,
+        Ok(content) => Some(content),
+        Err(err) => {
+            leptos::logging::log!(
+                "open source page hidden: cannot parse {}: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Load [`OPEN_SOURCE_FILE`] from the content directory.
+#[cfg(feature = "ssr")]
+pub fn load_open_source() -> Option<OpenSourceContent> {
+    load_open_source_from(std::path::Path::new(&crate::gallery::content_dir()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(url: Option<&str>) -> OpenSourceEntry {
+        OpenSourceEntry {
+            name: "Name".to_string(),
+            url: url.map(str::to_string),
+            website: None,
+            summary: "Summary".to_string(),
+            tags: Vec::new(),
+            highlights: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn website_shows_as_its_bare_domain() {
+        let site = |w: Option<&str>| OpenSourceEntry {
+            website: w.map(str::to_string),
+            ..entry(None)
+        };
+
+        assert_eq!(
+            site(Some("https://redextape.com")).website(),
+            Some(("https://redextape.com", "redextape.com"))
+        );
+        assert_eq!(
+            site(Some("https://www.redextape.com/")).website(),
+            Some(("https://www.redextape.com/", "redextape.com"))
+        );
+        assert_eq!(
+            site(Some("http://example.com/app/")).website(),
+            Some(("http://example.com/app/", "example.com/app"))
+        );
+        assert_eq!(
+            site(Some(" https://a.example ")).website(),
+            Some(("https://a.example", "a.example"))
+        );
+        // Blank must not render an empty link, same rule as `url`.
+        assert_eq!(site(Some("   ")).website(), None);
+        assert_eq!(site(None).website(), None);
+    }
+
+    #[test]
+    fn blank_urls_are_not_links() {
+        // A blank url must render the name as text, never as href="" — which
+        // would be a link that silently reloads the current page.
+        assert_eq!(entry(None).link(), None);
+        assert_eq!(entry(Some("")).link(), None);
+        assert_eq!(entry(Some("   ")).link(), None);
+        assert_eq!(
+            entry(Some(" https://a.example ")).link(),
+            Some("https://a.example")
+        );
+
+        let blank = Highlight {
+            title: "#1".to_string(),
+            url: String::new(),
+        };
+        assert_eq!(blank.link(), None);
+        let padded = Highlight {
+            title: "#1".to_string(),
+            url: " https://a.example/pull/1 ".to_string(),
+        };
+        assert_eq!(padded.link(), Some("https://a.example/pull/1"));
+    }
+
+    #[test]
+    fn intro_text_ignores_blank() {
+        let blank = OpenSourceContent {
+            intro: Some("   ".to_string()),
+            ..OpenSourceContent::default()
+        };
+        assert_eq!(blank.intro_text(), None);
+
+        let set = OpenSourceContent {
+            intro: Some(" Hi ".to_string()),
+            ..OpenSourceContent::default()
+        };
+        assert_eq!(set.intro_text(), Some("Hi"));
+    }
+
+    #[test]
+    fn is_empty_checks_both_sections() {
+        assert!(OpenSourceContent::default().is_empty());
+
+        let projects_only = OpenSourceContent {
+            projects: vec![entry(None)],
+            ..OpenSourceContent::default()
+        };
+        assert!(!projects_only.is_empty());
+
+        let contributions_only = OpenSourceContent {
+            contributions: vec![entry(None)],
+            ..OpenSourceContent::default()
+        };
+        assert!(!contributions_only.is_empty());
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn parses_full_file() {
+        let content = parse_open_source(
+            r##"
+intro = "Things I build and fix."
+
+[[projects]]
+name = "portfolio"
+url = "https://example.com/portfolio"
+website = "https://portfolio.example"
+summary = "This site."
+tags = ["Rust", "Leptos"]
+
+[[contributions]]
+name = "Upstream"
+url = "https://example.com/upstream"
+summary = "Fixes."
+
+[[contributions.highlights]]
+title = "#7 A fix"
+url = "https://example.com/upstream/pull/7"
+"##,
+        )
+        .unwrap();
+
+        assert_eq!(content.intro.as_deref(), Some("Things I build and fix."));
+
+        assert_eq!(content.projects.len(), 1);
+        let project = &content.projects[0];
+        assert_eq!(project.name, "portfolio");
+        assert_eq!(
+            project.url.as_deref(),
+            Some("https://example.com/portfolio")
+        );
+        assert_eq!(
+            project.website.as_deref(),
+            Some("https://portfolio.example")
+        );
+        assert_eq!(project.summary, "This site.");
+        assert_eq!(project.tags, vec!["Rust".to_string(), "Leptos".to_string()]);
+        assert_eq!(project.highlights, Vec::<Highlight>::new());
+
+        assert_eq!(content.contributions.len(), 1);
+        let contribution = &content.contributions[0];
+        assert_eq!(contribution.name, "Upstream");
+        assert_eq!(
+            contribution.highlights,
+            vec![Highlight {
+                title: "#7 A fix".to_string(),
+                url: "https://example.com/upstream/pull/7".to_string(),
+            }]
+        );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn optional_fields_default() {
+        let content = parse_open_source(
+            r#"
+[[projects]]
+name = "bare"
+summary = "Only the required fields."
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(content.intro, None);
+        assert_eq!(content.contributions, Vec::<OpenSourceEntry>::new());
+        let project = &content.projects[0];
+        assert_eq!(project.url, None);
+        assert_eq!(project.website, None);
+        assert_eq!(project.tags, Vec::<String>::new());
+        assert_eq!(project.highlights, Vec::<Highlight>::new());
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn missing_required_field_is_rejected() {
+        assert!(parse_open_source("[[projects]]\nname = \"x\"\n").is_err());
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn unknown_field_is_rejected() {
+        // `highlight` for `highlights`: a typo must surface as an error rather than
+        // silently dropping the data the deployer meant to publish.
+        let typo = "[[projects]]\nname = \"x\"\nsummary = \"y\"\nhighlight = []\n";
+        assert!(parse_open_source(typo).is_err());
+    }
+
+    #[cfg(feature = "ssr")]
+    fn dir_with(contents: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        if let Some(text) = contents {
+            std::fs::write(dir.path().join(OPEN_SOURCE_FILE), text).unwrap();
+        }
+        dir
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn missing_file_loads_as_none() {
+        let dir = dir_with(None);
+        assert_eq!(load_open_source_from(dir.path()), None);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn malformed_file_loads_as_none() {
+        let dir = dir_with(Some("not = [toml"));
+        assert_eq!(load_open_source_from(dir.path()), None);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn file_without_entries_loads_as_none() {
+        // An intro alone would render a page with a heading and nothing under it.
+        let dir = dir_with(Some("intro = \"hi\"\n"));
+        assert_eq!(load_open_source_from(dir.path()), None);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn valid_file_loads_as_some() {
+        let dir = dir_with(Some("[[projects]]\nname = \"x\"\nsummary = \"y\"\n"));
+        let content = load_open_source_from(dir.path()).unwrap();
+        assert_eq!(content.projects.len(), 1);
+        assert_eq!(content.projects[0].name, "x");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn example_file_parses_and_has_entries() {
+        // The example is the format's documentation; a schema change that breaks it
+        // must fail here rather than in a deployer's hands.
+        let example = include_str!("../public/content/opensource.toml.example");
+        let content = parse_open_source(example).unwrap();
+        assert!(!content.is_empty());
+    }
+}

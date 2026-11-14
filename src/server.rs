@@ -1,4 +1,5 @@
 use crate::config::SiteConfig;
+use crate::open_source::OpenSourceContent;
 use crate::types::{AboutContent, GalleryData, GalleryInfo, PhotoInfo};
 use leptos::prelude::*;
 use std::sync::Arc;
@@ -424,6 +425,37 @@ pub async fn get_about_content() -> Result<AboutContent, ServerFnError> {
             content: String::new(),
             is_html: false,
         })
+    }
+}
+
+/// Server function to load the `/open-source` page's content. `None` when there is
+/// no page to show (see [`crate::open_source::load_open_source_from`]).
+#[server(GetOpenSource, "/api")]
+pub async fn get_open_source() -> Result<Option<OpenSourceContent>, ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        Ok(crate::open_source::load_open_source())
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        Ok(None)
+    }
+}
+
+/// Server function backing the About page's "Open source" link.
+///
+/// A bool rather than the full content so `/about` does not serialize every card
+/// into its hydration payload. Goes through the same loader as
+/// [`get_open_source`], so a file that would 404 the page also hides the link.
+#[server(HasOpenSource, "/api")]
+pub async fn has_open_source() -> Result<bool, ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        Ok(crate::open_source::load_open_source().is_some())
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        Ok(false)
     }
 }
 

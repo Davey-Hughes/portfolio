@@ -934,6 +934,171 @@ img {
   font-weight: 300;
 }
 
+// Link from the About page to /open-source. Sits between the biography and the
+// license notice, centered and quiet, styled like the license section's links.
+.about-open-source {
+  max-width: 900px;
+  margin: 3rem auto 0;
+  text-align: center;
+  font-size: 0.85rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+
+  a {
+    color: #666;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color 0.2s ease;
+
+    &:hover {
+      color: #1a1a1a;
+    }
+  }
+}
+
+// Open source page - same measure and type scale as the About page, one card per
+// project separated by the license section's hairline rule.
+.open-source-page {
+  // .main-content is a column flexbox: without an explicit width an auto-margined
+  // child shrinks to its content, so short summaries would leave a narrow column.
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 4rem 3rem 6rem;
+  // Long names, tags, highlight titles or a URL pasted into the intro must wrap
+  // rather than widen the page at phone width.
+  overflow-wrap: anywhere;
+
+  h1 {
+    font-size: 2.2rem;
+    font-weight: 400;
+    letter-spacing: 3px;
+    margin-bottom: 2rem;
+    color: #1a1a1a;
+    text-transform: uppercase;
+    text-align: center;
+  }
+}
+
+.oss-intro,
+.oss-loading {
+  font-size: 1.05rem;
+  line-height: 1.9;
+  color: #444;
+  font-weight: 300;
+}
+
+.oss-section {
+  margin-top: 2rem;
+
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    letter-spacing: 2px;
+    margin-bottom: 0.5rem;
+    color: #1a1a1a;
+    text-transform: uppercase;
+    text-align: center;
+  }
+}
+
+.oss-cards {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.oss-card {
+  padding: 1.25rem 0;
+
+  // Rules only between cards: one under the section heading read as a second,
+  // detached divider and added a band of empty space.
+  & + & {
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    letter-spacing: 1px;
+    color: #1a1a1a;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color 0.2s ease;
+
+    &:hover {
+      color: #1a1a1a;
+    }
+  }
+}
+
+// The name and, when set, the project's website on one line; wraps under the name
+// on narrow screens rather than squeezing it.
+.oss-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+
+.oss-website {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+  color: #888;
+
+  a:hover {
+    color: #1a1a1a;
+  }
+}
+
+.oss-summary {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: #444;
+  font-weight: 300;
+}
+
+.oss-tags {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+
+  li {
+    font-size: 0.75rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #888;
+  }
+}
+
+.oss-highlights {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0 0;
+
+  li {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: #666;
+    font-weight: 300;
+  }
+
+  a {
+    color: #666;
+  }
+}
+
 .services-list {
   list-style: none;
   margin-top: 1.5rem;
@@ -1389,7 +1554,8 @@ img {
     }
   }
 
-  .about-page {
+  .about-page,
+  .open-source-page {
     padding: 2rem 1rem 4rem;
   }
 
@@ -1510,11 +1676,13 @@ img {
   }
 
   .about-page,
-  .contact-page {
+  .contact-page,
+  .open-source-page {
     padding: 1.5rem 0.75rem 3rem;
   }
 
-  .about-content h1 {
+  .about-content h1,
+  .open-source-page h1 {
     font-size: 1.8rem;
     letter-spacing: 2px;
   }

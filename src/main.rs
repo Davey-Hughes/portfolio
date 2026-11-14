@@ -265,6 +265,13 @@ async fn main() {
             "/healthz",
             axum::routing::get(|| async { (StatusCode::OK, "ok") }),
         )
+        // Short link to the open source page. A server-side redirect rather than a
+        // second Leptos route: the page keeps one canonical URL, and the hydrate
+        // bundle carries nothing for it.
+        .route(
+            "/os",
+            axum::routing::get(|| async { axum::response::Redirect::permanent("/open-source") }),
+        )
         // Compressed image endpoint
         .route(
             "/images/compressed/{*image_path}",

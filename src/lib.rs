@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod open_source;
 pub mod server;
 pub mod types;
 

@@ -1,7 +1,9 @@
 use crate::config::SiteConfig;
+use crate::open_source::OpenSourceEntry;
 use crate::server::{
     get_about_content, get_all_gallery_photos, get_galleries, get_gallery_data_by_name,
-    get_home_gallery_config, get_home_gallery_data, get_site_config,
+    get_home_gallery_config, get_home_gallery_data, get_open_source, get_site_config,
+    has_open_source,
 };
 use crate::types::PhotoInfo;
 use leptos::prelude::*;
@@ -97,6 +99,7 @@ pub fn App() -> impl IntoView {
                         view=PhotoDetailPage
                     />
                     <Route path=StaticSegment("about") view=AboutPage />
+                    <Route path=StaticSegment("open-source") view=OpenSourcePage />
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
             </main>
@@ -1854,8 +1857,166 @@ fn AboutPage() -> impl IntoView {
     view! {
         <div class="about-page">
             <AboutContent />
+            <OpenSourceLink />
             <LicenseSection />
         </div>
+    }
+}
+
+/// The About page's link to `/open-source`, rendered only while that page has
+/// content. No Suspense fallback: a placeholder would flash a link-shaped gap on
+/// deployments that never add the file.
+#[component]
+fn OpenSourceLink() -> impl IntoView {
+    let has_page = Resource::new(|| (), |()| async { has_open_source().await });
+
+    view! {
+        <Suspense>
+            {move || {
+                matches!(has_page.get(), Some(Ok(true)))
+                    .then(|| {
+                        view! {
+                            <p class="about-open-source">
+                                <A href="/open-source">"Open source"</A>
+                            </p>
+                        }
+                    })
+            }}
+        </Suspense>
+    }
+}
+
+/// One card on the `/open-source` page. The name links out only when the entry has
+/// a non-blank `url`; highlights likewise fall back to plain text.
+#[component]
+fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
+    let name = match entry.link() {
+        Some(url) => view! {
+            <a href=url.to_string() target="_blank" rel="noopener noreferrer">
+                {entry.name.clone()}
+            </a>
+        }
+        .into_any(),
+        None => entry.name.clone().into_any(),
+    };
+    // Beside the heading rather than inside it, so the heading's accessible name
+    // stays the project name.
+    let website = entry.website().map(|(href, label)| {
+        let (href, label) = (href.to_string(), label.to_string());
+        view! {
+            <span class="oss-website">
+                <span class="oss-separator" aria-hidden="true">
+                    "·"
+                </span>
+                <a href=href target="_blank" rel="noopener noreferrer">
+                    {label}
+                </a>
+            </span>
+        }
+    });
+    let tags = (!entry.tags.is_empty()).then(|| {
+        view! {
+            <ul class="oss-tags">
+                {entry.tags.iter().map(|t| view! { <li>{t.clone()}</li> }).collect_view()}
+            </ul>
+        }
+    });
+    let highlights = (!entry.highlights.is_empty()).then(|| {
+        view! {
+            <ul class="oss-highlights">
+                {entry
+                    .highlights
+                    .iter()
+                    .map(|h| {
+                        let item = match h.link() {
+                            Some(url) => {
+                                view! {
+                                    <a
+                                        href=url.to_string()
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                    >
+                                        {h.title.clone()}
+                                    </a>
+                                }
+                                    .into_any()
+                            }
+                            None => h.title.clone().into_any(),
+                        };
+                        view! { <li>{item}</li> }
+                    })
+                    .collect_view()}
+            </ul>
+        }
+    });
+
+    view! {
+        <li class="oss-card">
+            <div class="oss-card-head">
+                <h3>{name}</h3>
+                {website}
+            </div>
+            <p class="oss-summary">{entry.summary.clone()}</p>
+            {tags}
+            {highlights}
+        </li>
+    }
+}
+
+/// A headed list of cards, or nothing at all when `entries` is empty, so a file
+/// with only contributions shows no empty "Projects" heading.
+#[component]
+fn OssSection(heading: &'static str, entries: Vec<OpenSourceEntry>) -> impl IntoView {
+    (!entries.is_empty()).then(|| {
+        view! {
+            <section class="oss-section">
+                <h2>{heading}</h2>
+                <ul class="oss-cards">
+                    {entries
+                        .into_iter()
+                        .map(|entry| view! { <OssCard entry=entry /> })
+                        .collect_view()}
+                </ul>
+            </section>
+        }
+    })
+}
+
+#[component]
+fn OpenSourcePage() -> impl IntoView {
+    let content = Resource::new(|| (), |()| async { get_open_source().await });
+
+    view! {
+        <Suspense fallback=|| {
+            view! {
+                <div class="open-source-page">
+                    <p class="oss-loading">"Loading..."</p>
+                </div>
+            }
+        }>
+            {move || {
+                match content.get() {
+                    Some(Ok(Some(page))) => {
+                        let intro = page.intro_text().map(str::to_string);
+                        view! {
+                            <div class="open-source-page">
+                                <h1>"Open Source"</h1>
+                                {intro.map(|text| view! { <p class="oss-intro">{text}</p> })}
+                                <OssSection heading="Projects" entries=page.projects />
+                                <OssSection heading="Contributions" entries=page.contributions />
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    // Still loading on the client: keep the Suspense fallback's shape
+                    // rather than flashing "Page not found." before the data lands.
+                    None => ().into_any(),
+                    // Missing, malformed, or empty file, or a failed request: the same
+                    // text the router's fallback renders for an unknown path.
+                    Some(_) => view! { <div class="error"><p>"Page not found."</p></div> }.into_any(),
+                }
+            }}
+        </Suspense>
     }
 }
 

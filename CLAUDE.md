@@ -5,7 +5,7 @@
   `cargo test --lib --no-default-features --features hydrate` (client) — together
   exactly what CI's `rust` and `hydrate` jobs run. The crate declares no default
   features, so `--features ssr` alone is equivalent to the server half.
-- Playwright end-to-end tests (`end2end/`, 118 tests over chromium + firefox). Run by
+- Playwright end-to-end tests (`end2end/`, 154 tests over chromium + firefox). Run by
   CI's `release-checks` job. Locally, generate the fixture gallery first — most of the
   suite needs photos and `public/images/*` is gitignored, so without them ~30 tests fail
   on a missing selector:

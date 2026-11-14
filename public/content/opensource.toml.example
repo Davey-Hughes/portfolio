@@ -1,0 +1,51 @@
+# Open Source Page Example
+# Copy this file to opensource.toml (next to config.toml) and replace the entries.
+# TOML format: https://toml.io/
+#
+# The /open-source page and the "Open source" link on the About page appear only
+# while this file exists, parses, and lists at least one project or contribution.
+# A parse error or an unknown key hides both and is logged by the server, so a
+# typo never publishes a half-broken page.
+#
+# Cards render in the order they appear in this file.
+#
+# This file is public: the content directory is served as-is under /content/, so
+# anyone can download it, comments and commented-out entries included. Keep
+# drafts and private notes out of it.
+
+# Optional: a paragraph under the page heading.
+intro = "Things I've built, and projects I've contributed to."
+
+# Your own projects. Each [[projects]] block is one card.
+[[projects]]
+name = "portfolio"                                # required
+url = "https://example.com/you/portfolio"        # optional; the name links here
+website = "https://portfolio.example"            # optional; shown beside the name as its domain
+summary = "This site: a photography portfolio."  # required
+tags = ["Rust", "Leptos"]                        # optional
+
+[[projects]]
+name = "another-project"
+summary = "A card with no url renders its name as plain text."
+
+# Upstream projects you've contributed to. Same fields as [[projects]].
+[[contributions]]
+name = "Some Upstream"
+url = "https://example.com/upstream/some-upstream"
+summary = "What you worked on there, in a sentence or two."
+tags = ["C", "Vulkan"]
+
+# Optional: links to notable pieces of work, shown under the card.
+# Each highlight needs both a title and a url.
+[[contributions.highlights]]
+title = "#123 A notable change"
+url = "https://example.com/upstream/some-upstream/pull/123"
+
+[[contributions.highlights]]
+title = "#456 Another one"
+url = "https://example.com/upstream/some-upstream/pull/456"
+
+[[contributions]]
+name = "Another Upstream"
+url = "https://example.com/upstream/another-upstream"
+summary = "A contribution card without highlights."

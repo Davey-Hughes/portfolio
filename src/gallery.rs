@@ -1034,15 +1034,24 @@ pub fn load_all_gallery_photos() -> Vec<PhotoInfo> {
     photos
 }
 
-/// Load about page content
-pub fn load_about_content() -> crate::types::AboutContent {
-    let content_path = std::env::var("ABOUT_CONTENT_PATH").unwrap_or_else(|_| {
+/// Directory holding the deployer's content files: `about.html`/`about.txt`, the
+/// profile image, and `opensource.toml`.
+///
+/// `ABOUT_CONTENT_PATH` when set, else `public/content` when it exists, else
+/// `./content` (the Docker image's layout).
+pub fn content_dir() -> String {
+    std::env::var("ABOUT_CONTENT_PATH").unwrap_or_else(|_| {
         if Path::new("public/content").exists() {
             "public/content".to_string()
         } else {
             "./content".to_string()
         }
-    });
+    })
+}
+
+/// Load about page content
+pub fn load_about_content() -> crate::types::AboutContent {
+    let content_path = content_dir();
 
     // Create directory if it doesn't exist
     if !Path::new(&content_path).exists() {
