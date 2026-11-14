@@ -1,537 +1,61 @@
-# Photography Portfolio
-
-A self-hosted photography portfolio website. Drop your photos into a folder and
-they show up automatically — galleries, titles, EXIF/film metadata, responsive
-thumbnails, and a fullscreen viewer are all generated from the files on disk.
-
-Built with [Leptos](https://leptos.dev/) (server-side rendered + hydrated WASM)
-on an [Axum](https://github.com/tokio-rs/axum) server. Images are transcoded to
-WebP and cached on disk on first request.
-
-## Highlights
-
-- **Zero-code content** — galleries are just directories under `public/images/`;
-  add or remove a folder/photo and the site updates (no recompile).
-- **Automatic metadata** — camera, lens, focal length, aperture, shutter, ISO,
-  date, and film stock are read from EXIF/XMP. Filenames become titles.
-- **On-the-fly image processing** — originals stay full-res; the server serves
-  compressed WebP variants and caches them under `public/cache/`.
-- **Per-gallery and per-photo overrides** via small TOML files.
-
----
-
-## Prerequisites
-
-The Rust toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml)
-(a dated nightly + the `wasm32-unknown-unknown` target), so `rustup` installs the right
-toolchain automatically the first time you build. To bump it, change the date and run
-`cargo ci` (CI's fmt, clippy and test commands); fix what it flags, or keep the old date.
-Then let the PR's CI run, since `release-checks` builds the release bundle. You also need:
-
-| Tool | Why | Install |
-| --- | --- | --- |
-| [`cargo-leptos`](https://github.com/leptos-rs/cargo-leptos) | build/dev runner | `cargo install cargo-leptos --locked` |
-| `dart-sass` | compiles `style/main.scss` | `npm install -g sass` |
-| `binaryen` (`wasm-opt`) | shrinks the release WASM bundle | your package manager |
-| Node + Playwright | only for end-to-end tests | `cd end2end && npm install` |
-| [`leptosfmt`](https://github.com/bram209/leptosfmt) | optional, formats the `view!` macros (used by `rust-analyzer.toml`) | `cargo install leptosfmt` |
-
----
-
-## Running locally
-
-```bash
-cargo leptos watch
-```
-
-This compiles the server (SSR) and client (WASM) bundles, watches for changes,
-and serves the site with live reload at **http://127.0.0.1:4000** (reload port
-`4001`). These addresses are configured in the `[package.metadata.leptos]`
-section of [`Cargo.toml`](Cargo.toml).
-
-Other useful commands (also listed in `CLAUDE.md`):
-
-```bash
-cargo leptos build              # one-off build; good for checking it compiles
-cargo leptos build --release    # optimized production build
-cargo test --lib --features ssr # Rust unit tests
-cargo leptos end-to-end         # Playwright e2e tests (see Testing)
-```
-
-Out of the box the site reads its content from `public/`. That directory is
-**gitignored** (except the example/README files) so your photos and personal
-config never get committed — see the layout below.
-
----
-
-## Directory layout
-
-```
-portfolio/
-├── src/                      # Rust source
-│   ├── main.rs               # Axum server entry (SSR): routes, /images/compressed
-│   │                         #   endpoint, cache warmup + filesystem watcher
-│   ├── lib.rs                # WASM hydration entry + module declarations
-│   ├── app.rs                # Leptos components, routing, and pages
-│   ├── gallery.rs            # gallery/photo discovery, EXIF/XMP + film-stock parsing,
-│   │                         #   title/slug derivation
-│   ├── config.rs             # loads SiteConfig from content/config.toml
-│   ├── image_cache.rs        # on-disk WebP cache: process / prewarm / cleanup
-│   ├── image_params.rs       # width/quality preset validation for the image endpoint
-│   ├── mosaic.rs             # mosaic gallery layout generation
-│   ├── server.rs             # server functions, in-memory caches, watcher plumbing
-│   └── types.rs              # shared types (PhotoInfo, GalleryConfig, PhotoConfig, …)
-├── style/main.scss           # all site styles (compiled to app.css by cargo-leptos)
-├── public/                   # runtime content (GITIGNORED except examples/READMEs)
-│   ├── images/               # one subdirectory per gallery (see "Photos")
-│   ├── content/              # config.toml, about.txt, profile image, opensource.toml
-│   └── cache/                # generated compressed WebP images (safe to delete)
-├── assets/                   # optional static assets copied to the site root
-├── end2end/                  # Playwright end-to-end tests
-├── Dockerfile                # multi-stage build → minimal Alpine runtime
-├── Cargo.toml                # dependencies + [package.metadata.leptos] config
-├── focal-points.toml.example # reference for per-photo focal_point overrides
-└── rust-toolchain.toml       # pins a dated nightly + wasm32 target
-```
-
-> **Note on `.env`:** the only thing the app reads from `.env` (via `dotenvy`)
-> is `LEPTOS_HASH_FILES` — set to `false` locally so `cargo leptos watch/serve`
-> serves un-hashed `pkg/` filenames (see [Asset hashing & CDN caching](#asset-hashing--cdn-caching)).
-> Site configuration lives in `public/content/config.toml` (see
-> [Site configuration](#site-configuration)), **not** in `.env`.
-
----
-
-## Adding & removing photos
-
-A **gallery** is any subdirectory of `public/images/`. The directory name becomes
-the gallery's display name and its URL slug (lowercased, spaces → dashes). Just
-create a folder and drop images in:
-
-```
-public/images/
-├── home/          # special: shown on the landing page, not in the nav
-├── city/
-├── nature/
-├── portraits/
-└── film/
-```
-
-- **`home`** is special — its photos appear on the landing page and it is *not*
-  listed as a regular gallery in the navigation.
-- Every other non-empty directory becomes a gallery in the nav automatically.
-- To **remove** a gallery or photo, delete the directory or file. The running
-  server watches `public/images/` and picks up changes without a restart (it
-  also prunes the matching cache entries).
-
-### Filenames, titles, and ordering
-
-The filename (minus extension) becomes the photo title, with light formatting:
-
-- a leading `N - ` or `N.N - ` ordering prefix is stripped
-  (`3 - space needle.jpg` → "space needle"),
-- `-` and `_` become spaces (`my_photo.jpg` → "my photo").
-
-Photos sort alphabetically by filename, so prefix files with numbers
-(`1 - …`, `2 - …`) to control order. Files in a subfolder sort after the
-top-level files of the same gallery.
-
-### Supported formats & multiple variants
-
-Recognized extensions: **jpg/jpeg, png, webp, gif, jxl, avif**.
-
-If several files share a basename (e.g. `sunset.jpg` + `sunset.avif`), they are
-grouped into one photo and offered as `<picture>` sources in modern-format
-priority order (avif → jxl → webp → png → jpg), with JPEG as the universal
-fallback.
-
-### Image sets (subfolders)
-
-A photo can be a subdirectory containing one image plus its sibling TOML — this
-is the natural place to keep a per-photo title/focal-point override next to a
-single image (see `public/images/film/rent_a_car/`). Images nested in
-subdirectories are discovered recursively.
-
-### Automatic metadata
-
-On discovery the server reads EXIF (and XMP as a fallback for lens names) to
-populate: dimensions, date taken, camera make/model, lens, focal length,
-aperture, shutter speed, ISO, copyright, and **film stock**.
-
-Film stock is parsed from the EXIF `UserComment`/`ImageDescription` in two
-supported export formats:
-
-- **Pipe-delimited** (current): `Camera: … | Film: Kodak Ektar 100, 35mm | …`
-  → the `Film:` value with the trailing gauge note dropped (`Kodak Ektar 100`).
-- **LensTagger** (legacy, detected by a `LensTaggerVer` marker): assembled from
-  `Film Make:`, `Film Type:`, and the `-ISO=` annotation.
-
----
-
-## Configuration (TOML files)
-
-There are three kinds of TOML config, each scoped differently. Example files
-(`*.example`) are committed; copy them and edit.
-
-### Site configuration
-
-**`public/content/config.toml`** — site-wide settings. Copy
-[`public/content/config.toml.example`](public/content/config.toml.example) to
-get started.
-
-```toml
-# Required
-site_name = "Davey Hughes"
-site_tagline = "Photography"
-
-# Optional
-# site_title    = "Davey Hughes — Photography"   # browser tab; defaults to site_name
-# site_copyright = "© 2025 Davey Hughes."        # auto-generated from site_name + year if omitted
-
-# Optional: nav order. List gallery slugs first-to-last; galleries not listed
-# fall through alphabetically afterwards. Slug = lowercased dir name, spaces→dashes.
-gallery_order = ["film", "city", "nature", "portraits"]
-
-# Optional: licensing shown on the About page. Omit and it states all rights
-# reserved over the photographs (from site_name + year) plus the code's GPLv3.
-# [license]
-# images      = "All rights reserved."
-# contact     = "you@example.com"
-# source      = "https://github.com/you/portfolio"
-# footer_text = "License"                  # footer link label; "" hides the link
-
-# Arbitrary key/value pairs surfaced on the contact/about pages.
-[sections]
-email     = "you@example.com"
-location  = "Seattle, WA"
-instagram = "@yourhandle"
-github    = "https://github.com/you/"
-```
-
-The about page also uses two files in `public/content/`:
-
-- **`about.txt`** — about text; blank lines separate paragraphs (each becomes a
-  `<p>`). Falls back to placeholder text if missing.
-- **`profile.{jpg,jpeg,png,webp}`** — profile photo; the first matching file is
-  used (falls back to `/images/profile.jpg`).
-
-### Open source page
-
-**`public/content/opensource.toml`** — a curated list of your own projects and
-your upstream contributions, rendered at `/open-source` (`/os` redirects there,
-for short links). Copy
-[`public/content/opensource.toml.example`](public/content/opensource.toml.example)
-to start. The page, and an "Open source" link under the About text, appear only
-while this file exists, parses, and lists at least one entry; otherwise
-`/open-source` shows "Page not found." and the About page has no link.
-
-```toml
-intro = "Things I've built, and projects I've contributed to."   # optional
-
-[[projects]]                       # your own work; one block per card
-name    = "portfolio"              # required
-url     = "https://github.com/you/portfolio"   # optional; the name links here
-website = "https://you.example"    # optional; shown beside the name as its domain
-summary = "This site."             # required
-tags    = ["Rust", "Leptos"]       # optional
-
-[[contributions]]                  # upstream projects; same fields as [[projects]]
-name    = "Some Upstream"
-url     = "https://github.com/org/some-upstream"
-summary = "What you worked on there."
-
-[[contributions.highlights]]       # optional links under a card; title + url required
-title = "#123 A notable change"
-url   = "https://github.com/org/some-upstream/pull/123"
-```
-
-Cards render in file order. Unknown keys are rejected, so a typo such as
-`highlight` for `highlights` hides the page rather than silently dropping the
-data; the server logs the parse error.
-
-The whole content directory is also served as static files under `/content/`
-(that is how the profile image reaches the browser), so `opensource.toml` is
-downloadable verbatim at `/content/opensource.toml`, **comments and
-commented-out entries included**. Keep drafts and private notes out of it.
-
-### Per-gallery layout
-
-**`public/images/<gallery>/gallery.toml`** — controls how that gallery's grid is
-rendered. All fields are optional:
-
-```toml
-use_mosaic            = true   # mosaic layout instead of a uniform grid (default false)
-mosaic_cache_duration = 3600   # seconds to cache the computed mosaic layout (default 3600)
-columns               = 4      # grid columns       (default 6; ignored when use_mosaic)
-row_height            = 320    # grid row height px  (default 280; ignored when use_mosaic)
-gap                   = 12      # gap between items px (default 8)
-```
-
-### Per-photo overrides
-
-A TOML file **named after the photo** (sibling file, same basename) overrides
-metadata for that one photo. For `portrait.jpg`, create `portrait.toml`:
-
-```toml
-title       = "A Better Title"   # overrides the filename-derived title
-focal_point = "top-center"       # which third stays visible when cropped to a thumbnail
-lens_model  = "Nikon 50mm f/1.8" # override when EXIF lens is missing/ambiguous
-```
-
-`focal_point` uses a rule-of-thirds grid — one of: `top-left`, `top-center`,
-`top-right`, `center-left`, `center` (default), `center-right`, `bottom-left`,
-`bottom-center`, `bottom-right`. See
-[`focal-points.toml.example`](focal-points.toml.example) for the full reference.
-
----
-
-## Image cache & compressed endpoint
-
-Originals are never served to thumbnails or the viewer. Instead, the server
-exposes `/images/compressed/<path>?width=<w>&quality=<q>`, which transcodes to
-WebP and caches the result under `public/cache/` (filenames like
-`gallery_photo_w2400_q90_l1.webp`). On startup the server pre-warms the cache and
-removes orphaned entries; the filesystem watcher prunes cache files when their
-source image changes or is deleted.
-
-Only specific `(width, quality)` **presets** are accepted (requests outside the
-list get a 400). The defaults are `2400×q90` (grid `srcset` / default) and
-`4000×q90` (detail page + fullscreen viewer). Override them with the
-`IMAGE_PRESETS` environment variable:
-
-```bash
-IMAGE_PRESETS="1200,80;2400,90;4000,90"
-```
-
-The `public/cache/` directory is gitignored and safe to delete — it will be
-regenerated on demand.
-
----
-
-## Environment variables
-
-All optional — defaults work for a standard `public/` layout. Paths fall back to
-`public/<x>` and then `./<x>`.
-
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `IMAGES_DIR` | gallery images root | `public/images` |
-| `README_ASSETS_DIR` | images for READMEs, served at `/readme/` | `public/readme` |
-| `GALLERY_PATH` | home-gallery directory | `public/images/home` |
-| `ABOUT_CONTENT_PATH` | content directory (about/profile/open source) | `public/content` |
-| `CONFIG_PATH` | path to `config.toml` | `public/content/config.toml` |
-| `IMAGE_CACHE_DIR` | compressed-image cache dir | `public/cache` |
-| `IMAGE_PRESETS` | allowed `width,quality` pairs (`;`-separated) | `2400,90;4000,90` |
-| `RUST_LOG` | log level | — |
-| `LEPTOS_SITE_ADDR` | bind address | `127.0.0.1:4000` (dev) |
-| `LEPTOS_SITE_ROOT` | compiled site assets dir | `target/site` (`./site` in Docker) |
-| `LEPTOS_HASH_FILES` | emit content-hashed `pkg/` filenames (needs `hash.txt`) | `true` in Docker; `false` via local `.env` |
-
----
-
-## Building for production
-
-```bash
-cargo leptos build --release
-```
-
-This produces:
-
-- the server binary at `target/release/portfolio`, and
-- the site bundle (JS/WASM/CSS + copied static files) at `target/site`.
-
-To run it on a machine without the Rust toolchain, copy both the binary and the
-`target/site` directory, then point Leptos at them:
-
-```bash
-export LEPTOS_OUTPUT_NAME="portfolio"
-export LEPTOS_SITE_ROOT="site"
-export LEPTOS_SITE_PKG_DIR="pkg"
-export LEPTOS_SITE_ADDR="0.0.0.0:8080"
-./portfolio
-```
-
-You also need a `public/` directory (images + content) alongside the binary, or
-set the `*_DIR`/`*_PATH` env vars above to point at one.
-
----
-
-## Docker
-
-The [`Dockerfile`](Dockerfile) is a multi-stage build: it compiles with
-`rustlang/rust:nightly-alpine` + `cargo-leptos`, then copies the binary and
-`target/site` into a minimal `alpine:latest` runtime.
-
-Build:
-
-```bash
-docker build -t portfolio .
-```
-
-The image serves on port **8080** (`LEPTOS_SITE_ADDR=0.0.0.0:8080`) and declares
-a volume at `/app/public`. Photos and content are **not** baked into the image —
-mount them at runtime:
-
-```bash
-docker run --rm -p 8080:8080 \
-  -v "$(pwd)/public:/app/public" \
-  portfolio
-```
-
-That mounts your `public/images`, `public/content`, `public/readme`, and
-`public/cache` into the container. The cache is written to the mounted volume so it persists across
-restarts. Adjust with the environment variables above as needed (e.g.
-`-e RUST_LOG=debug`, `-e IMAGE_PRESETS=...`).
-
-`.dockerignore` excludes `target/`, `public/`, `end2end/`, `.git/`, and `.env`
-from the build context, so the build is fast and your local photos aren't copied
-in.
-
----
-
-## Asset hashing & CDN caching
-
-The compiled JS/WASM/CSS under `pkg/` are **content-hashed** in production
-(`hash-files = true` in [`Cargo.toml`](Cargo.toml)): each build emits
-`portfolio.<hash>.{js,wasm,css}` with unique URLs. This lets a CDN such as
-Cloudflare cache `/pkg/*` immutably with no risk of serving a stale JS against a
-freshly deployed WASM — the `wasm-bindgen` mismatch that otherwise breaks
-hydration after a deploy (and needs no cache purge).
-
-For the server to emit the hashed names at runtime:
-
-- **Production** (the [`Dockerfile`](Dockerfile)) sets `LEPTOS_HASH_FILES=true`
-  and copies `hash.txt` next to the binary — the server reads the hashes from it,
-  and without it the first render panics.
-- **Local dev** opts out: `.env` sets `LEPTOS_HASH_FILES=false`, so `cargo leptos
-  watch/serve` serve plain `portfolio.{js,wasm,css}` — nothing to wire up and no
-  filename churn on hot reload. `.env` is gitignored and excluded from the Docker
-  build, so it never affects production.
-
----
-
-## Testing
-
-Rust unit tests (config parsing, metadata extraction, cache logic, …):
-
-```bash
-cargo test --lib --features ssr
-```
-
-End-to-end tests use [Playwright](https://playwright.dev/) and live in
-`end2end/tests/`:
-
-```bash
-cd end2end && npm install   # first time only
-cargo leptos end-to-end             # builds the site, then runs Playwright
-cargo leptos end-to-end --release   # against a release build
-```
-
-Everything CI gates on, in one command:
-
-```bash
-scripts/check-all.sh                # fmt, clippy + tests under ssr AND hydrate, release build
-scripts/check-all.sh --no-release   # ...minus the release build and fixture generation
-```
-
----
-
-## Contributing
-
-`main` is **linear** — no merge commits — and every commit on it is an **atomic unit**: it
-builds and passes the gate on its own. Work happens on a feature branch, which lands as
-**one squashed commit**.
-
-Pull requests are the only route to `main` — there is no local landing script. Push the
-branch, open a PR, and squash-merge it in the Forgejo web UI once CI is green:
-
-```bash
-git push -u origin my-branch
-# open a PR at forge.daveynet.xyz, squash-merge once CI is green
-```
-
-CI runs against the PR head on every push, so its result describes the commit you are about
-to merge: `rust` (fmt, clippy and tests under `ssr`), `hydrate` (the same tests recompiled
-under the client feature set) and `release-checks` (the release build, the fixture gallery,
-the Playwright suite across chromium and firefox, and the bundle-size budget).
-
-What a web-UI merge does **not** do, the way the retired `scripts/land.sh` did, is check the
-**merged tree**. `land.sh` ran the gate on the merged tree *before the commit existed* and
-refused to commit on failure — that ordering is what made "every commit on `main` passes the
-gate" a property rather than a hope. A squash-merge inverts it: the commit is built from the
-PR head, and merging is a decision a person makes by reading CI's result, not a check the
-merge itself re-runs.
-
-**`main` is branch-protected** (enabled 2026-08-04), which is what stands in for that
-ordering:
-
-- direct pushes are off — a PR is the only way in
-- `ci / rust`, `ci / hydrate` and `ci / release-checks`, in their `(pull_request)` form, are
-  required status checks
-- `ci / docker` is deliberately **not** required. It is skipped on pull requests, and Forgejo
-  reports a skipped job as `success` on the commit-status API — so requiring it would gate on
-  nothing at all. The three jobs above carry no `if:` condition, which is what makes requiring
-  them directly safe here.
-- `block_on_outdated_branch` is on, so a PR green against a `main` that has since moved cannot
-  merge
-- `apply_to_admins` is on, so the rule binds the repository owner too — without it the whole
-  rule is advisory for the only account that merges
-
-Requiring `release-checks` is the deliberate strict choice, and it is worth naming the cost:
-the Playwright suite is the flakiest thing in this repository, and a flake now blocks a merge
-until the job is re-run. `playwright.config.ts` sets `retries: 2` and `workers: 1` under CI to
-absorb the ordinary noise. Note this is a *stricter* stance than the `docker` job takes — that
-one deliberately does not wait on `release-checks`, because shipping an image and merging a
-commit are different decisions.
-
-That is not identical to gating the merged tree — the merge commit itself is still never
-tested before it exists — but it removes the two ways the gap actually bites: a red head, and
-a stale base.
-
-A plain `git merge --squash` discards every commit message on the branch, so `land.sh` used to
-prefill the message with all of them under a `--- Squashed from N commits ---` marker. A PR's
-written body does that job now, and does it better as prose. What moves is *where* the
-intermediate messages live: they are no longer inside the commit object that lands on `main`.
-They still exist, on the PR page and under `refs/pull/N/head` — but only on
-`forge.daveynet.xyz`, a dependency the git history alone did not previously have.
-
-Once per clone, so a non-fast-forward merge fails rather than quietly creating a merge
-commit:
-
-```bash
-git config merge.ff only && git config pull.ff only
-```
-
-That is convenience — `.git/config` is untracked and binds nobody. The remote is the real
-constraint: it allows only squash and fast-forward merges, and deletes the branch on merge.
-
----
-
-## Performance
-
-The per-request hot paths — the on-the-fly WebP transcode, EXIF/film-stock
-parsing, and mosaic layout — have a measurement suite under
-[`scripts/perf/`](scripts/perf/):
-
-- **Benchmarks** (criterion): `cargo bench --features ssr`
-- **Allocation profile** (dhat): `cargo run --release --example alloc_profile --features ssr`
-- **WASM bundle-size budget**: `scripts/perf/wasm_size.sh` (after `cargo leptos build --release`)
-- **SSR load test / flamegraph**: `scripts/perf/load_test.sh`, `scripts/perf/flamegraph.sh`
-
-See [`scripts/perf/README.md`](scripts/perf/README.md) for what each measures,
-how to install the tools, and how to read the output.
-
----
+# portfolio
+
+The self-hosted photography portfolio behind [daveyhughes.com](https://daveyhughes.com).
+
+[![The home page of daveyhughes.com](https://daveyhughes.com/readme/portfolio/home.webp)](https://daveyhughes.com)
+
+Each folder of photos becomes a gallery. Titles, camera settings and film stocks are
+read from the files themselves, and the server makes web-sized copies on demand. To add
+a photo, copy the file into its folder; there's nothing to rebuild.
+
+## What it does
+
+- Each directory under `IMAGES_DIR` (default `public/images/`) is a gallery named
+  after it, and `home` fills the landing page. The server watches the folder, so a
+  photo you add or delete there shows up or disappears without a restart.
+- Camera, lens, focal length, aperture, shutter speed, ISO and date come from EXIF,
+  with XMP as a fallback for lens names. Film stock comes from EXIF comments, and
+  titles from filenames.
+- A gallery shows as a uniform grid, or as a mosaic packed by aspect ratio if you
+  turn that on for it. Each photo has its own page with its metadata and a fullscreen
+  viewer.
+- Originals stay full size on disk. The first time a photo is asked for at one of a
+  few preset sizes, the server transcodes it to WebP and keeps the result on disk.
+- `/open-source` lists projects and upstream contributions from a hand-written
+  `opensource.toml`. The page stays hidden unless that file exists, parses and lists
+  at least one project or contribution.
+
+## How it's built
+
+It's Rust end to end, on a pinned nightly toolchain. [Leptos](https://leptos.dev/)
+renders each page on an [Axum](https://github.com/tokio-rs/axum) server, then hydrates
+it in the browser as WebAssembly. EXIF is read with `kamadak-exif`, and the `image` and
+`webp` crates transcode images into an on-disk cache that the server pre-warms at
+startup. It ships as a multi-stage Docker image with an Alpine runtime. Forgejo CI runs
+fmt, clippy and the unit tests under both the server and client feature sets. It also
+runs a Playwright suite in Chromium and Firefox, checks a WASM bundle-size budget, and
+checks for RustSec advisories.
+
+## Docs
+
+- [Content](docs/content.md): adding photos; the `config.toml`, `opensource.toml`,
+  gallery and per-photo TOML files; and images for READMEs.
+- [Deployment](docs/deployment.md): production builds, Docker, environment variables,
+  the image cache, and asset hashing behind a CDN.
+- [Development](docs/development.md): prerequisites, running locally, the directory
+  layout, testing, performance tooling, and how changes reach `main`.
+- [Contributing](docs/contributing.md): a personal project; forks welcome under the GPL.
 
 ## License
 
-Two works, two licenses:
+The code and the photographs are licensed separately.
 
-- **The code** — GNU General Public License v3.0 or later. See [`LICENSE.md`](LICENSE.md).
-- **The photographs** — not covered by that license, and not distributed with this
-  repository (`public/images/` is gitignored). Each deployment states its own terms on
-  its About page; configure them under `[license]` in `config.toml`, or omit the table
-  and the page states all rights reserved.
+- The code is under the GNU General Public License v3.0 or later. See [`LICENSE.md`](LICENSE.md).
+- The photographs, including those in the screenshot above, aren't covered by that
+  license and aren't distributed with this repository (`public/images/` is gitignored).
+  Each deployment states its own terms on its About page. Set them under `[license]`
+  in `config.toml` (see [Site configuration](docs/content.md#site-configuration)); if
+  you leave that table out, the page says all rights reserved.
 
-If you modify the code, set `[license].source` to your own repository — the default
-points at upstream.
+If you modify the code, set `[license].source` to your own repository, since the
+default points at upstream.
