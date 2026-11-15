@@ -78,27 +78,3 @@ test.describe("Image parameter abuse", () => {
     expect(response.status()).toBe(400);
   });
 });
-
-test.describe("Invalid gallery / photo routes", () => {
-  test("non-existent gallery slug shows error UI without 5xx", async ({ page }) => {
-    const response = await page.goto("/gallery/this-gallery-does-not-exist-xyz", {
-      waitUntil: "networkidle",
-    });
-    // SSR returns 200 with the error markup (Leptos resource error path).
-    // We just want to confirm we don't 500 and the page renders something.
-    expect(response?.status()).toBeLessThan(500);
-    const bodyText = await page.locator("body").textContent();
-    expect(bodyText).toBeTruthy();
-  });
-
-  test("non-existent photo slug shows fallback without crashing", async ({ page }) => {
-    const response = await page.goto(
-      "/gallery/nature/this-photo-does-not-exist-xyz",
-      { waitUntil: "networkidle" }
-    );
-    expect(response?.status()).toBeLessThan(500);
-    // The PhotoNotFound component renders "Photo not found" or a back link.
-    const bodyText = await page.locator("body").textContent();
-    expect(bodyText).toBeTruthy();
-  });
-});

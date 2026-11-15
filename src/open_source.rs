@@ -3,8 +3,8 @@
 //! contributions.
 //!
 //! The file is optional. When it is missing, malformed, or lists no entries, the
-//! page renders "Page not found." and the About page omits its link, so a
-//! deployment that never adds the file never shows an empty page.
+//! page is the site's not-found page (HTTP 404) and the About page omits its link,
+//! so a deployment that never adds the file never shows an empty page.
 
 use serde::{Deserialize, Serialize};
 

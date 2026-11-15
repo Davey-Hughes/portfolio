@@ -843,6 +843,144 @@ img {
   font-weight: 400;
 }
 
+// Not-found page (NotFound in src/app.rs): one home-gallery photo beside the message,
+// photo on top at phone width. Type follows .about-page / .open-source-page.
+.not-found-page {
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 72px 48px 96px;
+  display: flex;
+  flex-wrap: wrap; // from 769px to ~940px the text drops under the photo
+  align-items: center;
+  justify-content: center;
+  gap: 64px;
+}
+
+.not-found-photo {
+  flex: 0 0 auto;
+  width: 460px;
+
+  &.portrait {
+    width: 360px;
+  }
+
+  a {
+    display: block;
+  }
+
+  // Ratio from the width/height attributes, clamped: a portrait tops out at 560px
+  // tall, and a panorama is cropped to 240px rather than shrinking to a strip.
+  img {
+    width: 100%;
+    height: auto;
+    min-height: 240px;
+    max-height: 560px;
+    object-fit: cover;
+  }
+
+  figcaption {
+    margin-top: 10px;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #767676;
+  }
+}
+
+.not-found-text {
+  flex: 1 1 320px;
+  max-width: 560px;
+  min-width: 0;
+  overflow-wrap: anywhere; // a long path wraps instead of widening the page
+
+  h1 {
+    font-size: 2.2rem;
+    font-weight: 400;
+    letter-spacing: 3px;
+    margin-bottom: 24px;
+    color: #1a1a1a;
+    text-transform: uppercase;
+  }
+}
+
+.not-found-label {
+  margin-bottom: 12px;
+  font-size: 13px;
+  letter-spacing: 4px;
+  color: #767676;
+}
+
+.not-found-message {
+  font-size: 1.05rem;
+  line-height: 1.9;
+  color: #444;
+  font-weight: 300;
+}
+
+.not-found-path {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  color: #1a1a1a;
+}
+
+.not-found-back {
+  margin-top: 32px;
+  font-size: 13px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+
+  a {
+    text-decoration: underline;
+    text-underline-offset: 4px;
+
+    &:hover {
+      opacity: 0.6;
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .not-found-page {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 40px;
+    padding: 32px 16px 80px;
+  }
+
+  .not-found-photo,
+  .not-found-photo.portrait {
+    width: 100%;
+  }
+
+  .not-found-photo img {
+    min-height: 200px;
+    max-height: 460px;
+  }
+
+  .not-found-text {
+    flex: none;
+    max-width: none;
+    text-align: center;
+  }
+
+  .not-found-text h1 {
+    font-size: 1.8rem;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
+  }
+
+  .not-found-back {
+    margin-top: 28px;
+
+    a {
+      display: inline-block;
+      padding: 10px 0;
+    }
+  }
+}
+
 // About page - Clean layout
 .about-page {
   max-width: 1200px;

@@ -124,7 +124,8 @@ for short links). Copy
 [`public/content/opensource.toml.example`](../public/content/opensource.toml.example)
 to start. The page, and an "Open source" link under the About text, appear only
 while this file exists, parses and lists at least one entry. Otherwise
-`/open-source` shows "Page not found." and the About page has no link.
+`/open-source` answers with the site's not-found page (HTTP 404) and the About page
+has no link.
 
 ```toml
 intro = "Things I've built, and projects I've contributed to."   # optional

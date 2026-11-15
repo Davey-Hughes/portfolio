@@ -311,6 +311,21 @@ pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> 
     }
 }
 
+/// True when the images root holds no gallery besides the home gallery's own
+/// directory: it can't be read, or it is empty apart from what the server makes
+/// by itself (`home`, or wherever `GALLERY_PATH` points, created by the image
+/// watcher and `load_home_photos`). That is what a NAS mount that is down looks
+/// like. Then an empty lookup is a failure, not proof that a gallery or photo
+/// doesn't exist, which would answer 404 for all of them.
+#[cfg(feature = "ssr")]
+fn images_root_looks_unmounted() -> bool {
+    let canonical = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or(p.into());
+    let home = canonical(&crate::paths::home_gallery_dir());
+    !crate::gallery::discover_gallery_directories()
+        .iter()
+        .any(|dir| canonical(std::path::Path::new(dir)) != home)
+}
+
 /// Server function to get photos from ALL galleries (for photo detail page)
 #[server(GetAllGalleryPhotos, "/api")]
 pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnError> {
@@ -329,6 +344,13 @@ pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnErr
 
         // Load all photos (expensive operation)
         let photos = Arc::new(crate::gallery::load_all_gallery_photos());
+
+        // A photo page that can't find its photo here is a 404. No photos at all
+        // while the root looks unmounted is an outage, not an empty site: fail
+        // the lookup, and don't cache it past the outage.
+        if photos.is_empty() && images_root_looks_unmounted() {
+            return Err(ServerFnError::new("the images root holds no galleries"));
+        }
 
         // Cache the result for 10 minutes (600 seconds)
         match ALL_PHOTOS_CACHE.lock() {
@@ -361,11 +383,16 @@ pub async fn get_gallery_photos_by_name(
     }
 }
 
-/// Server function to get gallery data with pre-computed mosaic layout for any gallery
+/// A gallery's photos with their pre-computed mosaic layout.
+///
+/// `Ok(None)` means there is no gallery of that name, so the page can show the
+/// not-found page; an empty gallery directory is `Ok(Some(_))` with no photos.
+/// `Err` means the lookup itself failed, including when the images root can't be
+/// read or holds no galleries but `home`, as it does while its mount is down.
 #[server(GetGalleryDataByName, "/api")]
 pub async fn get_gallery_data_by_name(
     gallery_name: String,
-) -> Result<Arc<GalleryData>, ServerFnError> {
+) -> Result<Option<Arc<GalleryData>>, ServerFnError> {
     #[cfg(feature = "ssr")]
     {
         use leptos::logging::log;
@@ -375,14 +402,20 @@ pub async fn get_gallery_data_by_name(
         match MOSAIC_CACHE.lock() {
             Ok(mut cache) => {
                 if let Some(cached) = cache.get(&cache_key) {
-                    return Ok(cached);
+                    return Ok(Some(cached));
                 }
             }
             Err(_) => log!("MOSAIC_CACHE lock poisoned (read); regenerating"),
         }
 
-        let photos = crate::gallery::load_gallery_photos(&gallery_name)
-            .ok_or_else(|| ServerFnError::new("Gallery not found"))?;
+        // Only galleries that exist are cached; a missing one is looked up each time.
+        let Some(photos) = crate::gallery::load_gallery_photos(&gallery_name) else {
+            // "No such gallery" becomes a 404, so be sure of it.
+            if images_root_looks_unmounted() {
+                return Err(ServerFnError::new("the images root holds no galleries"));
+            }
+            return Ok(None);
+        };
 
         let gallery_path = crate::paths::images_root().join(&gallery_name);
         let config = crate::gallery::load_gallery_config(&gallery_path);
@@ -395,17 +428,40 @@ pub async fn get_gallery_data_by_name(
             Err(_) => log!("MOSAIC_CACHE lock poisoned (write); skipping cache"),
         }
 
-        Ok(result)
+        Ok(Some(result))
     }
     #[cfg(not(feature = "ssr"))]
     {
         let _ = gallery_name;
-        Ok(Arc::new(GalleryData {
-            photos: Vec::new(),
-            mosaic_layout: None,
-            mosaic_layout_tablet: None,
-        }))
+        Ok(None)
     }
+}
+
+/// One photo picked at random from the home gallery, for the not-found page.
+///
+/// `Ok(None)` when the home gallery has no photos. It reuses the home page's
+/// cached gallery data instead of calling `load_home_photos` itself. 404s skip
+/// the HTML cache, so calling it directly would reread every home photo's EXIF on
+/// each one; through the cache, only the first lookup after a change does.
+#[server(RandomHomePhoto, "/api")]
+pub async fn random_home_photo() -> Result<Option<PhotoInfo>, ServerFnError> {
+    #[cfg(feature = "ssr")]
+    {
+        let data = get_home_gallery_data().await?;
+        Ok(pick_random_photo(&data.photos))
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        Ok(None)
+    }
+}
+
+/// A sync helper so the thread-local RNG, which is not `Send`, is never held
+/// across an `.await`.
+#[cfg(feature = "ssr")]
+fn pick_random_photo(photos: &[PhotoInfo]) -> Option<PhotoInfo> {
+    use rand::seq::IndexedRandom;
+    photos.choose(&mut rand::rng()).cloned()
 }
 
 /// Server function to load about page content
@@ -898,12 +954,177 @@ mod tests {
         let data = block_on(get_gallery_data_by_name("images-dir-mosaic".to_string()));
         invalidate_caches();
 
-        let data = data.unwrap();
+        let data = data.unwrap().expect("the gallery exists");
         assert_eq!(data.photos.len(), 1);
         assert!(
             data.mosaic_layout.is_some(),
             "its gallery.toml asks for a mosaic"
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn gallery_data_is_none_for_a_missing_gallery() {
+        let root = images_dir_with_gallery("nature", "");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let missing = block_on(get_gallery_data_by_name("nope".to_string()));
+        let found = block_on(get_gallery_data_by_name("nature".to_string()));
+        invalidate_caches();
+
+        assert!(
+            missing.unwrap().is_none(),
+            "there is no gallery called nope"
+        );
+        let found = found.unwrap().expect("the nature gallery exists");
+        assert_eq!(found.photos.len(), 1);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_gallery_is_not_cached() {
+        let root = images_dir_with_gallery("nature", "");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let before = block_on(get_gallery_data_by_name("later".to_string()));
+        let dir = root.path().join("later");
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(dir.join("photo.jpg"))
+            .unwrap();
+        let after = block_on(get_gallery_data_by_name("later".to_string()));
+        invalidate_caches();
+
+        assert!(before.unwrap().is_none(), "not there yet");
+        assert!(
+            after.unwrap().is_some(),
+            "a gallery added after a miss is found at once"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn gallery_data_is_an_error_when_the_images_root_is_unreadable() {
+        // A NAS mount that is down: the root doesn't exist. That is a failed lookup,
+        // not proof the gallery doesn't exist, so it must not become a 404.
+        let root = tempfile::TempDir::new().unwrap();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path().join("unmounted"));
+
+        invalidate_caches();
+        let data = block_on(get_gallery_data_by_name("nature".to_string()));
+        invalidate_caches();
+
+        assert!(data.is_err(), "{data:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn gallery_data_is_an_error_when_the_images_root_holds_no_galleries() {
+        // What a NAS outage usually looks like: the mountpoint is there but empty,
+        // and the server has made its own empty `home` (load_home_photos and the
+        // image watcher create them). Every gallery is "missing" then, so none of
+        // them may answer 404.
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("home")).unwrap();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let data = block_on(get_gallery_data_by_name("nature".to_string()));
+        invalidate_caches();
+
+        assert!(data.is_err(), "{data:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn gallery_data_is_an_error_when_only_a_gallery_path_home_exists() {
+        // GALLERY_PATH can put the home gallery inside the images root under its
+        // own name; the server creates that directory too, so it doesn't count as
+        // another gallery either.
+        let root = tempfile::TempDir::new().unwrap();
+        let landing = root.path().join("landing");
+        std::fs::create_dir_all(&landing).unwrap();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        let _gallery_path = EnvVarGuard::set("GALLERY_PATH", &landing);
+
+        invalidate_caches();
+        let data = block_on(get_gallery_data_by_name("nature".to_string()));
+        invalidate_caches();
+
+        assert!(data.is_err(), "{data:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn all_gallery_photos_is_an_error_while_the_images_root_holds_no_galleries() {
+        // Photo pages look themselves up in this list, and an empty list makes every
+        // one of them a 404. During an outage that must be a failed lookup instead,
+        // and it must not be cached past the outage.
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("home")).unwrap();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let during = block_on(get_all_gallery_photos());
+        let dir = root.path().join("nature");
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(dir.join("photo.jpg"))
+            .unwrap();
+        let after = block_on(get_all_gallery_photos());
+        invalidate_caches();
+
+        assert!(during.is_err(), "{during:?}");
+        assert_eq!(after.unwrap().len(), 1, "the outage result wasn't cached");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn random_home_photo_picks_a_home_photo() {
+        let root = images_dir_with_gallery("home", "use_mosaic = false\n");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let picked = block_on(random_home_photo());
+        invalidate_caches();
+
+        let picked = picked.unwrap().expect("the home gallery has a photo");
+        assert_eq!(picked.gallery_name, "home");
+        assert_eq!(picked.slug, "photo");
+        assert!(
+            picked.url.starts_with("/images/compressed/home/"),
+            "{}",
+            picked.url
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn random_home_photo_is_none_without_home_photos() {
+        let root = tempfile::TempDir::new().unwrap();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let picked = block_on(random_home_photo());
+        invalidate_caches();
+
+        assert!(picked.unwrap().is_none());
+    }
+
+    #[test]
+    fn pick_random_photo_handles_empty_and_single() {
+        assert_eq!(pick_random_photo(&[]), None);
+        let only = photo("only.jpg", 4, 3);
+        assert_eq!(pick_random_photo(std::slice::from_ref(&only)), Some(only));
     }
 }
 

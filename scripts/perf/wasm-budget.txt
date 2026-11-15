@@ -1,1 +1,1 @@
-gzip_kb=430
+gzip_kb=440

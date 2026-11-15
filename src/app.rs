@@ -3,7 +3,7 @@ use crate::open_source::OpenSourceEntry;
 use crate::server::{
     get_about_content, get_all_gallery_photos, get_galleries, get_gallery_data_by_name,
     get_home_gallery_config, get_home_gallery_data, get_open_source, get_site_config,
-    has_open_source,
+    has_open_source, random_home_photo,
 };
 use crate::types::{PhotoInfo, ViewerImage};
 use leptos::prelude::*;
@@ -11,7 +11,7 @@ use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
 use leptos_meta::{HashedStylesheet, MetaTags, Title, provide_meta_context};
 use leptos_router::{
-    ParamSegment, StaticSegment,
+    ParamSegment, SsrMode, StaticSegment,
     components::{A, Route, Router, Routes},
     hooks::{use_location, use_params},
     params::Params,
@@ -128,9 +128,18 @@ pub fn App() -> impl IntoView {
             // Nothing visible marks the wait: the old page simply stays until the new
             // one is ready. Screen readers are told the main area is busy meanwhile.
             <main class="main-content" aria-busy=move || loading().then_some("true")>
-                <Routes fallback=|| "Page not found.".into_view()>
+                <Routes fallback=|| view! { <NotFound /> }>
                     <Route path=StaticSegment("") view=HomePage />
-                    <Route path=(StaticSegment("gallery"), ParamSegment("name")) view=GalleryPage />
+                    // These three pages can turn out not to exist, and leptos_axum sends
+                    // the status with the first chunk of HTML. Streamed, that chunk leaves
+                    // before the data shows the page is missing, so they render whole
+                    // first (Async) and NotFound's 404 goes out. PartiallyBlocked would
+                    // not help: leptos_axum 0.8.10 streams it exactly like OutOfOrder.
+                    <Route
+                        path=(StaticSegment("gallery"), ParamSegment("name"))
+                        view=GalleryPage
+                        ssr=SsrMode::Async
+                    />
                     <Route
                         path=(
                             StaticSegment("gallery"),
@@ -138,9 +147,14 @@ pub fn App() -> impl IntoView {
                             ParamSegment("photo"),
                         )
                         view=PhotoDetailPage
+                        ssr=SsrMode::Async
                     />
                     <Route path=StaticSegment("about") view=AboutPage />
-                    <Route path=StaticSegment("open-source") view=OpenSourcePage />
+                    <Route
+                        path=StaticSegment("open-source")
+                        view=OpenSourcePage
+                        ssr=SsrMode::Async
+                    />
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
             </main>
@@ -768,60 +782,78 @@ fn GalleryPage() -> impl IntoView {
 
     // A Transition, not a Suspense: moving between galleries refetches without
     // remounting, and the old gallery stays on screen until the new one is ready.
+    // The `.home-page` wrapper sits inside the arms, so the not-found page is never
+    // wrapped in a gallery's page.
     view! {
-        <div class="home-page">
-            <Transition set_pending=set_loading fallback=|| {
-                view! {
+        <Transition set_pending=set_loading fallback=|| {
+            view! {
+                <div class="home-page">
                     <div class="hero-simple">
                         <div class="hero-text">
                             <h1>"GALLERY"</h1>
                             <p class="hero-tagline">"Loading..."</p>
                         </div>
                     </div>
-                }
-            }>
-                {move || {
-                    let (name, data) = gallery.get()?;
-                    let name = name?;
-                    let slug = name.to_lowercase().replace(' ', "-");
-                    let gallery_config = galleries
-                        .get()
-                        .and_then(std::result::Result::ok)
-                        .and_then(|gallery_list| {
-                            gallery_list
-                                .into_iter()
-                                .find(|g| g.slug == slug)
-                                .and_then(|g| g.config)
-                        });
-                    let photos = match data.ok() {
-                        Some(data) if !data.photos.is_empty() => {
-                            let data = std::sync::Arc::unwrap_or_clone(data);
-                            view! {
-                                <PhotoGridRenderer
-                                    photos=data.photos
-                                    config=gallery_config
-                                    mosaic_layout=data.mosaic_layout
-                                    mosaic_layout_tablet=data.mosaic_layout_tablet
-                                />
-                            }
-                                .into_any()
+                </div>
+            }
+        }>
+            {move || {
+                let (name, data) = gallery.get()?;
+                // No name, or no gallery of that name: the not-found page, with 404.
+                let (name, data) = match (name, data) {
+                    (Some(name), Ok(Some(data))) => (name, Ok(data)),
+                    (Some(name), Err(err)) => (name, Err(err)),
+                    (None, _) | (_, Ok(None)) => {
+                        return Some(view! { <NotFound /> }.into_any());
+                    }
+                };
+                let slug = name.to_lowercase().replace(' ', "-");
+                let gallery_config = galleries
+                    .get()
+                    .and_then(std::result::Result::ok)
+                    .and_then(|gallery_list| {
+                        gallery_list
+                            .into_iter()
+                            .find(|g| g.slug == slug)
+                            .and_then(|g| g.config)
+                    });
+                let photos = match data {
+                    Ok(data) if !data.photos.is_empty() => {
+                        let data = std::sync::Arc::unwrap_or_clone(data);
+                        view! {
+                            <PhotoGridRenderer
+                                photos=data.photos
+                                config=gallery_config
+                                mosaic_layout=data.mosaic_layout
+                                mosaic_layout_tablet=data.mosaic_layout_tablet
+                            />
                         }
-                        Some(_) => {
-                            view! {
-                                <div class="empty-gallery">
-                                    <p>"No photos found in this gallery."</p>
-                                </div>
-                            }
-                                .into_any()
+                            .into_any()
+                    }
+                    Ok(_) => {
+                        view! {
+                            <div class="empty-gallery">
+                                <p>"No photos found in this gallery."</p>
+                            </div>
                         }
-                        None => {
-                            view! { <div class="error">"Failed to load gallery"</div> }.into_any()
-                        }
-                    };
-                    Some(view! { <GalleryHero gallery_name=name /> {photos} })
-                }}
-            </Transition>
-        </div>
+                            .into_any()
+                    }
+                    // A failed request, not a missing gallery.
+                    Err(_) => {
+                        view! { <div class="error">"Failed to load gallery"</div> }.into_any()
+                    }
+                };
+                Some(
+                    view! {
+                        <div class="home-page">
+                            <GalleryHero gallery_name=name />
+                            {photos}
+                        </div>
+                    }
+                        .into_any(),
+                )
+            }}
+        </Transition>
     }
 }
 
@@ -972,25 +1004,91 @@ fn CopyrightFooter() -> impl IntoView {
     }
 }
 
-// Helper component for photo detail error view
+/// True only when both dimensions are known and the photo is taller than wide.
+fn is_portrait(width: Option<u32>, height: Option<u32>) -> bool {
+    matches!((width, height), (Some(w), Some(h)) if h > w)
+}
+
+/// The one page for every not-found case: an unknown address, a missing gallery
+/// or photo, and `/open-source` without a usable file.
+///
+/// On the server it sets 404 while it renders. That status reaches the client
+/// only because the routes that can end here render with `SsrMode::Async`, or,
+/// for an unknown address, because the router fallback renders the whole page
+/// before it answers.
+///
+/// It keeps the site's own `<title>`. A page-specific one was dropped: leptos_meta
+/// lost it when the router rebuilt the fallback in place (one dead address to
+/// another), and it cost about 1 KB of the WASM budget.
 #[component]
-fn PhotoNotFound() -> impl IntoView {
+fn NotFound() -> impl IntoView {
+    #[cfg(feature = "ssr")]
+    if let Some(response) = use_context::<leptos_axum::ResponseOptions>() {
+        response.set_status(axum::http::StatusCode::NOT_FOUND);
+    }
+    let location = use_location();
+    let photo = Resource::new(|| (), |()| async { random_home_photo().await });
+
     view! {
-        <div class="error">
-            <p>"Photo not found"</p>
-            <A href="/">"Return to Gallery"</A>
+        <div class="not-found-page">
+            // No fallback: until the photo arrives, or if there is none, the message
+            // stands alone.
+            <Suspense>
+                {move || {
+                    photo
+                        .get()
+                        .and_then(std::result::Result::ok)
+                        .flatten()
+                        .map(|p| view! { <NotFoundPhoto photo=p /> })
+                }}
+            </Suspense>
+            <div class="not-found-text">
+                <p class="not-found-label">"404"</p>
+                <h1>"Page not found"</h1>
+                <p class="not-found-message">
+                    "There's nothing at " <code class="not-found-path">
+                        {move || location.pathname.get()}
+                    </code> ". The link may be old, or the address mistyped."
+                </p>
+                <p class="not-found-back">
+                    <A href="/">"Back to the galleries"</A>
+                </p>
+            </div>
         </div>
     }
 }
 
-// Helper component for invalid photo ID error
+/// The not-found page's photo, linking to its own page, with its title as the
+/// caption.
 #[component]
-fn InvalidPhotoId() -> impl IntoView {
+fn NotFoundPhoto(photo: PhotoInfo) -> impl IntoView {
+    let class = if is_portrait(photo.width, photo.height) {
+        "not-found-photo portrait"
+    } else {
+        "not-found-photo"
+    };
+    // The link holds only the image, so the alt text is the link's name; a photo
+    // whose filename leaves no title still needs one.
+    let alt = if photo.title.is_empty() {
+        "A photo from the home gallery".to_string()
+    } else {
+        photo.title.clone()
+    };
     view! {
-        <div class="error">
-            <p>"Invalid photo ID"</p>
-            <A href="/">"Return to Gallery"</A>
-        </div>
+        <figure class=class>
+            <a href=format!("/gallery/{}/{}", photo.gallery_name, photo.slug)>
+                <img
+                    src=photo.url
+                    srcset=photo.srcset
+                    sizes="(max-width: 768px) 100vw, 460px"
+                    alt=alt
+                    width=photo.width.unwrap_or(1200)
+                    height=photo.height.unwrap_or(800)
+                    decoding="async"
+                />
+            </a>
+            <figcaption>{photo.title}</figcaption>
+        </figure>
     }
 }
 
@@ -1698,47 +1796,52 @@ fn PhotoDetailPage() -> impl IntoView {
         state.show_zoom_controls.set(true);
     };
 
+    // `.photo-detail-page` has a fixed height and hides overflow, so it wraps each
+    // branch except the not-found page, which it would clip.
     view! {
-        <div class="photo-detail-page">
-            <Suspense fallback=|| {
-                view! { <div class="loading">"Loading photo..."</div> }
-            }>
-                {move || {
-                    let Some(slug_val) = params.get().ok().map(|p| p.photo) else {
-                        return // Get slug from params
-                        view! { <InvalidPhotoId /> }
-                            .into_any();
-                    };
-                    let Some(photo_list) = photos.get().and_then(std::result::Result::ok) else {
-                        return // Get photo list
-                        view! { <div class="error">"Failed to load photo"</div> }
-                            .into_any();
-                    };
-                    let Some((idx, photo)) = photo_list
-                        .iter()
-                        .enumerate()
-                        .find(|(_, p)| p.slug == slug_val)
-                        .map(|(i, p)| (i, p.clone())) else {
-                        return // Find the photo and its index
-                        view! { <PhotoNotFound /> }
-                            .into_any();
-                    };
-                    let prev_photo = if idx > 0 { photo_list.get(idx - 1).cloned() } else { None };
-                    let next_photo = if idx < photo_list.len() - 1 {
-                        photo_list.get(idx + 1).cloned()
-                    } else {
-                        None
-                    };
-                    let photo_url_detail = StoredValue::new(photo.detail_url.clone());
-                    let photo_url_original = StoredValue::new(photo.original_url.clone());
-                    let photo_sources_original = StoredValue::new(photo.original_sources.clone());
-                    let photo_title = photo.title.clone();
-                    let back_link = if photo.gallery_name == "home" {
-                        "/".to_string()
-                    } else {
-                        format!("/gallery/{}", photo.gallery_name)
-                    };
-                    view! {
+        <Suspense fallback=|| {
+            view! {
+                <div class="photo-detail-page">
+                    <div class="loading">"Loading photo..."</div>
+                </div>
+            }
+        }>
+            {move || {
+                let Some(slug_val) = params.get().ok().map(|p| p.photo) else {
+                    return view! { <NotFound /> }.into_any();
+                };
+                let Some(photo_list) = photos.get().and_then(std::result::Result::ok) else {
+                    return view! {
+                        <div class="photo-detail-page">
+                            <div class="error">"Failed to load photo"</div>
+                        </div>
+                    }
+                        .into_any();
+                };
+                let Some((idx, photo)) = photo_list
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| p.slug == slug_val)
+                    .map(|(i, p)| (i, p.clone())) else {
+                    return view! { <NotFound /> }.into_any();
+                };
+                let prev_photo = if idx > 0 { photo_list.get(idx - 1).cloned() } else { None };
+                let next_photo = if idx < photo_list.len() - 1 {
+                    photo_list.get(idx + 1).cloned()
+                } else {
+                    None
+                };
+                let photo_url_detail = StoredValue::new(photo.detail_url.clone());
+                let photo_url_original = StoredValue::new(photo.original_url.clone());
+                let photo_sources_original = StoredValue::new(photo.original_sources.clone());
+                let photo_title = photo.title.clone();
+                let back_link = if photo.gallery_name == "home" {
+                    "/".to_string()
+                } else {
+                    format!("/gallery/{}", photo.gallery_name)
+                };
+                view! {
+                    <div class="photo-detail-page">
                         <div class="photo-detail-container">
                             <div class="photo-detail-header">
                                 <A href=back_link attr:class="back-link">
@@ -1810,11 +1913,11 @@ fn PhotoDetailPage() -> impl IntoView {
                                 viewport_width=viewport_width
                             />
                         </div>
-                    }
-                        .into_any()
-                }}
-            </Suspense>
-        </div>
+                    </div>
+                }
+                    .into_any()
+            }}
+        </Suspense>
     }
 }
 
@@ -2177,11 +2280,11 @@ fn OpenSourcePage() -> impl IntoView {
                             .into_any()
                     }
                     // Still loading on the client: keep the Suspense fallback's shape
-                    // rather than flashing "Page not found." before the data lands.
+                    // rather than flashing the not-found page before the data lands.
                     None => ().into_any(),
-                    // Missing, malformed, or empty file, or a failed request: the same
-                    // text the router's fallback renders for an unknown path.
-                    Some(_) => view! { <div class="error"><p>"Page not found."</p></div> }.into_any(),
+                    // A missing, malformed or empty file, or a failed request: the
+                    // site's not-found page, and on the server a 404.
+                    Some(_) => view! { <NotFound /> }.into_any(),
                 }
             }}
         </Suspense>
@@ -2425,5 +2528,239 @@ mod tests {
             dropped.is_ok(),
             "dropping the viewer on another thread panicked"
         );
+    }
+
+    // The photo link wraps only the image, so the image's alt is the link's name.
+    #[test]
+    fn a_not_found_photo_without_a_title_still_names_its_link() {
+        let photo = PhotoInfo {
+            url: "/images/compressed/home/01.jpg".to_string(),
+            original_url: String::new(),
+            detail_url: String::new(),
+            srcset: String::new(),
+            sources: Vec::new(),
+            original_sources: Vec::new(),
+            title: String::new(),
+            filename: "01 - .jpg".to_string(),
+            slug: "01".to_string(),
+            gallery_name: "home".to_string(),
+            subfolder: None,
+            width: Some(1200),
+            height: Some(800),
+            date_taken: None,
+            camera_make: None,
+            camera_model: None,
+            lens_model: None,
+            focal_length: None,
+            aperture: None,
+            shutter_speed: None,
+            iso: None,
+            film_stock: None,
+            copyright: None,
+            focal_point: None,
+        };
+        let html = Owner::new().with(|| view! { <NotFoundPhoto photo=photo /> }.to_html());
+        assert!(
+            html.contains(r#"alt="A photo from the home gallery""#),
+            "{html}"
+        );
+    }
+}
+
+// Runs under both feature sets, unlike `tests` above.
+#[cfg(test)]
+mod not_found_tests {
+    use super::is_portrait;
+
+    #[test]
+    fn is_portrait_only_when_taller_than_wide() {
+        assert!(is_portrait(Some(800), Some(1200)));
+        assert!(!is_portrait(Some(1200), Some(800)));
+        assert!(!is_portrait(Some(1000), Some(1000)));
+        assert!(!is_portrait(None, Some(5)));
+        assert!(!is_portrait(Some(5), None));
+    }
+}
+
+/// Whole pages rendered through the app's routes, the way the server serves them.
+#[cfg(all(test, feature = "ssr"))]
+mod ssr_tests {
+    use super::{App, shell};
+    use crate::test_support::EnvVarGuard;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use leptos::prelude::LeptosOptions;
+    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use serial_test::serial;
+    use tower::ServiceExt;
+
+    /// One test's site: a temp dir that is the content dir (no `config.toml`, no
+    /// `opensource.toml`) and holds `images/` as the images root, with an empty
+    /// `images/home`. Sets `ABOUT_CONTENT_PATH`, `IMAGES_DIR` and `CONFIG_PATH` (to
+    /// the absent `dir/config.toml`), removes `GALLERY_PATH`, and clears the
+    /// process-wide caches on the way in and out.
+    struct Site {
+        dir: tempfile::TempDir,
+        _env: [EnvVarGuard; 3],
+    }
+
+    impl Site {
+        fn new() -> Self {
+            let dir = tempfile::TempDir::new().unwrap();
+            std::fs::create_dir_all(dir.path().join("images/home")).unwrap();
+            unsafe { std::env::remove_var("GALLERY_PATH") };
+            let env = [
+                EnvVarGuard::set("ABOUT_CONTENT_PATH", dir.path()),
+                EnvVarGuard::set("IMAGES_DIR", dir.path().join("images")),
+                EnvVarGuard::set("CONFIG_PATH", dir.path().join("config.toml")),
+            ];
+            crate::server::invalidate_caches();
+            Self { dir, _env: env }
+        }
+
+        /// As `new`, plus one small JPEG at `images/home/photo.jpg` and a `nature`
+        /// gallery holding another. A gallery other than `home` has to exist before
+        /// a missing one counts as missing (`get_gallery_data_by_name`).
+        fn with_home_photo() -> Self {
+            let site = Self::new();
+            let nature = site.dir.path().join("images/nature");
+            std::fs::create_dir_all(&nature).unwrap();
+            for path in [
+                site.dir.path().join("images/home/photo.jpg"),
+                nature.join("photo.jpg"),
+            ] {
+                image::RgbImage::new(4, 3).save(path).unwrap();
+            }
+            site
+        }
+
+        fn write_open_source(&self, toml: &str) {
+            std::fs::write(self.dir.path().join("opensource.toml"), toml).unwrap();
+        }
+    }
+
+    impl Drop for Site {
+        fn drop(&mut self) {
+            crate::server::invalidate_caches();
+        }
+    }
+
+    /// GET `path` through the app's Leptos routes and fallback, wired the way
+    /// src/main.rs wires them (minus the file mounts and the HTML cache).
+    async fn get(path: &str) -> (StatusCode, String) {
+        let options = LeptosOptions::builder().output_name("portfolio").build();
+        let app = axum::Router::new()
+            .leptos_routes(&options, generate_route_list(App), {
+                let options = options.clone();
+                move || shell(options.clone())
+            })
+            .fallback(leptos_axum::file_and_error_handler(shell))
+            .with_state(options);
+        let res = app
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn unknown_address_answers_404_with_the_not_found_page() {
+        let _site = Site::with_home_photo();
+        let (status, body) = get("/no-such-page").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"class="not-found-page""#), "{body}");
+        assert!(
+            body.contains(r#"<code class="not-found-path">/no-such-page</code>"#),
+            "{body}"
+        );
+        assert!(body.contains(r#"href="/gallery/home/photo""#), "{body}");
+        // The site's own title, as on every page: the owner chose no special one.
+        assert!(body.contains("<title>Your Name</title>"), "{body}");
+        assert!(!body.contains("Page not found ·"), "{body}");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn unknown_address_without_home_photos_shows_the_message_alone() {
+        let _site = Site::new();
+        let (status, body) = get("/no-such-page").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("Back to the galleries"), "{body}");
+        assert!(!body.contains("not-found-photo"), "{body}");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn the_path_is_shown_as_text() {
+        let _site = Site::new();
+        let (status, body) = get("/%3Cscript%3Ealert(1)%3C/script%3E").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(!body.contains("<script>alert(1)"), "{body}");
+        assert!(
+            body.contains(
+                r#"<code class="not-found-path">/%3Cscript%3Ealert(1)%3C/script%3E</code>"#
+            ),
+            "{body}"
+        );
+        let (_, body) = get("/a&b").await;
+        assert!(
+            body.contains(r#"<code class="not-found-path">/a&amp;b</code>"#),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn open_source_without_a_file_answers_404_with_the_not_found_page() {
+        let _site = Site::new();
+        let (status, body) = get("/open-source").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(
+            body.contains(r#"<code class="not-found-path">/open-source</code>"#),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn open_source_with_a_file_answers_200() {
+        let site = Site::new();
+        site.write_open_source("[[projects]]\nname = \"P\"\nsummary = \"S\"\n");
+        let (status, body) = get("/open-source").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("<h1>Open Source</h1>"), "{body}");
+        assert!(!body.contains("not-found-page"), "{body}");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn missing_gallery_and_photo_answer_404() {
+        let _site = Site::with_home_photo();
+        for path in ["/gallery/nope", "/gallery/home/nope"] {
+            let (status, body) = get(path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(
+                body.contains(&format!(r#"<code class="not-found-path">{path}</code>"#)),
+                "{path}: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn existing_gallery_and_photo_answer_200() {
+        let _site = Site::with_home_photo();
+        for path in ["/gallery/home", "/gallery/home/photo"] {
+            let (status, body) = get(path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(!body.contains("not-found-page"), "{path}: {body}");
+        }
     }
 }

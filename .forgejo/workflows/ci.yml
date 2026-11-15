@@ -133,7 +133,7 @@ jobs:
   # Everything that needs a release build, in one job.
   #
   # The hydration bundle ships to every visitor, so its size is budgeted in
-  # scripts/perf/wasm-budget.txt (gzip_kb=430) — the budget and the checking script both
+  # scripts/perf/wasm-budget.txt (gzip_kb) — the budget and the checking script both
   # existed already, but nothing ran them, so nothing stopped the bundle drifting past
   # the ceiling. The Playwright suite (9 specs, 118 tests across chromium and firefox)
   # ran nowhere either, and had rotted accordingly: it waited on a URL route that does

@@ -130,9 +130,9 @@ const FIXTURES: &[Fixture] = &[
         lenstagger: Some("-FNumber=11.0\n-ExposureTime=1/2000\n-LensModel=85mm f/1.4D"),
     },
     // A second gallery, so `get_galleries()` returns something and the nav renders a
-    // real gallery link. Named "nature" to match one of the production galleries; it
-    // also gives abuse-cases.spec.ts's "non-existent photo slug" case a real gallery to
-    // miss inside, which exercises PhotoNotFound rather than a missing gallery.
+    // real gallery link. Named "nature" to match one of the production galleries. A
+    // gallery other than `home` also has to exist before a missing gallery or photo
+    // counts as missing (the not-found page, 404) rather than as an outage.
     Fixture {
         gallery: "nature",
         name: "bee",
