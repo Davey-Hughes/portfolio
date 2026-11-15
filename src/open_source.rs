@@ -46,8 +46,8 @@ pub struct OpenSourceEntry {
     pub tags: Vec<String>,
     #[serde(default)]
     pub highlights: Vec<Highlight>,
-    /// A screenshot shown on the card, as any URL or site path (such as
-    /// `/readme/<repo>/card.webp`). No image when unset or blank.
+    /// A screenshot shown on the card and opened full screen, as any URL or site path
+    /// (such as `/readme/<repo>/card.webp`). No image when unset or blank.
     #[serde(default)]
     pub image: Option<String>,
     /// The screenshot's alt text. Defaults to "<name> screenshot" when unset or blank.
@@ -59,6 +59,14 @@ pub struct OpenSourceEntry {
     /// overlay. A normal screenshot would come out as its own negative.
     #[serde(default)]
     pub image_invert: bool,
+    /// What the card shows on desktop instead of `image`, as any URL or site path;
+    /// full screen, and the full-width card on phones, still use `image`. Lets the
+    /// card's file be sized for the desktop slot (so the browser doesn't have to
+    /// shrink a large image much, which can alias fine line art) while full screen
+    /// gets every pixel. Falls back to `image` when unset or blank. Set alone, it is
+    /// the image: shown on the card and opened full screen.
+    #[serde(default)]
+    pub image_card: Option<String>,
 }
 
 /// A link to one notable piece of work, such as a merged PR, under a card.
@@ -106,16 +114,31 @@ impl OpenSourceEntry {
         Some((href, label))
     }
 
-    /// `(src, alt)` for the card's screenshot, or `None` when `image` is unset or
-    /// blank. The alt is `image_alt` when that is set and not blank, else
-    /// "<name> screenshot".
+    /// `(src, alt)` for the screenshot, or `None` when neither `image` nor
+    /// `image_card` is set. `src` is what full screen opens: `image`, or
+    /// `image_card` when that is all there is, so a card file set alone isn't
+    /// dropped without a trace. The card shows [`Self::card_src`]. The alt is
+    /// `image_alt` when that is set and not blank, else "<name> screenshot".
     pub fn image(&self) -> Option<(&str, String)> {
-        let src = self.image.as_deref().and_then(non_blank)?;
+        let src = self
+            .image
+            .as_deref()
+            .and_then(non_blank)
+            .or_else(|| self.image_card.as_deref().and_then(non_blank))?;
         let alt = self.image_alt.as_deref().and_then(non_blank).map_or_else(
             || format!("{} screenshot", self.name.trim()),
             str::to_string,
         );
         Some((src, alt))
+    }
+
+    /// What the card shows on desktop, given `src` from [`Self::image`]:
+    /// `image_card` when that is set and not blank, else `src` itself.
+    pub fn card_src<'a>(&'a self, src: &'a str) -> &'a str {
+        self.image_card
+            .as_deref()
+            .and_then(non_blank)
+            .unwrap_or(src)
     }
 }
 
@@ -192,6 +215,7 @@ mod tests {
             image: None,
             image_alt: None,
             image_invert: false,
+            image_card: None,
         }
     }
 
@@ -201,6 +225,43 @@ mod tests {
             image_alt: image_alt.map(str::to_string),
             ..entry(None)
         }
+    }
+
+    #[test]
+    fn image_and_card_src_fall_back_to_each_other() {
+        let entry = |image: Option<&str>, card: Option<&str>| OpenSourceEntry {
+            image_card: card.map(str::to_string),
+            ..with_image(image, None)
+        };
+        // (what full screen opens, what the card shows)
+        let srcs = |e: &OpenSourceEntry| {
+            e.image()
+                .map(|(src, _)| (src.to_string(), e.card_src(src).to_string()))
+        };
+        let pair = |full: &str, card: &str| Some((full.to_string(), card.to_string()));
+
+        assert_eq!(
+            srcs(&entry(Some("/i.webp"), None)),
+            pair("/i.webp", "/i.webp")
+        );
+        assert_eq!(
+            srcs(&entry(Some("/i.webp"), Some("  "))),
+            pair("/i.webp", "/i.webp")
+        );
+        assert_eq!(
+            srcs(&entry(Some("/i.webp"), Some(" /card.webp "))),
+            pair("/i.webp", "/card.webp")
+        );
+        // A card file set alone is the image, not dropped without a trace.
+        assert_eq!(
+            srcs(&entry(None, Some("/card.webp"))),
+            pair("/card.webp", "/card.webp")
+        );
+        assert_eq!(
+            srcs(&entry(Some(" "), Some("/card.webp"))),
+            pair("/card.webp", "/card.webp")
+        );
+        assert_eq!(srcs(&entry(None, Some(" "))), None);
     }
 
     #[test]
@@ -389,6 +450,7 @@ summary = "Only the required fields."
         assert_eq!(project.image, None);
         assert_eq!(project.image_alt, None);
         assert!(!project.image_invert);
+        assert_eq!(project.image_card, None);
     }
 
     #[cfg(feature = "ssr")]
@@ -402,6 +464,7 @@ summary = "A site."
 image = "/readme/redextape/card.webp"
 image_alt = "The redextape home page"
 image_invert = true
+image_card = "/readme/redextape/card-small.webp"
 
 [[contributions]]
 name = "Upstream"
@@ -429,6 +492,9 @@ image = "/readme/upstream/card.webp"
         );
 
         assert!(project.image_invert);
+        // The chain the card uses: image() for full screen, then card_src for the card.
+        let (full, _) = project.image().unwrap();
+        assert_eq!(project.card_src(full), "/readme/redextape/card-small.webp");
 
         // Contributions share the shape, alt default included.
         assert_eq!(
@@ -439,6 +505,9 @@ image = "/readme/upstream/card.webp"
             ))
         );
         assert!(!content.contributions[0].image_invert);
+        let upstream = &content.contributions[0];
+        let (full, _) = upstream.image().unwrap();
+        assert_eq!(upstream.card_src(full), "/readme/upstream/card.webp");
     }
 
     #[cfg(feature = "ssr")]

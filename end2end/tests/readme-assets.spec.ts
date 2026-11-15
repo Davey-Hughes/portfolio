@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 // /readme/<repo>/<file> serves screenshots and clips for the owner's repos' READMEs
 // from README_ASSETS_DIR. gen_fixtures writes target/e2e-fixtures/readme/fixture/ with
-// allowed files (shot.webp and clip.mp4 are used here, art.webp by
+// allowed files (shot.webp and clip.mp4 are used here, art.webp and art-card.webp by
 // open-source.spec.ts), one refused file (notes.toml), and a directory named like an
 // image (album.webp/, holding an index.html) so the directory check cannot lean on
 // the extension allowlist. It also writes readme-outside.webp beside readme/, as a

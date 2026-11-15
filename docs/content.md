@@ -139,6 +139,7 @@ tags    = ["Rust", "Leptos"]       # optional
 image   = "/readme/portfolio/card.webp"  # optional; a screenshot on the card
 image_alt = "The portfolio home page"    # optional; defaults to "<name> screenshot"
 image_invert = false               # optional; see below
+image_card = "/readme/portfolio/card-small.webp"  # optional; what the card shows instead
 
 [[contributions]]                  # upstream projects; same fields as [[projects]]
 name    = "Some Upstream"
@@ -169,6 +170,16 @@ white on its dark overlay. Colours keep roughly their hue. A normal screenshot
 would come out as its own negative. The key is newer than the page itself, and an
 older server rejects it like any unknown key, so update the server before adding
 it to the file.
+
+`image_card` is what the card shows on desktop instead of `image`; full screen,
+and the full-width card on phones, still use `image`, and without `image_card` the
+card shows `image` too. Set alone, `image_card` is the image. It lets the card's
+file be made for the desktop slot while full screen gets the full-size file. Make
+it 676×420: the slot is 340×212 with a 1px border inside, so the picture itself is
+338×210, and 676×420 is twice that, shown 1:1 on 2× screens and halved exactly on
+1× screens. That matters for fine line art: a browser shrinking a large image to
+the card's size can turn its evenly spaced dots into patchy patterns. It is newer
+than `image_invert`, so the same rule applies: update the server first.
 
 The whole content directory is also served as static files under `/content/`,
 which is how the profile image reaches the browser. That means anyone can

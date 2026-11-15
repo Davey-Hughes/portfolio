@@ -2105,6 +2105,26 @@ fn OpenSourceLink() -> impl IntoView {
     }
 }
 
+/// `url` made safe as a single `srcset` candidate. Unlike `src`, `srcset` splits on
+/// whitespace and commas, so a path such as `/readme/my project/card.webp` would
+/// otherwise be read as a URL followed by a bogus descriptor.
+fn srcset_url(url: &str) -> String {
+    url.chars()
+        .fold(String::with_capacity(url.len()), |mut out, c| {
+            // ',' and the five characters `char::is_ascii_whitespace` matches.
+            match c {
+                ',' => out.push_str("%2C"),
+                ' ' => out.push_str("%20"),
+                '\t' => out.push_str("%09"),
+                '\n' => out.push_str("%0A"),
+                '\x0C' => out.push_str("%0C"),
+                '\r' => out.push_str("%0D"),
+                c => out.push(c),
+            }
+            out
+        })
+}
+
 /// One card on the `/open-source` page. The name links out only when the entry has
 /// a non-blank `url`; highlights likewise fall back to plain text. A card with an
 /// `image` shows it beside the text, and a click opens it in the full-screen viewer.
@@ -2191,6 +2211,16 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
         Some((src, alt)) => {
             let image = ViewerImage::screenshot(src, &alt);
             let invert = entry.image_invert;
+            // The desktop slot shows `image_card` when it differs. Phones show the
+            // screenshot full width, at 2x or 3x density, which needs more pixels
+            // than that file has, so they keep `image`. The media query is the exact
+            // complement of the card's phone layout (max-width: 768px in main.scss),
+            // so a fractional viewport width can't fall between the two.
+            let card = entry.card_src(src);
+            let desktop = (card != src).then(|| {
+                let card = srcset_url(card);
+                view! { <source media="not all and (max-width: 768px)" srcset=card /> }
+            });
             let src = src.to_string();
             let label = format!("View the {} screenshot full screen", entry.name.trim());
             let state = ZoomPanState::new();
@@ -2217,15 +2247,18 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
                         />
                     </div>
                     <button type="button" class="oss-image" aria-label=label on:click=open>
-                        // Only the card inverts: full screen, white art already shows
-                        // light on the viewer's dark overlay.
-                        <img
-                            src=src
-                            alt=alt
-                            class:image-invert=invert
-                            loading="lazy"
-                            decoding="async"
-                        />
+                        <picture>
+                            {desktop}
+                            // Only the card inverts: full screen, white art already
+                            // shows light on the viewer's dark overlay.
+                            <img
+                                src=src
+                                alt=alt
+                                class:image-invert=invert
+                                loading="lazy"
+                                decoding="async"
+                            />
+                        </picture>
                     </button>
                 </li>
             }
@@ -2505,6 +2538,16 @@ fn ContactPage() -> impl IntoView {
 #[cfg(all(test, feature = "ssr"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srcset_url_escapes_what_srcset_would_split_on() {
+        assert_eq!(srcset_url("/readme/x/card.webp"), "/readme/x/card.webp");
+        assert_eq!(
+            srcset_url("/readme/my project/a,b.webp"),
+            "/readme/my%20project/a%2Cb.webp"
+        );
+        assert_eq!(srcset_url("/a\tb"), "/a%09b");
+    }
 
     // The server renders a page on one tokio worker and can drop it on another, so
     // nothing the viewer creates while rendering may be tied to its thread. A

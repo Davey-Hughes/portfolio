@@ -126,6 +126,10 @@ test.describe("Open Source Page screenshots", () => {
   const plain = (page: Page) =>
     page.locator(".oss-card", { hasText: "Unlinked Upstream" });
   const button = (page: Page) => page.getByRole("button", { name: VIEW });
+  // The path of the file the browser picked from a card's <picture>, not just the
+  // fallback src; empty until it has picked.
+  const shown = (l: Locator) =>
+    l.evaluate((el: HTMLImageElement) => el.currentSrc && new URL(el.currentSrc).pathname);
 
   test("shows a screenshot only on the card that sets one", async ({ page }) => {
     await page.goto("/open-source", { waitUntil: "networkidle" });
@@ -147,10 +151,12 @@ test.describe("Open Source Page screenshots", () => {
   });
 
   test("inverts an image_invert screenshot on its card only", async ({ page }) => {
+    // Desktop: the card shows image_card (16 px wide), full screen image (32 px).
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto("/open-source", { waitUntil: "networkidle" });
     const filter = (l: Locator) => l.evaluate((el) => getComputedStyle(el).filter);
-    const loaded = (l: Locator) =>
-      expect.poll(() => l.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(16);
+    const loaded = (l: Locator, width: number) =>
+      expect.poll(() => l.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(width);
     // The [r, g, b] the page shows at `at` (fractions of the element's box), read
     // from a screenshot the browser decodes, so what is checked is what is seen.
     const pixel = async (l: Locator, at: [number, number]) => {
@@ -177,12 +183,12 @@ test.describe("Open Source Page screenshots", () => {
       .locator(".oss-image img");
     // The image is lazy, so it may not load until it is near the viewport.
     await art.scrollIntoViewIfNeeded();
-    await loaded(art);
+    await loaded(art, 16); // art-card.webp, through image_card
 
     expect(await filter(card(page).locator(".oss-image img"))).toBe("none");
     expect(await filter(art)).toBe("invert(1) hue-rotate(180deg)");
-    // fixture art.webp: white in the middle, transparent around it. The white comes
-    // out black on the white page, and the transparent edge stays page white.
+    // fixture art: white in the middle, transparent around it. The white comes out
+    // black on the white page, and the transparent edge stays page white.
     expect(Math.max(...(await pixel(art, [0.5, 0.5])))).toBeLessThan(40);
     expect(Math.min(...(await pixel(art, [0.1, 0.1])))).toBeGreaterThan(215);
 
@@ -191,9 +197,49 @@ test.describe("Open Source Page screenshots", () => {
       .getByRole("button", { name: "View the Fixture Upstream screenshot full screen" })
       .click();
     const full = page.locator(".fullscreen-image");
-    await loaded(full);
+    await loaded(full, 32); // art.webp, the image itself
     expect(await filter(full)).toBe("none");
     expect(Math.min(...(await pixel(full, [0.5, 0.5])))).toBeGreaterThan(215);
+  });
+
+  test("shows image_card on the desktop card and opens image full screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    const art = page
+      .locator(".oss-card", { hasText: "Fixture Upstream" })
+      .locator(".oss-image img");
+    const full = page.locator(".fullscreen-image");
+
+    await art.scrollIntoViewIfNeeded();
+    await expect.poll(() => shown(art)).toBe("/readme/fixture/art-card.webp");
+    await page
+      .getByRole("button", { name: "View the Fixture Upstream screenshot full screen" })
+      .click();
+    await expect(full).toHaveAttribute("src", "/readme/fixture/art.webp");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".fullscreen-overlay")).toHaveCount(0);
+
+    // Fixture Project sets no image_card: the card and full screen show the same file.
+    const shot = card(page).locator(".oss-image img");
+    await expect.poll(() => shown(shot)).toBe(SHOT);
+    await expect(card(page).locator("source")).toHaveCount(0);
+    await button(page).click();
+    await expect(full).toHaveAttribute("src", SHOT);
+  });
+
+  test("shows image on the full-width card at phone width", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    const art = page
+      .locator(".oss-card", { hasText: "Fixture Upstream" })
+      .locator(".oss-image img");
+
+    // image_card is made for the desktop slot; the full-width phone card at 2x or 3x
+    // density needs more pixels than that.
+    await art.scrollIntoViewIfNeeded();
+    await expect.poll(() => shown(art)).toBe("/readme/fixture/art.webp");
   });
 
   test("sets the screenshot right of the text on desktop", async ({ page }) => {

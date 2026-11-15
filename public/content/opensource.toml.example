@@ -19,6 +19,11 @@
 # on the white page, and the full-screen viewer shows it as it is, white on its dark
 # overlay. A normal screenshot would come out as its own negative.
 #
+# `image_card` is what the card shows on desktop instead of `image`; full screen
+# and phones still use `image`. It lets the card's file be sized for the desktop
+# slot (676x420: twice the 338x210 inside the card's 1px border) while full screen
+# gets the full-size file. Set without `image`, it is the image, full screen too.
+#
 # This file is public: the content directory is served as-is under /content/, so
 # anyone can download it, comments and commented-out entries included. Keep
 # drafts and private notes out of it.
@@ -36,6 +41,7 @@ tags = ["Rust", "Leptos"]                        # optional
 image = "/readme/portfolio/card.webp"            # optional; a screenshot right of the text
 image_alt = "The portfolio home page"            # optional; defaults to "<name> screenshot"
 image_invert = false                             # optional; see `image_invert` above
+image_card = "/readme/portfolio/card-small.webp" # optional; what the card shows instead
 
 [[projects]]
 name = "another-project"

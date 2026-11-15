@@ -1279,6 +1279,9 @@ img {
   column-gap: 28px;
   align-items: start;
 
+  // OssCard (src/app.rs) picks `image_card` with the exact complement of this
+  // query, `not all and (max-width: 768px)`. Change both together, or a card in
+  // one layout gets the file made for the other.
   @media (max-width: 768px) {
     grid-template-columns: minmax(0, 1fr);
     row-gap: 14px;
