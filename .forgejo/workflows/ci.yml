@@ -135,7 +135,7 @@ jobs:
   # The hydration bundle ships to every visitor, so its size is budgeted in
   # scripts/perf/wasm-budget.txt (gzip_kb) — the budget and the checking script both
   # existed already, but nothing ran them, so nothing stopped the bundle drifting past
-  # the ceiling. The Playwright suite (9 specs, 118 tests across chromium and firefox)
+  # the ceiling. The Playwright suite (then 9 specs, 118 tests across chromium and firefox)
   # ran nowhere either, and had rotted accordingly: it waited on a URL route that does
   # not exist, asserted a grid class the mosaic layout never renders, and sent an invalid
   # image preset to every traversal test so all four were rejected at parameter
@@ -276,8 +276,8 @@ jobs:
       # IMAGES_DIR points at the fixture gallery generated above; public/images holds no
       # photos here, so a server that listed galleries from anywhere else would show
       # none. IMAGE_CACHE_DIR keeps the transcoded copies beside the fixtures, which is
-      # the same recipe CLAUDE.md gives for a local run: there, the default public/cache
-      # would be pruned of every entry the fixture photos do not account for.
+      # the same recipe docs/development.md gives for a local run: there, the default
+      # public/cache would be pruned of every entry the fixture photos do not account for.
       #
       # Both reporters: `line` puts failures directly in the job log, `html` writes the
       # report the upload step below collects. The config's default is html alone, which

@@ -1,19 +1,51 @@
 use std::process::Command;
 
+const USAGE: &str = "usage: cargo ci [--release]";
+
 /// Run one CI step. Exits with the step's own status code if it fails, so the first
 /// failure stops the run and `cargo ci` exits non-zero.
-fn step(args: &[&str]) {
-    println!("\n=> cargo {}", args.join(" "));
-    let status = Command::new("cargo")
+fn run(program: &str, args: &[&str], env: &[(&str, &str)]) {
+    // The command as you'd type it, environment first.
+    let shown = env
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .chain([program.to_owned()])
+        .chain(args.iter().map(|a| (*a).to_owned()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("\n=> {shown}");
+    let status = Command::new(program)
         .args(args)
+        .envs(env.iter().copied())
         .status()
-        .unwrap_or_else(|e| panic!("failed to execute `cargo {}`: {e}", args.join(" ")));
+        .unwrap_or_else(|e| panic!("failed to execute `{shown}`: {e}"));
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
 }
 
+/// A `cargo` step with no extra environment, which is most of them.
+fn step(args: &[&str]) {
+    run("cargo", args, &[]);
+}
+
 fn main() {
+    // Parse up front, so a typo (`--releas`) fails at once rather than quietly running
+    // less than was asked for.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let release = match args.as_slice() {
+        [] => false,
+        [flag] if flag == "--release" => true,
+        _ => {
+            eprintln!("error: unexpected arguments: {}\n{USAGE}", args.join(" "));
+            std::process::exit(2);
+        }
+    };
+
+    // The relative paths below (scripts/, target/) assume the repository root as the
+    // working directory. The alias guarantees it: its `--manifest-path xtask/Cargo.toml`
+    // only resolves from there.
+
     // These mirror .forgejo/workflows/ci.yml step for step. Keep them in sync: the
     // point of `cargo ci` is that passing here means CI will pass too.
 
@@ -62,9 +94,35 @@ fn main() {
         "hydrate",
     ]);
 
-    // Not covered: CI's `wasm` job (cargo leptos build --release, then
-    // scripts/perf/wasm_size.sh against wasm-budget.txt). It needs a full release
-    // build, which is far too slow for a pre-push check — run it by hand when a change
-    // could have moved the bundle size.
-    println!("\n=> ✅ CI checks passed!");
+    // --- the `release-checks` job, behind --release ---
+    // It needs a full release build, which is too slow to run on every check. CI gates
+    // every pull request on this job anyway, so locally it is opt-in: run it when a
+    // change could affect the release build, the fixtures or the bundle size.
+    //
+    // Not covered even then: the job's Playwright suite, which needs a server running
+    // against the fixtures. The recipe is under Testing in docs/development.md.
+    if release {
+        step(&["leptos", "build", "--release"]);
+        // CI generates the fixtures because this is the step that fails when an example
+        // stops building against the real feature set, which the tests above don't
+        // exercise. Into target/, as CI does: the default would write fixture photos into
+        // public/images.
+        run(
+            "cargo",
+            &[
+                "run",
+                "--release",
+                "--example",
+                "gen_fixtures",
+                "--features",
+                "ssr",
+            ],
+            &[("FIXTURE_IMAGES_DIR", "target/e2e-fixtures/images")],
+        );
+        // Exits 2 when the gzipped bundle is over scripts/perf/wasm-budget.txt.
+        run("scripts/perf/wasm_size.sh", &[], &[]);
+        println!("\n=> ✅ CI checks passed, apart from the Playwright suite!");
+    } else {
+        println!("\n=> ✅ CI checks passed! (`cargo ci --release` adds the release build)");
+    }
 }

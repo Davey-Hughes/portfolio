@@ -39,6 +39,7 @@ cargo leptos build              # one-off build; good for checking it compiles
 cargo leptos build --release    # optimized production build
 cargo leptos test               # Rust unit tests, under both feature sets
 cargo ci                        # fmt + clippy + those tests, as CI runs them
+cargo ci --release              # ...plus the release build, fixtures and bundle-size budget
 ```
 
 The Playwright end-to-end tests need a fixture gallery and a running server; see
@@ -82,7 +83,6 @@ portfolio/
 ├── docs/                     # content, deployment, development and contributing docs
 ├── Dockerfile                # multi-stage build → minimal Alpine runtime
 ├── Cargo.toml                # dependencies + [package.metadata.leptos] config
-├── focal-points.toml.example # reference for per-photo focal_point overrides
 └── rust-toolchain.toml       # pins a dated nightly + wasm32 target
 ```
 
@@ -104,14 +104,21 @@ cargo leptos test   # cargo test under ssr, plus the library tests under hydrate
 cargo ci            # fmt + clippy + the same tests: CI's rust and hydrate jobs
 ```
 
-The end-to-end tests use [Playwright](https://playwright.dev/) (256 tests over Chromium
-and Firefox) and live in `end2end/tests/`. Most of the suite needs photos, and
+`cargo ci` is an alias (in `.cargo/config.toml`) for the small runner in
+`xtask/src/main.rs`. By default it skips CI's `release-checks` job, which needs a slow
+release build. `cargo ci --release` adds that job's release build, fixture generation and
+bundle-size budget. Only the job's Playwright suite is left out, since it needs a server;
+see below.
+
+The end-to-end tests use [Playwright](https://playwright.dev/), run over Chromium and
+Firefox, and live in `end2end/tests/`. Most of the suite needs photos, and
 `public/images/*` is gitignored, so generate the fixture gallery first, then serve a
 release build against it and run Playwright. As in CI, everything below stays in
 `target/e2e-fixtures/`, so it's safe in a checkout whose `public/` holds real photos.
 Don't drop `IMAGE_CACHE_DIR`, though: without it the server prunes every entry in
 `public/cache` that the fixtures don't account for. Stop any other server on port 4000
-first, or the health check below passes at once against the wrong one.
+first, or the health check below passes at once against the wrong one. If you skip the
+fixtures, the tests that need photos fail on a missing selector.
 
 ```bash
 rm -rf target/e2e-fixtures
@@ -125,14 +132,6 @@ That's how CI's `release-checks` job runs the suite. Use it rather than
 `cargo leptos end-to-end`: in cargo-leptos 0.3.7 that command panics on teardown
 after Playwright exits ("ProcessHandle should not have been dropped"), so it
 reports failure even when every test passed.
-
-To run everything CI gates on except the Playwright suite and the bundle-size
-budget in one command:
-
-```bash
-scripts/check-all.sh                # fmt, clippy + tests under ssr AND hydrate, release build
-scripts/check-all.sh --no-release   # ...minus the release build and fixture generation
-```
 
 ---
 

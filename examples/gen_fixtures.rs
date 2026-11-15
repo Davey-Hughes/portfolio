@@ -12,8 +12,8 @@
 //! rather than decorative — see the `gallery` field below.
 //!
 //! Run: `FIXTURE_IMAGES_DIR=target/e2e-fixtures/images cargo run --release --example gen_fixtures --features ssr`
-//! (CLAUDE.md has the matching server command). Without `FIXTURE_IMAGES_DIR` the photos
-//! go into public/images, beside any real ones.
+//! (docs/development.md has the matching server command). Without `FIXTURE_IMAGES_DIR`
+//! the photos go into public/images, beside any real ones.
 //!
 //! The EXIF values below are lifted from real frames in the production gallery so the
 //! server's discovery path parses something representative rather than something
@@ -393,9 +393,9 @@ fn write_exif(path: &Path, fixture: &Fixture) -> Result<(), Box<dyn std::error::
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Defaults to IMAGES_DIR's default, public/images. CI and CLAUDE.md's e2e recipe set
-    // it to target/e2e-fixtures/images and point the server's IMAGES_DIR there too, so
-    // the fixtures never mix with a developer's own galleries.
+    // Defaults to IMAGES_DIR's default, public/images. CI and the e2e recipe in
+    // docs/development.md set it to target/e2e-fixtures/images and point the server's
+    // IMAGES_DIR there too, so the fixtures never mix with a developer's own galleries.
     let images_root =
         std::env::var("FIXTURE_IMAGES_DIR").unwrap_or_else(|_| "public/images".to_string());
     let images_root = PathBuf::from(images_root);

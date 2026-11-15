@@ -213,8 +213,10 @@ lens_model  = "Nikon 50mm f/1.8" # override when EXIF lens is missing/ambiguous
 
 `focal_point` picks a cell of a rule-of-thirds grid: `top-left`, `top-center`,
 `top-right`, `center-left`, `center` (default), `center-right`, `bottom-left`,
-`bottom-center`, `bottom-right`. See
-[`focal-points.toml.example`](../focal-points.toml.example) for the full reference.
+`bottom-center`, `bottom-right`. It only affects mosaic galleries (`use_mosaic = true`),
+where it becomes the thumbnail's CSS `object-position`, at 20%, 50% or 80% along each
+axis, so `top-center` is `50% 20%`. Uniform grids ignore it, and below 1200px wide
+(tablets and phones) the mosaic shows each photo uncropped.
 
 ---
 
