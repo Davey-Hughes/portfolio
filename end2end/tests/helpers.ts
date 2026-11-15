@@ -59,3 +59,20 @@ export async function visiblePhotoLinks(
   const grid = await visibleGrid(page, timeout);
   return grid.locator(".photo-hero-link");
 }
+
+/**
+ * Hold every server-function response until the returned `release` is called.
+ *
+ * Lets a test look at a page change while the new page is still waiting for its
+ * data, without guessing how long that wait lasts. Requests after the release go
+ * straight through.
+ */
+export async function holdApi(page: Page): Promise<() => void> {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/**", async (route) => {
+    await held;
+    await route.continue();
+  });
+  return release;
+}

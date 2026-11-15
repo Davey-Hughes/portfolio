@@ -64,6 +64,12 @@ fn site_config() -> Resource<Result<SiteConfig, ServerFnError>> {
     expect_context::<SiteConfigResource>().0
 }
 
+/// Set by a page that loads new data without a change of route (one gallery to
+/// another), so `<main>` is marked busy for it as it is for the router's own page
+/// changes.
+#[derive(Clone, Copy)]
+struct PageLoading(WriteSignal<bool>);
+
 // Helper component for page title
 #[component]
 fn PageTitle() -> impl IntoView {
@@ -96,12 +102,32 @@ pub fn App() -> impl IntoView {
         || (),
         |()| async { get_site_config().await },
     )));
+    // With a setter, the router runs a change to another route as a transition: the
+    // old page stays until the resources the new page creates while it is being built
+    // have resolved, so a page never shows up half-empty with the footer pulled up
+    // into view. A param change within one route (one gallery to another) doesn't go
+    // through this; GalleryPage handles that itself.
+    //
+    // The router reports the start and the end of each page change through the
+    // setter. When a second click overtakes a page that is still loading, the router
+    // reports the abandoned one's end straight away, while the second is still
+    // loading. Counting starts against ends keeps `routing` true until the last one.
+    let (unfinished, set_unfinished) = signal(0_u32);
+    let routing = Memo::new(move |_| unfinished.get() > 0);
+    let set_routing = SignalSetter::map(move |started: bool| {
+        set_unfinished.update(|n| *n = if started { *n + 1 } else { n.saturating_sub(1) });
+    });
+    let (page_loading, set_page_loading) = signal(false);
+    provide_context(PageLoading(set_page_loading));
+    let loading = move || routing.get() || page_loading.get();
 
     view! {
         <PageTitle />
-        <Router>
+        <Router set_is_routing=set_routing>
             <Nav />
-            <main class="main-content">
+            // Nothing visible marks the wait: the old page simply stays until the new
+            // one is ready. Screen readers are told the main area is busy meanwhile.
+            <main class="main-content" aria-busy=move || loading().then_some("true")>
                 <Routes fallback=|| "Page not found.".into_view()>
                     <Route path=StaticSegment("") view=HomePage />
                     <Route path=(StaticSegment("gallery"), ParamSegment("name")) view=GalleryPage />
@@ -118,7 +144,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
             </main>
-            <Footer />
+            <Footer routing />
         </Router>
     }
 }
@@ -209,8 +235,18 @@ fn Nav() -> impl IntoView {
 
 /// One footer for the whole visit, hidden rather than removed on photo pages, so a
 /// page change never rebuilds it.
+///
+/// The router's location changes at the click, while the old page is still on
+/// screen until the new one has loaded. So while `routing` is true the footer keeps
+/// whatever it was showing, and it hides or shows when the new page appears.
+///
+/// That relies on the router marking a page change as started before this footer
+/// sees the new location. It does, because `Routes` subscribes to the URL before
+/// anything reads `use_location().pathname`. A component built before `Routes`
+/// that read the pathname would reverse the order and hide the footer at the click
+/// again. page-loading.spec.ts would catch that.
 #[component]
-fn Footer() -> impl IntoView {
+fn Footer(routing: Memo<bool>) -> impl IntoView {
     let config = site_config();
     let location = use_location();
     // Meant to match /gallery/{gallery}/{photo}. Counting slashes also matches a
@@ -219,9 +255,16 @@ fn Footer() -> impl IntoView {
         let path = location.pathname.get();
         path.starts_with("/gallery/") && path.matches('/').count() >= 3
     };
+    let hidden = Memo::new(move |previous: Option<&bool>| {
+        let routing = routing.get();
+        match previous {
+            Some(&previous) if routing => previous,
+            _ => on_photo_page(),
+        }
+    });
 
     view! {
-        <footer class="footer" hidden=on_photo_page>
+        <footer class="footer" hidden=hidden>
             <Suspense fallback=|| {
                 view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
             }>
@@ -691,73 +734,43 @@ fn GalleryHero(gallery_name: String) -> impl IntoView {
     }
 }
 
-// Helper component for gallery photos loader
-#[component]
-fn GalleryPhotosLoader(gallery_name: String) -> impl IntoView {
-    let gallery_name_for_data = gallery_name.clone();
-    let gallery_data = Resource::new(
-        move || Some(gallery_name_for_data.clone()),
-        |name| async move {
-            if let Some(n) = name {
-                get_gallery_data_by_name(n).await
-            } else {
-                Err(ServerFnError::new("No gallery name provided"))
-            }
-        },
-    );
-
-    let galleries = Resource::new(|| (), |()| async { get_galleries().await });
-    let gallery_slug = gallery_name.to_lowercase().replace(' ', "-");
-
-    view! {
-        <Suspense fallback=|| {
-            view! { <div class="loading">"Loading photos..."</div> }
-        }>
-            {move || {
-                let gallery_config = galleries
-                    .get()
-                    .and_then(std::result::Result::ok)
-                    .and_then(|gallery_list| {
-                        gallery_list
-                            .into_iter()
-                            .find(|g| g.slug == gallery_slug)
-                            .and_then(|g| g.config)
-                    });
-                match gallery_data.get().and_then(std::result::Result::ok) {
-                    Some(data) if !data.photos.is_empty() => {
-                        let data = std::sync::Arc::unwrap_or_clone(data);
-                        view! {
-                            <PhotoGridRenderer
-                                photos=data.photos
-                                config=gallery_config
-                                mosaic_layout=data.mosaic_layout
-                                mosaic_layout_tablet=data.mosaic_layout_tablet
-                            />
-                        }
-                            .into_any()
-                    }
-                    Some(_) => {
-                        view! {
-                            <div class="empty-gallery">
-                                <p>"No photos found in this gallery."</p>
-                            </div>
-                        }
-                            .into_any()
-                    }
-                    None => view! { <div class="error">"Failed to load gallery"</div> }.into_any(),
-                }
-            }}
-        </Suspense>
-    }
-}
-
+/// A gallery page. Its resources are created here, at the page's top level, keyed
+/// on the route's `name`, for two reasons:
+///
+/// - The router's transition waits only for resources created while the page is
+///   being built. One created inside a component that a closure builds later isn't
+///   waited for, so the page would appear half-empty.
+/// - Moving from one gallery to another changes only the param, and the page stays
+///   mounted. Data keyed on the param is fetched again; a child component handed the
+///   name once kept the old gallery's photos under the new title.
+///
+/// The resource hands back the name it fetched with the data, and the page shows
+/// that name rather than the param's. While the next gallery loads, the old title
+/// and the old photos stay together.
 #[component]
 fn GalleryPage() -> impl IntoView {
     let params = use_params::<GalleryParams>();
+    let gallery = Resource::new(
+        move || params.get().ok().map(|p| p.name),
+        |name| async move {
+            let data = match name.clone() {
+                Some(n) => get_gallery_data_by_name(n).await,
+                None => Err(ServerFnError::new("No gallery name provided")),
+            };
+            (name, data)
+        },
+    );
+    let galleries = Resource::new(|| (), |()| async { get_galleries().await });
+    // The Transition reports while it waits, which marks `<main>` busy. A page that
+    // goes away mid-load never reports the end, so clear it on the way out.
+    let PageLoading(set_loading) = expect_context();
+    on_cleanup(move || set_loading.set(false));
 
+    // A Transition, not a Suspense: moving between galleries refetches without
+    // remounting, and the old gallery stays on screen until the new one is ready.
     view! {
         <div class="home-page">
-            <Suspense fallback=|| {
+            <Transition set_pending=set_loading fallback=|| {
                 view! {
                     <div class="hero-simple">
                         <div class="hero-text">
@@ -768,17 +781,46 @@ fn GalleryPage() -> impl IntoView {
                 }
             }>
                 {move || {
-                    params
+                    let (name, data) = gallery.get()?;
+                    let name = name?;
+                    let slug = name.to_lowercase().replace(' ', "-");
+                    let gallery_config = galleries
                         .get()
-                        .ok()
-                        .map(|p| {
+                        .and_then(std::result::Result::ok)
+                        .and_then(|gallery_list| {
+                            gallery_list
+                                .into_iter()
+                                .find(|g| g.slug == slug)
+                                .and_then(|g| g.config)
+                        });
+                    let photos = match data.ok() {
+                        Some(data) if !data.photos.is_empty() => {
+                            let data = std::sync::Arc::unwrap_or_clone(data);
                             view! {
-                                <GalleryHero gallery_name=p.name.clone() />
-                                <GalleryPhotosLoader gallery_name=p.name />
+                                <PhotoGridRenderer
+                                    photos=data.photos
+                                    config=gallery_config
+                                    mosaic_layout=data.mosaic_layout
+                                    mosaic_layout_tablet=data.mosaic_layout_tablet
+                                />
                             }
-                        })
+                                .into_any()
+                        }
+                        Some(_) => {
+                            view! {
+                                <div class="empty-gallery">
+                                    <p>"No photos found in this gallery."</p>
+                                </div>
+                            }
+                                .into_any()
+                        }
+                        None => {
+                            view! { <div class="error">"Failed to load gallery"</div> }.into_any()
+                        }
+                    };
+                    Some(view! { <GalleryHero gallery_name=name /> {photos} })
                 }}
-            </Suspense>
+            </Transition>
         </div>
     }
 }
