@@ -256,7 +256,6 @@ pub struct MosaicLayout {
 pub struct GalleryData {
     pub photos: Vec<PhotoInfo>,
     pub mosaic_layout: Option<MosaicLayout>, // Desktop layout
-    pub mosaic_layout_tablet: Option<MosaicLayout>, // Tablet layout
 }
 
 /// Content for the About page including optional profile image and text.

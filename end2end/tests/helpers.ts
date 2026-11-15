@@ -4,10 +4,10 @@ import { expect, type Locator, type Page } from "@playwright/test";
  * Every grid container the home/gallery view can render.
  *
  * Which one appears depends on the gallery's `use_mosaic` setting and the viewport:
- * `.photo-grid-home` when mosaic is off (src/app.rs:505), `.photo-grid-mosaic` with
- * `-desktop` and `-tablet` variants when it is on (src/app.rs:438), and
- * `.photo-grid-mobile` on narrow screens (src/app.rs:481). Several are present in the
- * DOM at once, with CSS media queries deciding which is shown.
+ * `.photo-grid-home` when mosaic is off, and when it is on, `.photo-grid-mosaic` at
+ * 1200px and wider and `.photo-grid-mobile` below that (all in `PhotoGrid`, src/app.rs).
+ * With mosaic on, both are in the DOM at once, and CSS media queries decide which is
+ * shown.
  */
 export const PHOTO_GRID =
   ".photo-grid-home, .photo-grid-mosaic, .photo-grid-mobile";
@@ -44,8 +44,8 @@ export async function visibleGrid(page: Page, timeout = 10000): Promise<Locator>
 /**
  * The photo thumbnail links inside the currently visible grid.
  *
- * `.photo-hero-link` on its own is not safe: the desktop, tablet and mobile layouts are
- * all in the DOM simultaneously, each containing its own copy of every photo. So a bare
+ * `.photo-hero-link` on its own is not safe: the mosaic and the list below 1200px are
+ * both in the DOM, each containing its own copy of every photo. So a bare
  * `page.locator(".photo-hero-link").first()` can resolve to a link in a container the
  * media queries have hidden — which passes at the default desktop viewport and then
  * fails the moment a test narrows the window, because clicking or asserting visibility

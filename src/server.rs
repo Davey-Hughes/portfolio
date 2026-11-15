@@ -240,13 +240,9 @@ fn build_gallery_data(
         if image_order.len() == photos.len() {
             let reordered_photos: Vec<PhotoInfo> =
                 image_order.iter().map(|&idx| photos[idx].clone()).collect();
-
-            // Tablet uses a CSS multi-column masonry on the
-            // `.photo-grid-mobile` div — no server-computed layout needed.
             let data = GalleryData {
                 photos: reordered_photos,
                 mosaic_layout: Some(layout_desktop),
-                mosaic_layout_tablet: None,
             };
             return (
                 data,
@@ -264,7 +260,6 @@ fn build_gallery_data(
     let data = GalleryData {
         photos,
         mosaic_layout: None,
-        mosaic_layout_tablet: None,
     };
     (data, NON_MOSAIC_TTL)
 }
@@ -306,7 +301,6 @@ pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> 
         Ok(Arc::new(GalleryData {
             photos: Vec::new(),
             mosaic_layout: None,
-            mosaic_layout_tablet: None,
         }))
     }
 }
@@ -540,7 +534,6 @@ mod tests {
         Arc::new(GalleryData {
             photos: Vec::new(),
             mosaic_layout: None,
-            mosaic_layout_tablet: None,
         })
     }
 

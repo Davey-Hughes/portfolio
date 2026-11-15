@@ -516,7 +516,6 @@ fn PhotoGrid(
     photos: Vec<PhotoInfo>,
     #[prop(optional)] config: Option<crate::types::GalleryConfig>,
     #[prop(optional)] mosaic_layout: Option<crate::types::MosaicLayout>,
-    #[prop(optional)] mosaic_layout_tablet: Option<crate::types::MosaicLayout>,
 ) -> impl IntoView {
     if photos.is_empty() {
         view! {
@@ -540,12 +539,11 @@ fn PhotoGrid(
                 layout.grid_cols, layout.grid_rows, layout.container_height, gap
             );
 
-            // Clone photos for tablet and mobile layouts
-            let photos_tablet = photos.clone();
+            // The list below 1200px shows every photo too
             let photos_mobile = photos.clone();
 
             view! {
-                // Desktop layout (hidden on tablet/mobile)
+                // Desktop mosaic (1200px and wider)
                 <div class="photo-grid-mosaic photo-grid-mosaic-desktop" style=grid_style_desktop>
                     {layout
                         .cells
@@ -558,37 +556,8 @@ fn PhotoGrid(
                         .collect_view()}
                 </div>
 
-                // Tablet layout (hidden on desktop/mobile)
-                {mosaic_layout_tablet
-                    .map(|layout_tablet| {
-                        let grid_style_tablet = format!(
-                            "grid-template-columns: repeat({}, 1fr); grid-template-rows: repeat({}, 1fr); height: {}px; gap: {}px;",
-                            layout_tablet.grid_cols,
-                            layout_tablet.grid_rows,
-                            layout_tablet.container_height,
-                            gap,
-                        );
-                        view! {
-                            <div
-                                class="photo-grid-mosaic photo-grid-mosaic-tablet"
-                                style=grid_style_tablet
-                            >
-                                {layout_tablet
-                                    .cells
-                                    .into_iter()
-                                    .zip(photos_tablet.into_iter())
-                                    .enumerate()
-                                    .map(|(idx, (cell, photo))| {
-                                        view! {
-                                            <MosaicPhotoGridItem photo=photo cell=cell index=idx />
-                                        }
-                                    })
-                                    .collect_view()}
-                            </div>
-                        }
-                    })}
-
-                // Mobile fallback: single column (hidden on tablet/desktop)
+                // Below 1200px: the uncropped list, two columns on a tablet and one on
+                // a phone (style/main.scss)
                 <div class="photo-grid-mobile">
                     {photos_mobile
                         .into_iter()
@@ -660,27 +629,22 @@ fn HeroSection() -> impl IntoView {
     }
 }
 
-// Helper component to render PhotoGrid with optional config and layouts
+// Helper component to render PhotoGrid with optional config and layout
 #[component]
 fn PhotoGridRenderer(
     photos: Vec<PhotoInfo>,
     config: Option<crate::types::GalleryConfig>,
     mosaic_layout: Option<crate::types::MosaicLayout>,
-    mosaic_layout_tablet: Option<crate::types::MosaicLayout>,
 ) -> impl IntoView {
-    match (config, mosaic_layout, mosaic_layout_tablet) {
-        (Some(cfg), Some(mosaic), Some(tablet)) => view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
-        .into_any(),
-        (Some(cfg), Some(mosaic), None) => {
+    match (config, mosaic_layout) {
+        (Some(cfg), Some(mosaic)) => {
             view! { <PhotoGrid photos=photos config=cfg mosaic_layout=mosaic /> }.into_any()
         }
-        (None, Some(mosaic), Some(tablet)) => view! { <PhotoGrid photos=photos mosaic_layout=mosaic mosaic_layout_tablet=tablet /> }
-        .into_any(),
-        (None, Some(mosaic), None) => {
+        (None, Some(mosaic)) => {
             view! { <PhotoGrid photos=photos mosaic_layout=mosaic /> }.into_any()
         }
-        (Some(cfg), None, _) => view! { <PhotoGrid photos=photos config=cfg /> }.into_any(),
-        (None, None, _) => view! { <PhotoGrid photos=photos /> }.into_any(),
+        (Some(cfg), None) => view! { <PhotoGrid photos=photos config=cfg /> }.into_any(),
+        (None, None) => view! { <PhotoGrid photos=photos /> }.into_any(),
     }
 }
 
@@ -704,7 +668,6 @@ fn PhotoGridLoader() -> impl IntoView {
                                 photos=data.photos
                                 config=gallery_config
                                 mosaic_layout=data.mosaic_layout
-                                mosaic_layout_tablet=data.mosaic_layout_tablet
                             />
                         }
                             .into_any()
@@ -825,7 +788,6 @@ fn GalleryPage() -> impl IntoView {
                                 photos=data.photos
                                 config=gallery_config
                                 mosaic_layout=data.mosaic_layout
-                                mosaic_layout_tablet=data.mosaic_layout_tablet
                             />
                         }
                             .into_any()

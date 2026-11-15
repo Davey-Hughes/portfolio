@@ -224,13 +224,9 @@ img {
   overflow-x: hidden;
 }
 
-// Desktop layout: show desktop mosaic, hide tablet and mobile
+// Desktop layout: show the mosaic, hide the list
 .photo-grid-mosaic-desktop {
   display: grid;
-}
-
-.photo-grid-mosaic-tablet {
-  display: none;
 }
 
 .photo-grid-mobile {
@@ -242,10 +238,6 @@ img {
 // own items so a portrait next to a landscape doesn't leave a hole.
 @media (max-width: 1199px) and (min-width: 768px) {
   .photo-grid-mosaic-desktop {
-    display: none;
-  }
-
-  .photo-grid-mosaic-tablet {
     display: none;
   }
 
@@ -265,13 +257,9 @@ img {
   }
 }
 
-// Mobile layout (< 768px): hide desktop and tablet, show mobile single column
+// Mobile layout (< 768px): hide the mosaic, show the list as a single column
 @media (max-width: 767px) {
   .photo-grid-mosaic-desktop {
-    display: none;
-  }
-
-  .photo-grid-mosaic-tablet {
     display: none;
   }
 
