@@ -94,4 +94,33 @@ test.describe("Footer", () => {
     expect(probe.sameFooter, "the footer was replaced").toBe(true);
     expect(probe.changes).toEqual(["attributes hidden", "attributes hidden"]);
   });
+
+  // The footer used to count slashes, and hid on each of these. Reached through an
+  // in-app link, so the router decides what shows, as it does for any click.
+  for (const { href, shows } of [
+    { href: "/gallery/home/", shows: "gallery" },
+    { href: "/gallery/home//laika", shows: "not-found" },
+    { href: "/gallery/home/laika/extra", shows: "not-found" },
+  ]) {
+    test(`shows on ${href}, which is not a photo page`, async ({ page }) => {
+      await page.goto("/", { waitUntil: "networkidle" });
+      await expect(page.locator("footer")).toBeVisible();
+      await page.evaluate((to) => {
+        const a = document.createElement("a");
+        a.id = "look-alike";
+        a.href = to;
+        a.textContent = "look-alike";
+        document.body.append(a);
+      }, href);
+      await page.click("#look-alike");
+      await expect(page).toHaveURL(href);
+      if (shows === "gallery") {
+        await expect(page.locator(".hero-simple h1")).toHaveText("HOME");
+      } else {
+        await expect(page.locator(".not-found-page")).toBeVisible();
+      }
+      await expect.poll(() => page.locator("main").getAttribute("aria-busy")).toBeNull();
+      await expect(page.locator("footer")).toBeVisible();
+    });
+  }
 });

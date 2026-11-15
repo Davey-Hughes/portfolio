@@ -263,17 +263,11 @@ fn Nav() -> impl IntoView {
 fn Footer(routing: Memo<bool>) -> impl IntoView {
     let config = site_config();
     let location = use_location();
-    // Meant to match /gallery/{gallery}/{photo}. Counting slashes also matches a
-    // gallery path with a trailing slash, and anything deeper.
-    let on_photo_page = move || {
-        let path = location.pathname.get();
-        path.starts_with("/gallery/") && path.matches('/').count() >= 3
-    };
     let hidden = Memo::new(move |previous: Option<&bool>| {
         let routing = routing.get();
         match previous {
             Some(&previous) if routing => previous,
-            _ => on_photo_page(),
+            _ => is_photo_path(&location.pathname.get()),
         }
     });
 
@@ -336,6 +330,20 @@ fn Footer(routing: Memo<bool>) -> impl IntoView {
             </Suspense>
         </footer>
     }
+}
+
+/// Whether the router shows the photo page for `path`: `/gallery/{gallery}/{photo}`,
+/// both segments non-empty. One trailing slash is allowed too: the router takes it
+/// as no slash at all, and shows the photo page.
+fn is_photo_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/gallery/") else {
+        return false;
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    matches!(
+        rest.split_once('/'),
+        Some((gallery, photo)) if !gallery.is_empty() && !photo.is_empty() && !photo.contains('/')
+    )
 }
 
 // Helper function to determine orientation class from dimensions
@@ -2587,14 +2595,57 @@ mod not_found_tests {
     }
 }
 
+// Runs under both feature sets: the footer makes this check in the browser.
+#[cfg(test)]
+mod footer_tests {
+    use super::is_photo_path;
+
+    #[test]
+    fn a_photo_page_path_is_one() {
+        assert!(is_photo_path("/gallery/home/laika"));
+        assert!(is_photo_path("/gallery/nature/blue-angels"));
+    }
+
+    // The router shows the photo page for these too: it takes one trailing slash
+    // as no slash at all.
+    #[test]
+    fn a_photo_page_path_with_one_trailing_slash_is_one() {
+        assert!(is_photo_path("/gallery/home/laika/"));
+    }
+
+    #[test]
+    fn other_paths_are_not() {
+        for path in [
+            "/",
+            "/about",
+            "/gallery",
+            "/gallery/",
+            "/gallery/home",
+            "/gallery/home/",
+            "/gallery/home//",
+            "/gallery//laika",
+            "/gallery/home//laika",
+            "/gallery/home/laika//",
+            "/gallery/a/b/c",
+            "/gallery/a/b/c/",
+            "/galleryx/home/laika",
+            "/x/gallery/home/laika",
+        ] {
+            assert!(!is_photo_path(path), "{path}");
+        }
+    }
+}
+
 /// Whole pages rendered through the app's routes, the way the server serves them.
 #[cfg(all(test, feature = "ssr"))]
 mod ssr_tests {
     use super::{App, shell};
     use crate::test_support::EnvVarGuard;
+    use crate::trailing_slash::{self, PageRoutes};
     use axum::{
         body::Body,
-        http::{Request, StatusCode},
+        http::{Method, Request, StatusCode, header},
+        response::Response,
     };
     use leptos::prelude::LeptosOptions;
     use leptos_axum::{LeptosRoutes, generate_route_list};
@@ -2652,21 +2703,51 @@ mod ssr_tests {
         }
     }
 
-    /// GET `path` through the app's Leptos routes and fallback, wired the way
-    /// src/main.rs wires them (minus the file mounts and the HTML cache).
-    async fn get(path: &str) -> (StatusCode, String) {
+    /// Send `method` for `path` through the app's Leptos routes, fallback and
+    /// trailing-slash redirect, wired the way src/main.rs wires them (minus the file
+    /// mounts, the HTML cache and compression).
+    async fn request(method: Method, path: &str) -> Response {
         let options = LeptosOptions::builder().output_name("portfolio").build();
+        // A resource first polled anywhere in the process while the route list is
+        // being built never loads, so any test that builds it or renders resources
+        // must be #[serial].
+        let routes = generate_route_list(App);
+        let pages = PageRoutes::new(&routes);
         let app = axum::Router::new()
-            .leptos_routes(&options, generate_route_list(App), {
+            .leptos_routes(&options, routes, {
                 let options = options.clone();
                 move || shell(options.clone())
             })
             .fallback(leptos_axum::file_and_error_handler(shell))
-            .with_state(options);
-        let res = app
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .with_state(options)
+            .layer(axum::middleware::from_fn_with_state(
+                pages,
+                trailing_slash::redirect,
+            ));
+        let request = Request::builder().method(method).uri(path);
+        app.oneshot(request.body(Body::empty()).unwrap())
             .await
-            .unwrap();
+            .unwrap()
+    }
+
+    /// The status and the `Location` header of the answer to `method` for `path`.
+    async fn answer(method: Method, path: &str) -> (StatusCode, Option<String>) {
+        let res = request(method, path).await;
+        let location = res
+            .headers()
+            .get(header::LOCATION)
+            .map(|value| value.to_str().unwrap().to_owned());
+        (res.status(), location)
+    }
+
+    /// The status and the `Location` header of the answer to a GET for `path`.
+    async fn redirect_of(path: &str) -> (StatusCode, Option<String>) {
+        answer(Method::GET, path).await
+    }
+
+    /// The status and the body of the answer to a GET for `path`.
+    async fn get(path: &str) -> (StatusCode, String) {
+        let res = request(Method::GET, path).await;
         let status = res.status();
         let body = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
@@ -2766,6 +2847,120 @@ mod ssr_tests {
             let (status, body) = get(path).await;
             assert_eq!(status, StatusCode::OK, "{path}");
             assert!(!body.contains("not-found-page"), "{path}: {body}");
+        }
+    }
+
+    // Before the redirect, each of these answered 404. With one trailing slash the
+    // page itself showed, since the server's routes are exact and the router takes
+    // one trailing slash as none. With two (`/about//`) the router matched nothing
+    // either, and the not-found page showed.
+    #[tokio::test]
+    #[serial]
+    async fn page_addresses_with_a_trailing_slash_redirect_to_the_page() {
+        let site = Site::with_home_photo();
+        site.write_open_source("[[projects]]\nname = \"P\"\nsummary = \"S\"\n");
+        for (from, to) in [
+            ("/gallery/home/", "/gallery/home"),
+            ("/gallery/home/photo/", "/gallery/home/photo"),
+            ("/about/", "/about"),
+            ("/open-source/", "/open-source"),
+            ("/contact/", "/contact"),
+            ("/about//", "/about"),
+        ] {
+            let (status, location) = redirect_of(from).await;
+            assert_eq!(status, StatusCode::PERMANENT_REDIRECT, "{from}");
+            assert_eq!(location.as_deref(), Some(to), "{from}");
+            let (status, body) = get(to).await;
+            assert_eq!(status, StatusCode::OK, "{to}");
+            assert!(!body.contains("not-found-page"), "{to}: {body}");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn missing_gallery_and_photo_with_a_trailing_slash_redirect_then_answer_404() {
+        let _site = Site::with_home_photo();
+        for (from, to) in [
+            ("/gallery/nope/", "/gallery/nope"),
+            ("/gallery/home/nope/", "/gallery/home/nope"),
+        ] {
+            let (status, location) = redirect_of(from).await;
+            assert_eq!(status, StatusCode::PERMANENT_REDIRECT, "{from}");
+            assert_eq!(location.as_deref(), Some(to), "{from}");
+            let (status, body) = get(to).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{to}");
+            assert!(
+                body.contains(&format!(r#"<code class="not-found-path">{to}</code>"#)),
+                "{to}: {body}"
+            );
+        }
+    }
+
+    // Any other method goes on to what it got before the redirect existed: the
+    // fallback's 404.
+    #[tokio::test]
+    #[serial]
+    async fn only_get_and_head_are_redirected() {
+        let _site = Site::with_home_photo();
+        for method in [Method::GET, Method::HEAD] {
+            assert_eq!(
+                answer(method.clone(), "/about/").await,
+                (StatusCode::PERMANENT_REDIRECT, Some("/about".to_owned())),
+                "{method}"
+            );
+        }
+        for method in [
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ] {
+            assert_eq!(
+                answer(method.clone(), "/about/").await,
+                (StatusCode::NOT_FOUND, None),
+                "{method}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn the_redirect_keeps_the_query() {
+        let _site = Site::with_home_photo();
+        let (status, location) = redirect_of("/gallery/home/?a=1&b=2").await;
+        assert_eq!(status, StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location.as_deref(), Some("/gallery/home?a=1&b=2"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn the_home_page_is_not_redirected() {
+        let _site = Site::with_home_photo();
+        let (status, location) = redirect_of("/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(location, None);
+    }
+
+    // Not page addresses, so they stay as they are and answer 404 with the
+    // not-found page. `/pkg/` is served by the fallback, which this app has; the
+    // file mounts are not here, so trailing-slash.spec.ts covers them.
+    #[tokio::test]
+    #[serial]
+    async fn other_addresses_with_a_slash_too_many_answer_404_where_they_are() {
+        let _site = Site::with_home_photo();
+        for path in [
+            "/no-such-page/",
+            "/gallery/a/b/c/",
+            "/gallery/home//photo",
+            "/pkg/",
+        ] {
+            let (status, body) = get(path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(
+                body.contains(&format!(r#"<code class="not-found-path">{path}</code>"#)),
+                "{path}: {body}"
+            );
         }
     }
 }

@@ -93,6 +93,27 @@ fn compression_layer()
         .compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/")))
 }
 
+/// The file server for the `/images` and `/content` mounts: the files in `dir`, with
+/// a year-long `immutable` cache lifetime unless a response already carries one.
+#[cfg(feature = "ssr")]
+fn immutable_files(
+    dir: &str,
+) -> tower_http::set_header::SetResponseHeader<
+    tower_http::services::ServeDir,
+    axum::http::HeaderValue,
+> {
+    use axum::http::{HeaderValue, header};
+    use tower::ServiceBuilder;
+    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+
+    ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        ))
+        .service(ServeDir::new(dir))
+}
+
 /// The `/readme` mount: screenshots and clips for the READMEs of the owner's repos,
 /// served from `dir` as `/readme/<repo>/<file>`.
 ///
@@ -230,7 +251,7 @@ async fn main() {
     use axum::{
         Router,
         extract::{Path, Query},
-        http::{StatusCode, header},
+        http::StatusCode,
     };
     use leptos::logging::log;
     use leptos::prelude::*;
@@ -240,8 +261,6 @@ async fn main() {
     use portfolio::image_params::ImageParams;
     use portfolio::paths::{images_root, resolve_dir};
     use std::sync::Arc;
-    use tower::ServiceBuilder;
-    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
     // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
     // content-hashed pkg filenames). Never present in the Docker image
@@ -252,6 +271,7 @@ async fn main() {
     let addr = conf.leptos_options.site_addr;
     let leptos_options = conf.leptos_options;
     let routes = generate_route_list(App);
+    let pages = portfolio::trailing_slash::PageRoutes::new(&routes);
 
     // The gallery code reads images_root() too, so the /images mount below and the
     // gallery listing agree on where the photos are, as long as the root does not
@@ -328,24 +348,8 @@ async fn main() {
             "/images/compressed/{*image_path}",
             axum::routing::get(image_handler),
         )
-        .nest_service(
-            "/images",
-            ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
-                ))
-                .service(ServeDir::new(&images_dir)),
-        )
-        .nest_service(
-            "/content",
-            ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
-                ))
-                .service(ServeDir::new(&content_dir)),
-        )
+        .nest_service("/images", immutable_files(&images_dir))
+        .nest_service("/content", immutable_files(&content_dir))
         .merge(readme_routes(&readme_dir))
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options)
@@ -353,7 +357,13 @@ async fn main() {
             html_cache,
             cache_middleware::html_cache_middleware,
         ))
-        .layer(compression_layer());
+        .layer(compression_layer())
+        // Outermost, so a redirect goes out before the HTML cache or compression
+        // does any work.
+        .layer(axum::middleware::from_fn_with_state(
+            pages,
+            portfolio::trailing_slash::redirect,
+        ));
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`

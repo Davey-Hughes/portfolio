@@ -23,6 +23,9 @@ pub mod image_params;
 pub mod readme_assets;
 
 #[cfg(feature = "ssr")]
+pub mod trailing_slash;
+
+#[cfg(feature = "ssr")]
 pub mod image_cache;
 
 #[cfg(feature = "hydrate")]
