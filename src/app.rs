@@ -53,10 +53,21 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
     }
 }
 
+/// The site config, fetched once per visit and shared through context.
+///
+/// A component with its own resource fetches the config again every time it is
+/// built, and shows its placeholder until that fetch comes back.
+#[derive(Clone, Copy)]
+struct SiteConfigResource(Resource<Result<SiteConfig, ServerFnError>>);
+
+fn site_config() -> Resource<Result<SiteConfig, ServerFnError>> {
+    expect_context::<SiteConfigResource>().0
+}
+
 // Helper component for page title
 #[component]
 fn PageTitle() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
 
     view! {
         <Suspense>
@@ -81,6 +92,10 @@ fn PageTitle() -> impl IntoView {
 #[must_use]
 pub fn App() -> impl IntoView {
     provide_meta_context();
+    provide_context(SiteConfigResource(Resource::new(
+        || (),
+        |()| async { get_site_config().await },
+    )));
 
     view! {
         <PageTitle />
@@ -103,28 +118,8 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
             </main>
-            <ConditionalFooter />
+            <Footer />
         </Router>
-    }
-}
-
-#[component]
-fn ConditionalFooter() -> impl IntoView {
-    let location = use_location();
-
-    view! {
-        {move || {
-            let path = location.pathname.get();
-            let is_photo_detail = path.starts_with("/gallery/") && path.matches('/').count() >= 3;
-            if is_photo_detail {
-                // Hide footer on photo detail pages (format: /gallery/{gallery}/{photo})
-
-                view! { <div></div> }
-                    .into_any()
-            } else {
-                view! { <Footer /> }.into_any()
-            }
-        }}
     }
 }
 
@@ -178,7 +173,7 @@ fn NavLinksList() -> impl IntoView {
 // Helper component for nav brand
 #[component]
 fn NavBrand() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
 
     view! {
         <Suspense fallback=|| {
@@ -212,12 +207,21 @@ fn Nav() -> impl IntoView {
     }
 }
 
+/// One footer for the whole visit, hidden rather than removed on photo pages, so a
+/// page change never rebuilds it.
 #[component]
 fn Footer() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
+    let location = use_location();
+    // Meant to match /gallery/{gallery}/{photo}. Counting slashes also matches a
+    // gallery path with a trailing slash, and anything deeper.
+    let on_photo_page = move || {
+        let path = location.pathname.get();
+        path.starts_with("/gallery/") && path.matches('/').count() >= 3
+    };
 
     view! {
-        <footer class="footer">
+        <footer class="footer" hidden=on_photo_page>
             <Suspense fallback=|| {
                 view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
             }>
@@ -568,7 +572,7 @@ fn PhotoGrid(
 // Helper component for hero section
 #[component]
 fn HeroSection() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
 
     view! {
         <div class="hero-simple">
@@ -906,7 +910,7 @@ fn PhotoSettings(
 // Helper component for copyright footer
 #[component]
 fn CopyrightFooter() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
 
     view! {
         <Suspense fallback=|| {
@@ -1863,7 +1867,7 @@ fn AboutContent() -> impl IntoView {
 /// a photography site invites the reading that the photographs are GPL too.
 #[component]
 fn LicenseSection() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
 
     view! {
         <section class="about-license" id="license">
@@ -2230,7 +2234,7 @@ fn ContactInfoItem(key: String, value: crate::config::SectionValue) -> impl Into
 // Helper component for contact information section
 #[component]
 fn ContactInfoSection() -> impl IntoView {
-    let config = Resource::new(|| (), |()| async { get_site_config().await });
+    let config = site_config();
 
     view! {
         <Suspense fallback=|| {
