@@ -130,6 +130,46 @@ pub struct PhotoInfo {
     pub focal_point: Option<FocalPoint>, // Optional focal point for thumbnail cropping
 }
 
+/// What the full-screen viewer shows: the six things it reads from a photo, so a
+/// screenshot on /open-source can use the same viewer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewerImage {
+    pub detail_url: String,                 // shown at phone width
+    pub original_url: String,               // shown on desktop
+    pub original_sources: Vec<ImageSource>, // other formats of the original, desktop only
+    pub alt: String,
+    pub width: Option<u32>, // both unknown → 10× max zoom
+    pub height: Option<u32>,
+}
+
+impl From<PhotoInfo> for ViewerImage {
+    fn from(photo: PhotoInfo) -> Self {
+        Self {
+            detail_url: photo.detail_url,
+            original_url: photo.original_url,
+            original_sources: photo.original_sources,
+            alt: photo.title,
+            width: photo.width,
+            height: photo.height,
+        }
+    }
+}
+
+impl ViewerImage {
+    /// A screenshot: one URL for both widths, no other formats, size unknown.
+    #[must_use]
+    pub fn screenshot(url: &str, alt: &str) -> Self {
+        Self {
+            detail_url: url.to_string(),
+            original_url: url.to_string(),
+            original_sources: Vec::new(),
+            alt: alt.to_string(),
+            width: None,
+            height: None,
+        }
+    }
+}
+
 /// Represents information about a photo gallery.
 ///
 /// # Examples
@@ -400,5 +440,66 @@ mod tests {
         let cloned = photo.clone();
         assert_eq!(photo.url, cloned.url);
         assert_eq!(photo.width, cloned.width);
+    }
+
+    #[test]
+    fn viewer_image_from_photo_keeps_what_the_viewer_reads() {
+        let webp = ImageSource {
+            url: "/images/home/sunset.webp".to_string(),
+            mime_type: "image/webp".to_string(),
+        };
+        let photo = PhotoInfo {
+            url: "/cache/sunset-1200.webp".to_string(),
+            original_url: "/images/home/sunset.jpg".to_string(),
+            detail_url: "/cache/sunset-4000.webp".to_string(),
+            srcset: String::new(),
+            sources: vec![],
+            original_sources: vec![webp.clone()],
+            title: "Sunset".to_string(),
+            filename: "sunset.jpg".to_string(),
+            slug: "sunset".to_string(),
+            gallery_name: "home".to_string(),
+            subfolder: None,
+            width: Some(9000),
+            height: Some(6000),
+            date_taken: None,
+            camera_make: None,
+            camera_model: None,
+            lens_model: None,
+            focal_length: None,
+            aperture: None,
+            shutter_speed: None,
+            iso: None,
+            film_stock: None,
+            copyright: None,
+            focal_point: None,
+        };
+
+        assert_eq!(
+            ViewerImage::from(photo),
+            ViewerImage {
+                detail_url: "/cache/sunset-4000.webp".to_string(),
+                original_url: "/images/home/sunset.jpg".to_string(),
+                original_sources: vec![webp],
+                alt: "Sunset".to_string(),
+                width: Some(9000),
+                height: Some(6000),
+            }
+        );
+    }
+
+    #[test]
+    fn screenshot_viewer_image_has_one_url_and_no_size() {
+        assert_eq!(
+            ViewerImage::screenshot("/readme/x/card.webp", "X screenshot"),
+            ViewerImage {
+                detail_url: "/readme/x/card.webp".to_string(),
+                original_url: "/readme/x/card.webp".to_string(),
+                original_sources: vec![],
+                alt: "X screenshot".to_string(),
+                width: None,
+                height: None,
+            }
+        );
     }
 }

@@ -104,7 +104,7 @@ cargo leptos test   # cargo test under ssr, plus the library tests under hydrate
 cargo ci            # fmt + clippy + the same tests: CI's rust and hydrate jobs
 ```
 
-The end-to-end tests use [Playwright](https://playwright.dev/) (168 tests over Chromium
+The end-to-end tests use [Playwright](https://playwright.dev/) (204 tests over Chromium
 and Firefox) and live in `end2end/tests/`. Most of the suite needs photos, and
 `public/images/*` is gitignored, so generate the fixture gallery first, then serve a
 release build against it and run Playwright. As in CI, everything below stays in

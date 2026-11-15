@@ -46,6 +46,13 @@ pub struct OpenSourceEntry {
     pub tags: Vec<String>,
     #[serde(default)]
     pub highlights: Vec<Highlight>,
+    /// A screenshot shown on the card, as any URL or site path (such as
+    /// `/readme/<repo>/card.webp`). No image when unset or blank.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// The screenshot's alt text. Defaults to "<name> screenshot" when unset or blank.
+    #[serde(default)]
+    pub image_alt: Option<String>,
 }
 
 /// A link to one notable piece of work, such as a merged PR, under a card.
@@ -91,6 +98,18 @@ impl OpenSourceEntry {
         let label = label.strip_prefix("www.").unwrap_or(label);
         let label = label.strip_suffix('/').unwrap_or(label);
         Some((href, label))
+    }
+
+    /// `(src, alt)` for the card's screenshot, or `None` when `image` is unset or
+    /// blank. The alt is `image_alt` when that is set and not blank, else
+    /// "<name> screenshot".
+    pub fn image(&self) -> Option<(&str, String)> {
+        let src = self.image.as_deref().and_then(non_blank)?;
+        let alt = self.image_alt.as_deref().and_then(non_blank).map_or_else(
+            || format!("{} screenshot", self.name.trim()),
+            str::to_string,
+        );
+        Some((src, alt))
     }
 }
 
@@ -164,7 +183,42 @@ mod tests {
             summary: "Summary".to_string(),
             tags: Vec::new(),
             highlights: Vec::new(),
+            image: None,
+            image_alt: None,
         }
+    }
+
+    fn with_image(image: Option<&str>, image_alt: Option<&str>) -> OpenSourceEntry {
+        OpenSourceEntry {
+            image: image.map(str::to_string),
+            image_alt: image_alt.map(str::to_string),
+            ..entry(None)
+        }
+    }
+
+    #[test]
+    fn image_is_none_when_unset_or_blank() {
+        assert_eq!(with_image(None, None).image(), None);
+        assert_eq!(with_image(Some(""), None).image(), None);
+        assert_eq!(with_image(Some("   "), None).image(), None);
+        // An alt without an image has nothing to describe.
+        assert_eq!(with_image(None, Some("Alt")).image(), None);
+    }
+
+    #[test]
+    fn image_trims_and_defaults_its_alt() {
+        assert_eq!(
+            with_image(Some(" /readme/x/card.webp "), None).image(),
+            Some(("/readme/x/card.webp", "Name screenshot".to_string()))
+        );
+        assert_eq!(
+            with_image(Some(" /readme/x/card.webp "), Some("  ")).image(),
+            Some(("/readme/x/card.webp", "Name screenshot".to_string()))
+        );
+        assert_eq!(
+            with_image(Some(" /readme/x/card.webp "), Some(" The home page ")).image(),
+            Some(("/readme/x/card.webp", "The home page".to_string()))
+        );
     }
 
     #[test]
@@ -325,6 +379,61 @@ summary = "Only the required fields."
         assert_eq!(project.website, None);
         assert_eq!(project.tags, Vec::<String>::new());
         assert_eq!(project.highlights, Vec::<Highlight>::new());
+        assert_eq!(project.image, None);
+        assert_eq!(project.image_alt, None);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn parses_image_fields() {
+        let content = parse_open_source(
+            r#"
+[[projects]]
+name = "redextape"
+summary = "A site."
+image = "/readme/redextape/card.webp"
+image_alt = "The redextape home page"
+
+[[contributions]]
+name = "Upstream"
+summary = "Fixes."
+image = "/readme/upstream/card.webp"
+"#,
+        )
+        .unwrap();
+
+        let project = &content.projects[0];
+        assert_eq!(
+            project.image.as_deref(),
+            Some("/readme/redextape/card.webp")
+        );
+        assert_eq!(
+            project.image_alt.as_deref(),
+            Some("The redextape home page")
+        );
+        assert_eq!(
+            project.image(),
+            Some((
+                "/readme/redextape/card.webp",
+                "The redextape home page".to_string()
+            ))
+        );
+
+        // Contributions share the shape, alt default included.
+        assert_eq!(
+            content.contributions[0].image(),
+            Some((
+                "/readme/upstream/card.webp",
+                "Upstream screenshot".to_string()
+            ))
+        );
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn unknown_image_key_is_rejected() {
+        let typo = "[[projects]]\nname = \"x\"\nsummary = \"y\"\nimage_url = \"/a.webp\"\n";
+        assert!(parse_open_source(typo).is_err());
     }
 
     #[cfg(feature = "ssr")]

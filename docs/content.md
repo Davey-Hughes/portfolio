@@ -135,6 +135,8 @@ url     = "https://github.com/you/portfolio"   # optional; the name links here
 website = "https://you.example"    # optional; shown beside the name as its domain
 summary = "This site."             # required
 tags    = ["Rust", "Leptos"]       # optional
+image   = "/readme/portfolio/card.webp"  # optional; a screenshot on the card
+image_alt = "The portfolio home page"    # optional; defaults to "<name> screenshot"
 
 [[contributions]]                  # upstream projects; same fields as [[projects]]
 name    = "Some Upstream"
@@ -149,6 +151,14 @@ url   = "https://github.com/org/some-upstream/pull/123"
 Cards appear in file order. Unknown keys are rejected, so a typo such as
 `highlight` for `highlights` hides the page instead of quietly dropping that
 data. The server logs the parse error.
+
+`image` puts a screenshot on a card, and takes any URL or site path. A good home
+for one is the `/readme/<repo>/` folder (files under `README_ASSETS_DIR/<repo>/`, see
+[README images](#readme-images)): browsers revalidate it on every load, so you can
+replace a screenshot in place. `/content/` works too, but browsers cache it for a
+year. Blank values count as unset. The screenshot sits right of the card's text at
+340×212 (16:10), cropped from the top left. On phones it runs full width at 16:10
+under the text. A click opens it in the gallery's full-screen viewer.
 
 The whole content directory is also served as static files under `/content/`,
 which is how the profile image reaches the browser. That means anyone can

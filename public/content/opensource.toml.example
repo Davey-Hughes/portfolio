@@ -9,6 +9,11 @@
 #
 # Cards render in the order they appear in this file.
 #
+# A card can show a screenshot (`image`, any URL or site path). A good home for
+# one is the /readme/<repo>/ folder: files under README_ASSETS_DIR/<repo>/, which
+# browsers revalidate on every load, so a screenshot can be replaced in place.
+# /content/ works too, but browsers cache it for a year.
+#
 # This file is public: the content directory is served as-is under /content/, so
 # anyone can download it, comments and commented-out entries included. Keep
 # drafts and private notes out of it.
@@ -23,6 +28,8 @@ url = "https://example.com/you/portfolio"        # optional; the name links here
 website = "https://portfolio.example"            # optional; shown beside the name as its domain
 summary = "This site: a photography portfolio."  # required
 tags = ["Rust", "Leptos"]                        # optional
+image = "/readme/portfolio/card.webp"            # optional; a screenshot right of the text
+image_alt = "The portfolio home page"            # optional; defaults to "<name> screenshot"
 
 [[projects]]
 name = "another-project"

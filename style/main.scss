@@ -644,12 +644,24 @@ img {
   justify-content: center;
   animation: fadeIn 0.3s ease-out;
   overflow: hidden;
+  // The viewer's touch handlers don't take a one-finger drag at 1×, so without this
+  // the page under the overlay scrolls and closing lands somewhere else. Pinch and
+  // zoomed pan stay with those handlers.
+  touch-action: none;
+  // On /open-source the overlay sits inside the page's `overflow-wrap: anywhere`,
+  // which would break the zoom labels when the controls are squeezed on tablets.
+  overflow-wrap: normal;
 }
 
 .fullscreen-close {
   position: absolute;
   top: 2rem;
   right: 2rem;
+  // A <button>, so the keyboard can reach it; without the browser's button look.
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
   color: white;
   font-size: 3rem;
   font-weight: 200;
@@ -667,6 +679,12 @@ img {
     opacity: 0;
     pointer-events: none;
   }
+
+  // The controls fade when the pointer rests; one the keyboard is on stays.
+  &.hidden:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .fullscreen-controls {
@@ -681,6 +699,11 @@ img {
   &.hidden {
     opacity: 0;
     pointer-events: none;
+  }
+
+  &.hidden:has(:focus-visible) {
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
@@ -748,6 +771,16 @@ img {
     &:active {
       transform: scale(1.1);
     }
+  }
+
+  // With the outline off, a soft halo round the thumb shows keyboard focus. Two
+  // rules: a browser drops a whole selector list over the other's pseudo-element.
+  &:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.35);
+  }
+
+  &:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.35);
   }
 }
 
@@ -1096,6 +1129,46 @@ img {
 
   a {
     color: #666;
+  }
+}
+
+// A card with a screenshot: the text keeps the left edge of the cards without one,
+// and the screenshot takes a fixed column on the right. On phones it drops under
+// all of the card's text.
+.oss-card-with-image {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  column-gap: 28px;
+  align-items: start;
+
+  @media (max-width: 768px) {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 14px;
+  }
+}
+
+// The screenshot's button. A button doesn't fill its grid column on its own.
+.oss-image {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+
+  // 16:10, cropped from the top left, where a page's header and title sit.
+  img {
+    width: 100%;
+    height: 212px;
+    object-fit: cover;
+    object-position: top left;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+
+    // Full width on phones, so the height follows the width: a fixed height would
+    // turn into a thin strip on wider phones.
+    @media (max-width: 768px) {
+      height: auto;
+      aspect-ratio: 16 / 10;
+    }
   }
 }
 
@@ -1705,6 +1778,16 @@ img {
 
   .zoom-slider {
     width: 100%;
+
+    // The pill is short here, 1px clear of the thumb: a smaller halo reaches no
+    // more than a pixel past its edge.
+    &:focus-visible::-webkit-slider-thumb {
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35);
+    }
+
+    &:focus-visible::-moz-range-thumb {
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35);
+    }
   }
 
   .fullscreen-close {

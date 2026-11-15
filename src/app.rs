@@ -5,7 +5,7 @@ use crate::server::{
     get_home_gallery_config, get_home_gallery_data, get_open_source, get_site_config,
     has_open_source,
 };
-use crate::types::PhotoInfo;
+use crate::types::{PhotoInfo, ViewerImage};
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
@@ -1082,29 +1082,39 @@ fn PhotoNavigationButtons(
     }
 }
 
-/// Fullscreen image viewer with zoom/pan/pinch controls. Owns all the
-/// browser-event closures so the parent `PhotoDetailPage` doesn't have to
-/// thread state through ~14 separate handlers.
+/// Focuses the open viewer's control matching `selector`. Only one viewer is open
+/// at a time, so the first match is its own.
+#[cfg(feature = "hydrate")]
+fn focus_viewer_control(selector: &str) {
+    if let Ok(Some(el)) = document().query_selector(selector) {
+        let _ = el.unchecked_into::<web_sys::HtmlElement>().focus();
+    }
+}
+
+/// Fullscreen image viewer with zoom/pan/pinch controls, used by the photo page
+/// and by screenshots on `/open-source` cards. Owns all the browser-event
+/// closures so its parent doesn't have to thread state through ~14 separate
+/// handlers.
 #[component]
 fn FullscreenViewer(
-    photo: PhotoInfo,
+    image: ViewerImage,
     state: ZoomPanState,
     viewport_width: RwSignal<f64>,
 ) -> impl IntoView {
     // Calibrate max zoom for very-high-resolution photos.
-    let calculated_max_zoom = match (photo.width, photo.height) {
+    let calculated_max_zoom = match (image.width, image.height) {
         (Some(w), Some(h)) if w > 8000 || h > 8000 => 20.0,
         _ => 10.0,
     };
     state.max_zoom.set(calculated_max_zoom);
 
     let is_mobile = move || viewport_width.get() <= 768.0 && viewport_width.get() > 0.0;
-    let photo_url_detail = StoredValue::new(photo.detail_url.clone());
-    let photo_url_original = StoredValue::new(photo.original_url.clone());
-    let photo_sources_original = StoredValue::new(photo.original_sources.clone());
-    let photo_title_fs = photo.title.clone();
-    let photo_width = photo.width;
-    let photo_height = photo.height;
+    let photo_url_detail = StoredValue::new(image.detail_url);
+    let photo_url_original = StoredValue::new(image.original_url);
+    let photo_sources_original = StoredValue::new(image.original_sources);
+    let photo_title_fs = image.alt;
+    let photo_width = image.width;
+    let photo_height = image.height;
 
     let _hide_controls_timeout: StoredValue<Option<i32>> = StoredValue::new(None);
 
@@ -1152,14 +1162,24 @@ fn FullscreenViewer(
         }
     };
 
+    // Where focus was when the viewer opened (a screenshot's button), to hand it
+    // back on close. Browser only: local storage is tied to its thread, and the
+    // server can drop a rendered page on another one.
+    #[cfg(feature = "hydrate")]
+    let opener = StoredValue::new_local(None::<web_sys::HtmlElement>);
+
     // When the user enters fullscreen, kick the auto-hide timer so controls
-    // briefly show then fade — mirroring the previous behaviour.
+    // briefly show then fade — mirroring the previous behaviour — and move focus
+    // to the ✕. Effects run straight after rendering, so the overlay is in the
+    // page, and no key press can land between the two.
     #[cfg(feature = "hydrate")]
     {
         use leptos::prelude::Effect;
         Effect::new(move |_| {
             if is_fullscreen.get() {
                 reset_hide_timer();
+                opener.set_value(document().active_element().and_then(|e| e.dyn_into().ok()));
+                focus_viewer_control(".fullscreen-close");
             }
         });
     }
@@ -1168,7 +1188,62 @@ fn FullscreenViewer(
         is_fullscreen.set(false);
         state.reset_zoom();
         show_zoom_controls.set(true);
+        #[cfg(feature = "hydrate")]
+        opener.with_value(|el| el.as_ref().map(web_sys::HtmlElement::focus));
     };
+
+    // A modal dialog's keys: Escape closes it, Tab stays on its two controls,
+    // and nothing scrolls the page behind it.
+    #[cfg(feature = "hydrate")]
+    {
+        let keys = window_event_listener(leptos::ev::keydown, move |ev| {
+            if !is_fullscreen.get_untracked() {
+                return;
+            }
+            let key = ev.key();
+            let target = ev.target();
+            let on_slider = target
+                .as_ref()
+                .is_some_and(JsCast::has_type::<web_sys::HtmlInputElement>);
+            let on_close = target
+                .as_ref()
+                .is_some_and(JsCast::has_type::<web_sys::HtmlButtonElement>);
+            match key.as_str() {
+                "Escape" => exit_fullscreen(),
+                "Tab" => {
+                    ev.prevent_default();
+                    // Either way round, the ✕ and the slider take turns. From anywhere
+                    // else (a click on the image leaves focus on the page), Tab picks
+                    // the ✕ and Shift+Tab the slider.
+                    let to_slider = if ev.shift_key() { !on_slider } else { on_close };
+                    focus_viewer_control(if to_slider {
+                        ".zoom-slider"
+                    } else {
+                        ".fullscreen-close"
+                    });
+                }
+                " " | "PageUp" | "PageDown" | "Home" | "End" | "ArrowUp" | "ArrowDown"
+                | "ArrowLeft" | "ArrowRight" => {
+                    // Alt or ⌘ with Left/Right is the browser's Back/Forward. The
+                    // slider keeps its own keys, unless Ctrl or ⌘ makes them page
+                    // scrolls, and Space presses the ✕.
+                    let history = (ev.alt_key() || ev.meta_key())
+                        && matches!(key.as_str(), "ArrowLeft" | "ArrowRight");
+                    let own = history
+                        || if key == " " {
+                            on_close
+                        } else {
+                            on_slider && !ev.ctrl_key() && !ev.meta_key()
+                        };
+                    if !own {
+                        ev.prevent_default();
+                    }
+                }
+                _ => {}
+            }
+        });
+        on_cleanup(move || keys.remove());
+    }
 
     let close_fullscreen = move |ev: leptos::ev::MouseEvent| {
         // Only close when clicking the backdrop, not the image itself.
@@ -1416,20 +1491,30 @@ fn FullscreenViewer(
                 return view! { <div></div> }.into_any();
             }
             view! {
-                <div class="fullscreen-overlay" on:click=close_fullscreen on:wheel=on_wheel>
-                    <div
+                <div
+                    class="fullscreen-overlay"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label=photo_title_fs.clone()
+                    on:click=close_fullscreen
+                    on:wheel=on_wheel
+                >
+                    <button
+                        type="button"
                         class="fullscreen-close"
                         class:hidden=move || !show_zoom_controls.get()
+                        aria-label="Close"
                         on:click=on_close_button
                     >
                         "✕"
-                    </div>
+                    </button>
                     <div class="fullscreen-controls" class:hidden=move || !show_zoom_controls.get()>
                         <div class="zoom-slider-container">
                             <label class="zoom-label">"1×"</label>
                             <input
                                 type="range"
                                 class="zoom-slider"
+                                aria-label="Zoom"
                                 min="1.0"
                                 prop:max=move || max_zoom.get()
                                 step="0.1"
@@ -1493,71 +1578,56 @@ fn PhotoDetailPage() -> impl IntoView {
     let state = ZoomPanState::new();
     let is_details_expanded = RwSignal::new(false);
 
-    // Set up keyboard navigation
+    // Arrow keys step through the photos. Removed on cleanup: left behind after a
+    // client-side visit, the listener would read this page's disposed signals on
+    // every key press and panic.
     #[cfg(feature = "hydrate")]
     {
-        use leptos::prelude::Effect;
-        use leptos_router::hooks::use_navigate;
+        let navigate = leptos_router::hooks::use_navigate();
+        let arrows = window_event_listener(leptos::ev::keydown, move |event| {
+            // The full-screen viewer's zoom slider takes its own arrow keys, and
+            // with Alt, Ctrl or ⌘ they are the browser's (Alt+Left is Back).
+            if event.alt_key()
+                || event.ctrl_key()
+                || event.meta_key()
+                || event
+                    .target()
+                    .is_some_and(|t| t.has_type::<web_sys::HtmlInputElement>())
+            {
+                return;
+            }
+            let key = event.key();
 
-        Effect::new(move |_| {
-            let navigate = use_navigate();
-
-            let handle_keydown = leptos::wasm_bindgen::closure::Closure::wrap(Box::new(
-                move |event: web_sys::KeyboardEvent| {
-                    let key = event.key();
-
-                    // Handle Escape key to close fullscreen
-                    if key == "Escape" && state.is_fullscreen.get() {
-                        state.is_fullscreen.set(false);
-                        state.reset_zoom();
-                        return;
-                    }
-
-                    // Get current photo list and params
-                    if let (Some(photo_list), Ok(current_params)) =
-                        (photos.get().and_then(std::result::Result::ok), params.get())
-                        && let Some((idx, _)) = photo_list
-                            .iter()
-                            .enumerate()
-                            .find(|(_, p)| p.slug == current_params.photo)
-                    {
-                        match key.as_str() {
-                            "ArrowLeft" => {
-                                if idx > 0
-                                    && let Some(prev) = photo_list.get(idx - 1)
-                                {
-                                    let url =
-                                        format!("/gallery/{}/{}", prev.gallery_name, prev.slug);
-                                    navigate(&url, leptos_router::NavigateOptions::default());
-                                }
-                            }
-                            "ArrowRight" => {
-                                if idx < photo_list.len() - 1
-                                    && let Some(next) = photo_list.get(idx + 1)
-                                {
-                                    let url =
-                                        format!("/gallery/{}/{}", next.gallery_name, next.slug);
-                                    navigate(&url, leptos_router::NavigateOptions::default());
-                                }
-                            }
-                            _ => {}
+            if let (Some(photo_list), Ok(current_params)) = (
+                photos.get_untracked().and_then(std::result::Result::ok),
+                params.get_untracked(),
+            ) && let Some((idx, _)) = photo_list
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.slug == current_params.photo)
+            {
+                match key.as_str() {
+                    "ArrowLeft" => {
+                        if idx > 0
+                            && let Some(prev) = photo_list.get(idx - 1)
+                        {
+                            let url = format!("/gallery/{}/{}", prev.gallery_name, prev.slug);
+                            navigate(&url, leptos_router::NavigateOptions::default());
                         }
                     }
-                },
-            )
-                as Box<dyn FnMut(web_sys::KeyboardEvent)>);
-
-            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-                let _ = document.add_event_listener_with_callback(
-                    "keydown",
-                    handle_keydown.as_ref().unchecked_ref(),
-                );
+                    "ArrowRight" => {
+                        if idx < photo_list.len() - 1
+                            && let Some(next) = photo_list.get(idx + 1)
+                        {
+                            let url = format!("/gallery/{}/{}", next.gallery_name, next.slug);
+                            navigate(&url, leptos_router::NavigateOptions::default());
+                        }
+                    }
+                    _ => {}
+                }
             }
-
-            // Forget the closure to keep it alive for the lifetime of the
-            // component (the listener stays registered).
-            handle_keydown.forget();
         });
+        on_cleanup(move || arrows.remove());
     }
 
     // Track viewport width for mobile detection. Initialized to a desktop
@@ -1689,7 +1759,7 @@ fn PhotoDetailPage() -> impl IntoView {
                             </div>
                             <PhotoNavigationButtons prev_photo=prev_photo next_photo=next_photo />
                             <FullscreenViewer
-                                photo=photo
+                                image=ViewerImage::from(photo)
                                 state=state
                                 viewport_width=viewport_width
                             />
@@ -1887,7 +1957,8 @@ fn OpenSourceLink() -> impl IntoView {
 }
 
 /// One card on the `/open-source` page. The name links out only when the entry has
-/// a non-blank `url`; highlights likewise fall back to plain text.
+/// a non-blank `url`; highlights likewise fall back to plain text. A card with an
+/// `image` shows it beside the text, and a click opens it in the full-screen viewer.
 #[component]
 fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
     let name = match entry.link() {
@@ -1950,16 +2021,58 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
         }
     });
 
-    view! {
-        <li class="oss-card">
-            <div class="oss-card-head">
-                <h3>{name}</h3>
-                {website}
-            </div>
-            <p class="oss-summary">{entry.summary.clone()}</p>
-            {tags}
-            {highlights}
-        </li>
+    let head = view! {
+        <div class="oss-card-head">
+            <h3>{name}</h3>
+            {website}
+        </div>
+    };
+    let summary = view! { <p class="oss-summary">{entry.summary.clone()}</p> };
+
+    match entry.image() {
+        None => view! {
+            <li class="oss-card">
+                {head}
+                {summary}
+                {tags}
+                {highlights}
+            </li>
+        }
+        .into_any(),
+        Some((src, alt)) => {
+            let image = ViewerImage::screenshot(src, &alt);
+            let src = src.to_string();
+            let label = format!("View the {} screenshot full screen", entry.name.trim());
+            let state = ZoomPanState::new();
+            let open = move |_| {
+                state.is_fullscreen.set(true);
+                state.show_zoom_controls.set(true);
+            };
+            view! {
+                <li class="oss-card oss-card-with-image">
+                    <div class="oss-card-text">
+                        {head}
+                        {summary}
+                        {tags}
+                        {highlights}
+                        // In the text column because, closed, the viewer still renders an
+                        // empty <div>, which as a grid item would add a row on phones.
+                        // Its width is never measured: a screenshot's two URLs are the
+                        // same and it has no other formats, so the viewer's phone/desktop
+                        // switch has nothing to choose between.
+                        <FullscreenViewer
+                            image=image
+                            state=state
+                            viewport_width=RwSignal::new(1920.0)
+                        />
+                    </div>
+                    <button type="button" class="oss-image" aria-label=label on:click=open>
+                        <img src=src alt=alt loading="lazy" decoding="async" />
+                    </button>
+                </li>
+            }
+            .into_any()
+        }
     }
 }
 
@@ -2228,5 +2341,34 @@ fn ContactPage() -> impl IntoView {
                 <ContactForm submitted=submitted />
             </div>
         </div>
+    }
+}
+
+#[cfg(all(test, feature = "ssr"))]
+mod tests {
+    use super::*;
+
+    // The server renders a page on one tokio worker and can drop it on another, so
+    // nothing the viewer creates while rendering may be tied to its thread. A
+    // thread-bound value aborted the server mid-request.
+    #[test]
+    fn a_rendered_viewer_can_be_dropped_on_another_thread() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let _ = view! {
+                <FullscreenViewer
+                    image=ViewerImage::screenshot("/shot.webp", "A screenshot")
+                    state=ZoomPanState::new()
+                    viewport_width=RwSignal::new(1920.0)
+                />
+            }
+            .to_html();
+        });
+
+        let dropped = std::thread::spawn(move || drop(owner)).join();
+        assert!(
+            dropped.is_ok(),
+            "dropping the viewer on another thread panicked"
+        );
     }
 }

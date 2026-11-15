@@ -1,7 +1,8 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 // Relies on the opensource.toml that `cargo run --example gen_fixtures` writes next
-// to the fixture config; see FIXTURE_OPEN_SOURCE in examples/gen_fixtures.rs.
+// to the fixture config; see FIXTURE_OPEN_SOURCE in examples/gen_fixtures.rs. The
+// screenshot tests also need README_ASSETS_DIR, which serves the card's image.
 test.describe("Open Source Page", () => {
   test("renders both sections in order", async ({ page }) => {
     await page.goto("/open-source", { waitUntil: "networkidle" });
@@ -113,5 +114,297 @@ test.describe("Open Source Page", () => {
         document.documentElement.clientWidth,
     );
     expect(overflows).toBe(false);
+  });
+});
+
+test.describe("Open Source Page screenshots", () => {
+  const SHOT = "/readme/fixture/shot.webp";
+  const ALT = "The Fixture Project home page";
+  const VIEW = "View the Fixture Project screenshot full screen";
+
+  const card = (page: Page) => page.locator(".oss-card", { hasText: "Fixture Project" });
+  const plain = (page: Page) =>
+    page.locator(".oss-card", { hasText: "Unlinked Upstream" });
+  const button = (page: Page) => page.getByRole("button", { name: VIEW });
+
+  test("shows a screenshot only on the card that sets one", async ({ page }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    const img = card(page).locator(".oss-image img");
+    await expect(img).toHaveAttribute("src", SHOT);
+    await expect(img).toHaveAttribute("alt", ALT);
+    await expect(img).toHaveAttribute("loading", "lazy");
+    await expect(img).toHaveAttribute("decoding", "async");
+    // The file is really served, not just referenced.
+    await expect
+      .poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth))
+      .toBe(8);
+    await expect(card(page).getByRole("button", { name: VIEW })).toBeVisible();
+
+    await expect(page.locator(".oss-image")).toHaveCount(1);
+    await expect(plain(page).locator("img, .oss-card-text")).toHaveCount(0);
+  });
+
+  test("sets the screenshot right of the text on desktop", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    const img = (await card(page).locator(".oss-image img").boundingBox())!;
+    const text = (await card(page).locator(".oss-card-text").boundingBox())!;
+    const box = (await card(page).boundingBox())!;
+    const plainHead = (await plain(page).locator(".oss-card-head").boundingBox())!;
+
+    expect(img.width).toBeCloseTo(340, 0);
+    expect(img.height).toBeCloseTo(212, 0);
+    expect(img.x - (text.x + text.width)).toBeCloseTo(28, 0);
+    expect(img.y).toBeCloseTo(box.y + 20, 0);
+    expect(text.y).toBeCloseTo(box.y + 20, 0);
+    // The text keeps the left edge of cards without an image.
+    expect(text.x).toBeCloseTo(plainHead.x, 0);
+  });
+
+  test("stacks the screenshot under the tags at phone width", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    const img = (await card(page).locator(".oss-image img").boundingBox())!;
+    const tags = (await card(page).locator(".oss-tags").boundingBox())!;
+    const box = (await card(page).boundingBox())!;
+
+    expect(img.width).toBeCloseTo(box.width, 0);
+    expect(img.height).toBeCloseTo(img.width * 0.625, 0);
+    expect(img.y - (tags.y + tags.height)).toBeCloseTo(14, 0);
+    // Only the card's own padding under the image: the closed viewer adds no row.
+    expect(box.y + box.height - (img.y + img.height)).toBeCloseTo(20, 0);
+  });
+
+  test("opens full screen and closes back to the same place", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 360 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).evaluate((el) => el.scrollIntoView({ block: "center" }));
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before).toBeGreaterThan(0);
+
+    await button(page).click();
+    const overlay = page.locator(".fullscreen-overlay");
+    await expect(overlay).toBeVisible();
+    const image = page.locator(".fullscreen-image");
+    await expect(image).toHaveAttribute("src", SHOT);
+    await expect(image).toHaveAttribute("alt", ALT);
+    // No size is known for a screenshot, so it gets the default 10× zoom.
+    await expect(page.locator(".zoom-label").last()).toHaveText("10×");
+    // A one-finger drag must not scroll the page under the overlay.
+    expect(await overlay.evaluate((el) => getComputedStyle(el).touchAction)).toBe(
+      "none",
+    );
+
+    // The controls fade 1 s after the pointer last moved over the image.
+    await image.hover();
+    await page.locator(".fullscreen-close").click();
+    await expect(overlay).toHaveCount(0);
+
+    expect(await page.evaluate(() => window.scrollY)).toBe(before);
+    await expect(button(page)).toBeInViewport();
+    await expect(button(page)).toBeFocused();
+  });
+
+  test("keeps keyboard focus in the viewer and hands it back on close", async ({
+    page,
+  }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: ALT });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+
+    const close = dialog.getByRole("button", { name: "Close" });
+    const slider = dialog.getByRole("slider", { name: "Zoom" });
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(slider).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(slider).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(button(page)).toBeFocused();
+  });
+
+  test("marks the zoom slider when the keyboard is on it", async ({ page }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    // Hold the controls up: this is about the mark, not the fade.
+    await page.addStyleTag({ content: ".fullscreen-controls.hidden { opacity: 1 !important; }" });
+
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    const pill = page.locator(".zoom-slider-container");
+    await expect(page.getByRole("button", { name: "Close" })).toBeFocused();
+    const before = await pill.screenshot({ animations: "disabled" });
+
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("slider", { name: "Zoom" })).toBeFocused();
+    const after = await pill.screenshot({ animations: "disabled" });
+
+    expect(after.equals(before)).toBe(false);
+  });
+
+  test("keeps the slider's halo from bulging out of the pill on phones", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    // Hold the controls up: this is about the mark, not the fade.
+    await page.addStyleTag({ content: ".fullscreen-controls.hidden { opacity: 1 !important; }" });
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Close" })).toBeFocused();
+
+    // The pill is short on phones. Three rows above it and three below, starting
+    // a pixel clear of its edge, must not change when the halo appears.
+    const pill = (await page.locator(".zoom-slider-container").boundingBox())!;
+    const strips = [pill.y - 5, pill.y + pill.height + 2].map((y) => ({
+      x: pill.x,
+      y,
+      width: pill.width,
+      height: 3,
+    }));
+    // The pill itself too, so the test fails if the halo is gone altogether.
+    const shoot = () =>
+      Promise.all(
+        [pill, ...strips].map((clip) => page.screenshot({ clip, animations: "disabled" })),
+      );
+    const before = await shoot();
+
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("slider", { name: "Zoom" })).toBeFocused();
+    const after = await shoot();
+
+    // [the pill, the strip above, the strip below]
+    expect(after.map((shot, i) => shot.equals(before[i]))).toEqual([false, true, true]);
+  });
+
+  test("keeps the keyboard-focused control visible when the controls fade", async ({
+    page,
+  }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    const close = page.getByRole("button", { name: "Close" });
+    const controls = page.locator(".fullscreen-controls");
+    await expect(close).toBeFocused();
+
+    // The controls fade 1 s after opening; the slider's pill goes, the ✕ stays.
+    await expect(controls).toHaveClass(/hidden/);
+    await expect(controls).toHaveCSS("opacity", "0");
+    await expect(close).toHaveCSS("opacity", "1");
+
+    await page.keyboard.press("Tab");
+    await expect(close).toHaveCSS("opacity", "0");
+    await expect(controls).toHaveCSS("opacity", "1");
+  });
+
+  test("leaves Back and Forward keys to the browser while the viewer is open", async ({
+    page,
+  }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Close" })).toBeFocused();
+
+    // Synthetic events, so a Back that gets through doesn't really go back.
+    const prevented = await page.evaluate(() =>
+      [
+        { key: "ArrowLeft" },
+        { key: "ArrowLeft", altKey: true },
+        { key: "ArrowRight", altKey: true },
+        { key: "ArrowLeft", metaKey: true },
+        { key: "ArrowDown", altKey: true },
+      ].map((init) => {
+        const event = new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true });
+        document.activeElement!.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    );
+    // Alt or ⌘ with Left/Right is Back/Forward. Plain arrows and Alt+Down scroll
+    // the page behind, so the viewer keeps them.
+    expect(prevented).toEqual([true, false, false, false, true]);
+  });
+
+  test("keys don't scroll the page behind the viewer", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 360 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).evaluate((el) => el.scrollIntoView({ block: "center" }));
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before).toBeGreaterThan(0);
+
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fullscreen-overlay")).toBeVisible();
+
+    // Whatever has focus in the viewer: the ✕ first, then the slider, which keeps
+    // its own arrow, Page and Home/End keys, but not Space, and not with Ctrl.
+    const scrollKeys = ["PageUp", "Home", "ArrowUp", "PageDown", "End", "ArrowDown"];
+    for (const key of scrollKeys) await page.keyboard.press(key);
+    // One direction only: a pair could scroll away and back if it got through.
+    await page.keyboard.press("Alt+ArrowDown");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Space");
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("Control+ArrowDown");
+    // Keyboard scrolling can be animated; give it time to show up.
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => window.scrollY)).toBe(before);
+
+    await page.keyboard.press("ArrowRight");
+    await expect(page.locator(".zoom-slider")).not.toHaveValue("1");
+  });
+
+  test("opens from the keyboard, closes on Escape, and reopens unzoomed", async ({
+    page,
+  }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).focus();
+    await page.keyboard.press("Enter");
+    const overlay = page.locator(".fullscreen-overlay");
+    await expect(overlay).toBeVisible();
+
+    await page.locator(".zoom-slider").fill("3");
+    await expect(page.locator(".fullscreen-image")).toHaveAttribute(
+      "style",
+      /scale\(3\)/,
+    );
+
+    await page.keyboard.press("Escape");
+    await expect(overlay).toHaveCount(0);
+
+    await button(page).click();
+    await expect(page.locator(".zoom-slider")).toHaveValue("1");
+  });
+
+  test("keeps the viewer's zoom labels on one line at tablet width", async ({ page }) => {
+    // The page's `overflow-wrap: anywhere` must not reach the viewer: at tablet
+    // portrait widths the zoom pill is squeezed, and "10×" would break in two.
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    await button(page).click();
+    await expect(page.locator(".fullscreen-overlay")).toBeVisible();
+
+    const lines = await page.locator(".zoom-label").evaluateAll((labels) =>
+      labels.map((label) => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return range.getClientRects().length;
+      }),
+    );
+    expect(lines).toEqual([1, 1]);
   });
 });
