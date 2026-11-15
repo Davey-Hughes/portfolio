@@ -14,6 +14,11 @@
 # browsers revalidate on every load, so a screenshot can be replaced in place.
 # /content/ works too, but browsers cache it for a year.
 #
+# Set `image_invert = true` when the image is white line art on a transparent
+# background, such as a terminal animation. The card then draws it inverted, black
+# on the white page, and the full-screen viewer shows it as it is, white on its dark
+# overlay. A normal screenshot would come out as its own negative.
+#
 # This file is public: the content directory is served as-is under /content/, so
 # anyone can download it, comments and commented-out entries included. Keep
 # drafts and private notes out of it.
@@ -30,6 +35,7 @@ summary = "This site: a photography portfolio."  # required
 tags = ["Rust", "Leptos"]                        # optional
 image = "/readme/portfolio/card.webp"            # optional; a screenshot right of the text
 image_alt = "The portfolio home page"            # optional; defaults to "<name> screenshot"
+image_invert = false                             # optional; see `image_invert` above
 
 [[projects]]
 name = "another-project"

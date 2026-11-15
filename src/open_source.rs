@@ -53,6 +53,12 @@ pub struct OpenSourceEntry {
     /// The screenshot's alt text. Defaults to "<name> screenshot" when unset or blank.
     #[serde(default)]
     pub image_alt: Option<String>,
+    /// Draw the card's screenshot inverted (`filter: invert(1) hue-rotate(180deg)`).
+    /// For white line art on a transparent background, which then reads black on the
+    /// white page; the full-screen viewer shows it as it is, white on its dark
+    /// overlay. A normal screenshot would come out as its own negative.
+    #[serde(default)]
+    pub image_invert: bool,
 }
 
 /// A link to one notable piece of work, such as a merged PR, under a card.
@@ -185,6 +191,7 @@ mod tests {
             highlights: Vec::new(),
             image: None,
             image_alt: None,
+            image_invert: false,
         }
     }
 
@@ -381,6 +388,7 @@ summary = "Only the required fields."
         assert_eq!(project.highlights, Vec::<Highlight>::new());
         assert_eq!(project.image, None);
         assert_eq!(project.image_alt, None);
+        assert!(!project.image_invert);
     }
 
     #[cfg(feature = "ssr")]
@@ -393,6 +401,7 @@ name = "redextape"
 summary = "A site."
 image = "/readme/redextape/card.webp"
 image_alt = "The redextape home page"
+image_invert = true
 
 [[contributions]]
 name = "Upstream"
@@ -419,6 +428,8 @@ image = "/readme/upstream/card.webp"
             ))
         );
 
+        assert!(project.image_invert);
+
         // Contributions share the shape, alt default included.
         assert_eq!(
             content.contributions[0].image(),
@@ -427,6 +438,14 @@ image = "/readme/upstream/card.webp"
                 "Upstream screenshot".to_string()
             ))
         );
+        assert!(!content.contributions[0].image_invert);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn image_invert_must_be_a_bool() {
+        let quoted = "[[projects]]\nname = \"x\"\nsummary = \"y\"\nimage_invert = \"true\"\n";
+        assert!(parse_open_source(quoted).is_err());
     }
 
     #[cfg(feature = "ssr")]

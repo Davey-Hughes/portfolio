@@ -1169,6 +1169,16 @@ img {
       height: auto;
       aspect-ratio: 16 / 10;
     }
+
+    // `image_invert` in opensource.toml: white line art on a transparent background
+    // reads black on the white page. Transparent stays transparent, and the hue
+    // rotation turns coloured accents back to roughly their own hue. The filter
+    // inverts the faint black border too, into a faint white that disappears, which
+    // suits an image with no edge of its own. A filter, not a blend mode, so the
+    // result doesn't depend on what is behind the card.
+    &.image-invert {
+      filter: invert(1) hue-rotate(180deg);
+    }
   }
 }
 

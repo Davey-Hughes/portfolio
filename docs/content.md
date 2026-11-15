@@ -137,6 +137,7 @@ summary = "This site."             # required
 tags    = ["Rust", "Leptos"]       # optional
 image   = "/readme/portfolio/card.webp"  # optional; a screenshot on the card
 image_alt = "The portfolio home page"    # optional; defaults to "<name> screenshot"
+image_invert = false               # optional; see below
 
 [[contributions]]                  # upstream projects; same fields as [[projects]]
 name    = "Some Upstream"
@@ -159,6 +160,14 @@ replace a screenshot in place. `/content/` works too, but browsers cache it for 
 year. Blank values count as unset. The screenshot sits right of the card's text at
 340×212 (16:10), cropped from the top left. On phones it runs full width at 16:10
 under the text. A click opens it in the gallery's full-screen viewer.
+
+`image_invert = true` is for an image that is white line art on a transparent
+background, such as a terminal animation. The card draws it inverted, so the art
+reads black on the white page, and the full-screen viewer shows it as it is,
+white on its dark overlay. Colours keep roughly their hue. A normal screenshot
+would come out as its own negative. The key is newer than the page itself, and an
+older server rejects it like any unknown key, so update the server before adding
+it to the file.
 
 The whole content directory is also served as static files under `/content/`,
 which is how the profile image reaches the browser. That means anyone can

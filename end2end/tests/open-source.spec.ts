@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 // Relies on the opensource.toml that `cargo run --example gen_fixtures` writes next
 // to the fixture config; see FIXTURE_OPEN_SOURCE in examples/gen_fixtures.rs. The
@@ -141,8 +141,59 @@ test.describe("Open Source Page screenshots", () => {
       .toBe(8);
     await expect(card(page).getByRole("button", { name: VIEW })).toBeVisible();
 
-    await expect(page.locator(".oss-image")).toHaveCount(1);
+    // Fixture Project and the inverted Fixture Upstream.
+    await expect(page.locator(".oss-image")).toHaveCount(2);
     await expect(plain(page).locator("img, .oss-card-text")).toHaveCount(0);
+  });
+
+  test("inverts an image_invert screenshot on its card only", async ({ page }) => {
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    const filter = (l: Locator) => l.evaluate((el) => getComputedStyle(el).filter);
+    const loaded = (l: Locator) =>
+      expect.poll(() => l.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(16);
+    // The [r, g, b] the page shows at `at` (fractions of the element's box), read
+    // from a screenshot the browser decodes, so what is checked is what is seen.
+    const pixel = async (l: Locator, at: [number, number]) => {
+      const png = (await l.screenshot({ animations: "disabled" })).toString("base64");
+      return page.evaluate(
+        async ([b64, [fx, fy]]) => {
+          const shot = new Image();
+          shot.src = `data:image/png;base64,${b64}`;
+          await shot.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = shot.width;
+          canvas.height = shot.height;
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(shot, 0, 0);
+          const x = Math.floor(shot.width * fx);
+          const y = Math.floor(shot.height * fy);
+          return Array.from(ctx.getImageData(x, y, 1, 1).data.slice(0, 3));
+        },
+        [png, at] as const,
+      );
+    };
+    const art = page
+      .locator(".oss-card", { hasText: "Fixture Upstream" })
+      .locator(".oss-image img");
+    // The image is lazy, so it may not load until it is near the viewport.
+    await art.scrollIntoViewIfNeeded();
+    await loaded(art);
+
+    expect(await filter(card(page).locator(".oss-image img"))).toBe("none");
+    expect(await filter(art)).toBe("invert(1) hue-rotate(180deg)");
+    // fixture art.webp: white in the middle, transparent around it. The white comes
+    // out black on the white page, and the transparent edge stays page white.
+    expect(Math.max(...(await pixel(art, [0.5, 0.5])))).toBeLessThan(40);
+    expect(Math.min(...(await pixel(art, [0.1, 0.1])))).toBeGreaterThan(215);
+
+    // Full screen the art shows as it is: white, on the viewer's dark overlay.
+    await page
+      .getByRole("button", { name: "View the Fixture Upstream screenshot full screen" })
+      .click();
+    const full = page.locator(".fullscreen-image");
+    await loaded(full);
+    expect(await filter(full)).toBe("none");
+    expect(Math.min(...(await pixel(full, [0.5, 0.5])))).toBeGreaterThan(215);
   });
 
   test("sets the screenshot right of the text on desktop", async ({ page }) => {

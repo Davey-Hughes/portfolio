@@ -2087,6 +2087,7 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
         .into_any(),
         Some((src, alt)) => {
             let image = ViewerImage::screenshot(src, &alt);
+            let invert = entry.image_invert;
             let src = src.to_string();
             let label = format!("View the {} screenshot full screen", entry.name.trim());
             let state = ZoomPanState::new();
@@ -2113,7 +2114,15 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
                         />
                     </div>
                     <button type="button" class="oss-image" aria-label=label on:click=open>
-                        <img src=src alt=alt loading="lazy" decoding="async" />
+                        // Only the card inverts: full screen, white art already shows
+                        // light on the viewer's dark overlay.
+                        <img
+                            src=src
+                            alt=alt
+                            class:image-invert=invert
+                            loading="lazy"
+                            decoding="async"
+                        />
                     </button>
                 </li>
             }
