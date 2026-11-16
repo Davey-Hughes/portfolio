@@ -765,6 +765,13 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
     // ambiguous reverse decoding that previously deleted cache files for any
     // source whose name happened to contain `_` or `_w`.
     let valid_prefixes = collect_valid_prefixes(images_dir);
+    // No photos at all is what a NAS share that is down looks like: an empty or
+    // unreadable mountpoint. Every cache file would look orphaned, and once the share
+    // is back every photo would have to be made again, so leave the cache as it is.
+    if valid_prefixes.is_empty() {
+        log!("No photos found in {images_dir}; skipping cache cleanup");
+        return;
+    }
 
     let mut orphaned_count = 0;
     let mut old_count = 0;
@@ -1600,15 +1607,35 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
-        fs::create_dir_all(&images).unwrap();
         fs::create_dir_all(&cache).unwrap();
-        // No source images at all → every cache file is orphaned.
+        write_jpeg(&images.join("home/kept.jpg"), STUB);
+        let kept = cache.join("home_kept_w2400_q80_l1.webp");
+        fs::write(&kept, b"webp").unwrap();
         let orphan = cache.join("home_deleted_w2400_q80_l1.webp");
         fs::write(&orphan, b"webp").unwrap();
 
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
 
+        assert!(kept.exists());
         assert!(!orphan.exists());
+    }
+
+    // What a NAS outage looks like at startup: the mountpoint is there but holds
+    // only the empty home gallery directory the server makes for itself. Every cache
+    // file would look orphaned, and remaking them all costs every photo's transcode.
+    #[test]
+    fn cleanup_cache_keeps_everything_while_the_images_folder_has_no_photos() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(images.join("home")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let cached = cache.join("home_sunset_w2400_q80_l1.webp");
+        fs::write(&cached, b"webp").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(cached.exists());
     }
 
     #[test]
@@ -1618,8 +1645,8 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
-        fs::create_dir_all(&images).unwrap();
         fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/pic.jpg"), STUB);
         let stray = cache.join("README.txt");
         fs::write(&stray, b"hello").unwrap();
 
