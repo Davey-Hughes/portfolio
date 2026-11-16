@@ -84,10 +84,14 @@ jobs:
       - name: Test
         run: cargo test --features ssr
 
-  # The other half of `cargo leptos test`. That command is exactly two cargo
-  # invocations — the `rust` job above is the server one, this is the client one:
+  # The other half of `cargo leptos test`. That command is two cargo invocations — the
+  # `rust` job above is the server one, this is the client one:
   #
   #   cargo test --lib --no-default-features --features hydrate
+  #
+  # cargo-leptos also compiles both with `--cfg erase_components`, as it does for every
+  # debug build. CI leaves that out, as the release build does; see Testing in
+  # docs/development.md.
   #
   # It adds no new test *functions*. What it adds is running them compiled under
   # `hydrate` instead of `ssr`, which is the only thing in CI that compiles the

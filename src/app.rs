@@ -2733,6 +2733,19 @@ mod ssr_tests {
         }
     }
 
+    /// `html` without tachys's hydration markers, the `<!>` and `<!--…-->` comments
+    /// a browser doesn't show. Match rendered HTML against this, because where the
+    /// markers go depends on the build. `cargo leptos test` compiles with
+    /// `--cfg erase_components`, which puts a `<!>` before the closing tag of most
+    /// elements that aren't plain static HTML (`<code class="not-found-path">/x<!></code>`).
+    /// `cargo ci` and the release build that serves the site don't.
+    fn without_markers(html: &str) -> String {
+        regex::Regex::new(r"(?s)<!(?:>|--.*?-->)")
+            .unwrap()
+            .replace_all(html, "")
+            .into_owned()
+    }
+
     /// The app's Leptos routes, fallback and trailing-slash redirect, wired the way
     /// src/main.rs wires them (minus the file mounts, the HTML cache and compression).
     fn app() -> axum::Router {
@@ -2797,7 +2810,7 @@ mod ssr_tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body.contains(r#"class="not-found-page""#), "{body}");
         assert!(
-            body.contains(r#"<code class="not-found-path">/no-such-page</code>"#),
+            without_markers(&body).contains(r#"<code class="not-found-path">/no-such-page</code>"#),
             "{body}"
         );
         assert!(body.contains(r#"href="/gallery/home/photo""#), "{body}");
@@ -2824,14 +2837,14 @@ mod ssr_tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(!body.contains("<script>alert(1)"), "{body}");
         assert!(
-            body.contains(
+            without_markers(&body).contains(
                 r#"<code class="not-found-path">/%3Cscript%3Ealert(1)%3C/script%3E</code>"#
             ),
             "{body}"
         );
         let (_, body) = get("/a&b").await;
         assert!(
-            body.contains(r#"<code class="not-found-path">/a&amp;b</code>"#),
+            without_markers(&body).contains(r#"<code class="not-found-path">/a&amp;b</code>"#),
             "{body}"
         );
     }
@@ -2986,7 +2999,7 @@ mod ssr_tests {
         let (status, body) = get("/open-source").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(
-            body.contains(r#"<code class="not-found-path">/open-source</code>"#),
+            without_markers(&body).contains(r#"<code class="not-found-path">/open-source</code>"#),
             "{body}"
         );
     }
@@ -3010,7 +3023,8 @@ mod ssr_tests {
             let (status, body) = get(path).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
             assert!(
-                body.contains(&format!(r#"<code class="not-found-path">{path}</code>"#)),
+                without_markers(&body)
+                    .contains(&format!(r#"<code class="not-found-path">{path}</code>"#)),
                 "{path}: {body}"
             );
         }
@@ -3067,7 +3081,8 @@ mod ssr_tests {
             let (status, body) = get(to).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{to}");
             assert!(
-                body.contains(&format!(r#"<code class="not-found-path">{to}</code>"#)),
+                without_markers(&body)
+                    .contains(&format!(r#"<code class="not-found-path">{to}</code>"#)),
                 "{to}: {body}"
             );
         }
@@ -3135,7 +3150,8 @@ mod ssr_tests {
             let (status, body) = get(path).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
             assert!(
-                body.contains(&format!(r#"<code class="not-found-path">{path}</code>"#)),
+                without_markers(&body)
+                    .contains(&format!(r#"<code class="not-found-path">{path}</code>"#)),
                 "{path}: {body}"
             );
         }

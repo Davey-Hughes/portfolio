@@ -64,7 +64,9 @@ fn main() {
         "warnings",
     ]);
     // No --lib: that skips the doctests, and it is what `cargo leptos test` runs for
-    // the server half.
+    // the server half. That command also adds `--cfg erase_components`, as every
+    // cargo-leptos debug build does. CI and the release build leave it out, and so does
+    // this, so the tests see the HTML the site sends.
     step(&["test", "--features", "ssr"]);
 
     // --- the `hydrate` job ---

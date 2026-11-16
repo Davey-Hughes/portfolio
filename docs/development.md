@@ -110,6 +110,15 @@ release build. `cargo ci --release` adds that job's release build, fixture gener
 bundle-size budget. Only the job's Playwright suite is left out, since it needs a server;
 see below.
 
+The two commands don't build the tests quite the same way. `cargo leptos test` compiles
+with `--cfg erase_components`, which cargo-leptos sets on every debug build, including
+`cargo leptos watch`, so that they compile faster. That setting also changes the HTML the
+server renders: most elements that aren't plain static HTML get an extra `<!>` hydration
+marker before their closing tag. CI, `cargo ci` and the release build leave it out. So a
+test that matches markup inside such an element should match against `without_markers`
+(in the `ssr_tests` module of `src/app.rs`), and when the two commands disagree,
+`cargo ci` is the one that agrees with CI.
+
 The end-to-end tests use [Playwright](https://playwright.dev/), run over Chromium and
 Firefox, and live in `end2end/tests/`. Most of the suite needs photos, and
 `public/images/*` is gitignored, so generate the fixture gallery first, then serve a
