@@ -2074,6 +2074,28 @@ pub(crate) mod tests {
         );
     }
 
+    // A delete that fails is an error: not a file removed, and not one kept because it
+    // was read lately. A directory stands in for the old cache file, since
+    // `remove_file` deletes no directory, whoever asks. A read-only cache folder
+    // wouldn't do: root deletes from it anyway, and CI runs as root.
+    #[test]
+    fn remove_if_unread_for_returns_an_error_when_the_delete_fails() {
+        let dir = TempDir::new().unwrap();
+        let undeletable = dir.path().join("nature_fox_w2400_q80_l1.webp");
+        fs::create_dir(&undeletable).unwrap();
+        let month_ago = SystemTime::now() - Duration::from_hours(31 * 24);
+        fs::File::open(&undeletable)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_accessed(month_ago))
+            .unwrap();
+
+        let removed =
+            remove_if_unread_for(&undeletable, Duration::from_hours(720), SystemTime::now());
+
+        assert!(removed.is_err(), "a failed delete came back as {removed:?}");
+        assert!(undeletable.exists());
+    }
+
     /// Photos named the way cameras and other tools name them, in a gallery `g`.
     const ANY_CASE: [&str; 5] = ["Upper.JPG", "Mixed.Jpg", "Shot.PNG", "Pic.WEBP", "Clip.GIF"];
 
