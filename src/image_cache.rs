@@ -764,14 +764,24 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
     // `process_and_cache_image` would produce. Doing it this way avoids the
     // ambiguous reverse decoding that previously deleted cache files for any
     // source whose name happened to contain `_` or `_w`.
-    let valid_prefixes = collect_valid_prefixes(images_dir);
-    // No photos at all is what a NAS share that is down looks like: an empty or
-    // unreadable mountpoint. Every cache file would look orphaned, and once the share
-    // is back every photo would have to be made again, so leave the cache as it is.
-    if valid_prefixes.is_empty() {
-        log!("No photos found in {images_dir}; skipping cache cleanup");
-        return;
-    }
+    //
+    // No photos at all is what a NAS share that is down looks like: an empty
+    // mountpoint, or none. A read error is what one that is partly there looks like.
+    // Either way some cache files would look orphaned only because their photos are
+    // out of sight, and once the share is back those photos would have to be made
+    // again, so `None` removes no orphans. The rest of the cleanup doesn't depend on
+    // the photos and goes ahead.
+    let valid_prefixes = match collect_valid_prefixes(images_dir) {
+        Ok(prefixes) if !prefixes.is_empty() => Some(prefixes),
+        Ok(_) => {
+            log!("No photos found in {images_dir}; removing no orphaned cache files");
+            None
+        }
+        Err(e) => {
+            log!("Couldn't read all of {images_dir} ({e}); removing no orphaned cache files");
+            None
+        }
+    };
 
     let mut orphaned_count = 0;
     let mut old_count = 0;
@@ -820,7 +830,10 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
             continue;
         };
 
-        if !valid_prefixes.contains(prefix) {
+        if valid_prefixes
+            .as_ref()
+            .is_some_and(|valid| !valid.contains(prefix))
+        {
             match fs::remove_file(&cache_file) {
                 Ok(()) => {
                     log!("Removed orphaned cache file: {}", filename);
@@ -889,25 +902,49 @@ fn strip_underscore_digit_segment<'a>(s: &'a str, sep: &str) -> Option<&'a str> 
 /// prefixes — the same encoding `process_and_cache_image` produces for each
 /// source file. Used by `cleanup_cache` to decide whether a cache file's
 /// source still exists.
-fn collect_valid_prefixes(images_dir: &str) -> std::collections::HashSet<String> {
+///
+/// `Err`, naming the path, when part of `images_dir` can't be read: a source may
+/// be there but out of sight. What isn't there at all (`images_dir` itself, a file
+/// deleted during the walk, a link to nothing) is no error.
+fn collect_valid_prefixes(images_dir: &str) -> std::io::Result<std::collections::HashSet<String>> {
     let mut prefixes = std::collections::HashSet::new();
     let base = std::path::Path::new(images_dir);
-    collect_valid_prefixes_recursive(base, base, &mut prefixes);
-    prefixes
+    collect_valid_prefixes_recursive(base, base, &mut prefixes)?;
+    Ok(prefixes)
 }
 
 fn collect_valid_prefixes_recursive(
     dir: &std::path::Path,
     base: &std::path::Path,
     out: &mut std::collections::HashSet<String>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let at = |path: &Path, err: Error| Error::new(err.kind(), format!("{}: {err}", path.display()));
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(at(dir, err)),
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_valid_prefixes_recursive(&path, base, out);
+    for entry in entries {
+        let path = entry.map_err(|err| at(dir, err))?.path();
+        // Follows links, as `Path::is_dir` does; and as for `is_dir`, a link to
+        // nothing (its target missing, running through a file, or with a name too
+        // long to exist) or a file deleted since the listing is no folder.
+        let is_dir = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::InvalidFilename
+                ) =>
+            {
+                false
+            }
+            Err(err) => return Err(at(&path, err)),
+        };
+        if is_dir {
+            collect_valid_prefixes_recursive(&path, base, out)?;
             continue;
         }
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -929,6 +966,7 @@ fn collect_valid_prefixes_recursive(
             out.insert(encoded);
         }
     }
+    Ok(())
 }
 
 /// Check if a cache file is older than the maximum age
@@ -1569,7 +1607,7 @@ pub(crate) mod tests {
         // Non-image file is skipped.
         fs::write(images.join("home/notes.txt"), b"x").unwrap();
 
-        let prefixes = collect_valid_prefixes(images.to_str().unwrap());
+        let prefixes = collect_valid_prefixes(images.to_str().unwrap()).unwrap();
         let expected: HashSet<String> =
             ["home_sunset", "home_space_needle", "travel_iceland_glacier"]
                 .into_iter()
@@ -1624,7 +1662,7 @@ pub(crate) mod tests {
     // only the empty home gallery directory the server makes for itself. Every cache
     // file would look orphaned, and remaking them all costs every photo's transcode.
     #[test]
-    fn cleanup_cache_keeps_everything_while_the_images_folder_has_no_photos() {
+    fn cleanup_cache_removes_no_orphans_while_the_images_folder_has_no_photos() {
         let dir = TempDir::new().unwrap();
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
@@ -1632,10 +1670,126 @@ pub(crate) mod tests {
         fs::create_dir_all(&cache).unwrap();
         let cached = cache.join("home_sunset_w2400_q80_l1.webp");
         fs::write(&cached, b"webp").unwrap();
+        let (leftover, old) = leftover_and_old_file(&cache);
 
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
 
-        assert!(cached.exists());
+        assert!(cached.exists(), "a photo out of sight keeps its cache file");
+        assert!(!leftover.exists(), "a crash's leftover is removed");
+        assert!(!old.exists(), "a file unused for 30 days is removed");
+    }
+
+    // A share that is only partly there: one gallery lists, another can't be. The
+    // photos in the one that can't are out of sight, not gone.
+    #[test]
+    fn cleanup_cache_removes_no_orphans_when_a_gallery_folder_cant_be_listed() {
+        use std::os::unix::fs::PermissionsExt;
+        /// A folder unlocked again when this goes, however the test ends, so the
+        /// temporary directory around it can be removed.
+        struct Locked(PathBuf);
+        impl Drop for Locked {
+            fn drop(&mut self) {
+                fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755)).ok();
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        write_jpeg(&images.join("nature/bird.jpg"), STUB);
+        let hidden = cache.join("nature_bird_w2400_q80_l1.webp");
+        fs::write(&hidden, b"webp").unwrap();
+        // Declared after `dir`, so it unlocks the folder before `dir` is removed.
+        let locked = Locked(images.join("nature"));
+        fs::set_permissions(&locked.0, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&locked.0).is_ok() {
+            // Root reads it anyway; the next test fails a read for root too.
+            eprintln!("skipped: {} is still readable", locked.0.display());
+            return;
+        }
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(hidden.exists());
+    }
+
+    // A gallery whose folder can't even be looked at: a link to itself fails with
+    // "too many levels of symbolic links", for root as well.
+    #[test]
+    fn cleanup_cache_removes_no_orphans_when_a_gallery_cant_be_read() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        std::os::unix::fs::symlink("nature", images.join("nature")).unwrap();
+        let hidden = cache.join("nature_bird_w2400_q80_l1.webp");
+        fs::write(&hidden, b"webp").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(hidden.exists());
+    }
+
+    // When the walk can't see everything, only the orphans are in doubt. A crash's
+    // leftover, and a file nobody has asked for in 30 days, go as usual.
+    #[test]
+    fn cleanup_cache_still_removes_leftovers_and_old_files_when_the_walk_fails() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        std::os::unix::fs::symlink("nature", images.join("nature")).unwrap();
+        let hidden = cache.join("nature_bird_w2400_q80_l1.webp");
+        fs::write(&hidden, b"webp").unwrap();
+        let (leftover, old) = leftover_and_old_file(&cache);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(hidden.exists(), "a photo out of sight keeps its cache file");
+        assert!(!leftover.exists(), "a crash's leftover is removed");
+        assert!(!old.exists(), "a file unused for 30 days is removed");
+    }
+
+    /// Two files in `cache` that the cleanup removes whatever it makes of the photos:
+    /// a crash's leftover temporary file, and a cache file last read 31 days ago.
+    fn leftover_and_old_file(cache: &Path) -> (PathBuf, PathBuf) {
+        let leftover = cache.join("nature_bird_w2400_q80_l1.webp.4242-7.tmp");
+        let old = cache.join("nature_fox_w2400_q80_l1.webp");
+        for file in [&leftover, &old] {
+            fs::write(file, b"webp").unwrap();
+        }
+        let month_ago = SystemTime::now() - Duration::from_hours(31 * 24);
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_accessed(month_ago))
+            .unwrap();
+        (leftover, old)
+    }
+
+    // A link to nothing hides nothing, so it doesn't stop the cleanup, whether its
+    // target is missing or runs through a file.
+    #[test]
+    fn cleanup_cache_removes_orphans_past_links_to_nothing() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        std::os::unix::fs::symlink("gone", images.join("missing")).unwrap();
+        std::os::unix::fs::symlink("home/pic.jpg/x", images.join("through_a_file")).unwrap();
+        std::os::unix::fs::symlink("x".repeat(300), images.join("name_too_long")).unwrap();
+        let orphan = cache.join("home_deleted_w2400_q80_l1.webp");
+        fs::write(&orphan, b"webp").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(!orphan.exists());
     }
 
     #[test]
