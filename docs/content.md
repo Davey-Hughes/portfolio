@@ -98,7 +98,9 @@ recursively.
 
 When the server finds a photo, it reads the EXIF, with XMP as a fallback for lens
 names, to fill in the dimensions, date taken, camera make and model, lens, focal
-length, aperture, shutter speed, ISO, copyright and film stock.
+length, aperture, shutter speed, ISO, copyright and film stock. A photo whose EXIF
+has no size, or that has no EXIF at all, gets its dimensions from the image file,
+unless that file is an AVIF, which the server can't read.
 
 Film stock is read from the EXIF `UserComment`/`ImageDescription`, in either of two
 export formats:

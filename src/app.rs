@@ -2862,6 +2862,9 @@ mod ssr_tests {
         let mut exif = Metadata::new();
         exif.set_tag(ExifTag::Make("NIKON CORPORATION".to_string()));
         exif.write_to_file(&tagged).unwrap();
+        // Neither EXIF nor an image header, so nothing gives its size.
+        let broken = site.dir.path().join("images/home/broken.jpg");
+        std::fs::write(&broken, b"not a jpeg").unwrap();
 
         let (status, body) = get("/gallery/home/tagged").await;
         assert_eq!(status, StatusCode::OK);
@@ -2870,8 +2873,15 @@ mod ssr_tests {
             "{body}"
         );
 
-        // `photo.jpg` has no EXIF at all, so the server doesn't read its size.
+        // `photo.jpg` has no EXIF at all, so its size comes from the image header too.
         let (status, body) = get("/gallery/home/photo").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.contains(r#"style="--photo-width: 4; --photo-height: 3"#),
+            "{body}"
+        );
+
+        let (status, body) = get("/gallery/home/broken").await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("photo-detail-image"), "{body}");
         assert!(!body.contains("--photo-width"), "{body}");

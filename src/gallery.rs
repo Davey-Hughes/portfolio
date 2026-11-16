@@ -782,16 +782,34 @@ fn exif_dimensions(exif_reader: &exif::Exif, path: &Path) -> (Option<u32>, Optio
         .filter(|&h| h > 0);
 
     if (width.is_none() || height.is_none())
-        && let Ok(mut reader) = image::ImageReader::open(path)
+        && let Some((header_width, header_height)) = header_dimensions(path)
     {
-        reader.limits(image::Limits::no_limits());
-        if let Ok(dimensions) = reader.into_dimensions() {
-            width = Some(dimensions.0);
-            height = Some(dimensions.1);
-        }
+        width = Some(header_width);
+        height = Some(header_height);
     }
 
     (width, height)
+}
+
+/// Pixel dimensions from the image header, without decoding the image.
+///
+/// The `image` crate can't read JPEG XL, so that goes through jxl-oxide, as it does in
+/// `image_cache`. `JxlDecoder::new` reads only as far as the header.
+fn header_dimensions(path: &Path) -> Option<(u32, u32)> {
+    use image::ImageDecoder;
+
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"))
+    {
+        let file = fs::File::open(path).ok()?;
+        let decoder = jxl_oxide::integration::JxlDecoder::new(file).ok()?;
+        return Some(decoder.dimensions());
+    }
+
+    let mut reader = image::ImageReader::open(path).ok()?;
+    reader.limits(image::Limits::no_limits());
+    reader.into_dimensions().ok()
 }
 
 /// Film stock name, which scanners and taggers stash in `ImageDescription` or
@@ -858,7 +876,12 @@ fn extract_exif_data(path: &Path) -> ExifData {
 
     let mut reader = BufReader::new(file);
     let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut reader) else {
-        return ExifData::default();
+        let (width, height) = header_dimensions(path).unzip();
+        return ExifData {
+            width,
+            height,
+            ..ExifData::default()
+        };
     };
 
     let (width, height) = exif_dimensions(&exif_reader, path);
@@ -2170,6 +2193,40 @@ mod tests {
 
         let exif = extract_exif_data(&path);
         assert_eq!((exif.width, exif.height), (Some(40), Some(30)));
+    }
+
+    // Without a size, the photo page can't reserve the photo's box and the mosaic
+    // draws the photo as a square.
+    #[test]
+    fn extract_exif_data_reads_the_header_of_a_photo_without_exif() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in [
+            "fixture.jpg",
+            "fixture.png",
+            "fixture.webp",
+            "fixture.gif",
+            "FIXTURE.JPG",
+        ] {
+            let path = dir.path().join(name);
+            image::RgbImage::new(40, 30).save(&path).unwrap();
+
+            let exif = extract_exif_data(&path);
+            assert_eq!((exif.width, exif.height), (Some(40), Some(30)), "{name}");
+        }
+    }
+
+    // The `image` crate can't read JPEG XL, and a JPEG XL is a photo's main file
+    // whenever there's no JPEG or AVIF beside it.
+    #[test]
+    fn extract_exif_data_reads_the_header_of_a_jpeg_xl() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["fixture.jxl", "FIXTURE.JXL"] {
+            let path = dir.path().join(name);
+            fs::write(&path, crate::image_cache::tests::TINY_JXL).unwrap();
+
+            let exif = extract_exif_data(&path);
+            assert_eq!((exif.width, exif.height), (Some(4), Some(3)), "{name}");
+        }
     }
 
     #[test]

@@ -1046,7 +1046,7 @@ fn collect_image_paths_recursive(dir: &std::path::Path, base: &str, paths: &mut 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serial_test::serial;
     use std::fs;
@@ -1673,7 +1673,7 @@ mod tests {
     const ANY_CASE: [&str; 5] = ["Upper.JPG", "Mixed.Jpg", "Shot.PNG", "Pic.WEBP", "Clip.GIF"];
 
     /// A 4×3 JPEG XL, which the `image` crate can't write: `cjxl -d 0` of a flat PPM.
-    const TINY_JXL: &[u8] = &[
+    pub(crate) const TINY_JXL: &[u8] = &[
         0xff, 0x0a, 0x10, 0x30, 0x10, 0x50, 0x5c, 0x08, 0x08, 0x00, 0x01, 0x00, 0x58, 0x00, 0x4b,
         0x18, 0x8b, 0x15, 0xc2, 0x01, 0x63, 0x9b, 0x50, 0xf1, 0x07, 0xd8, 0x3b, 0x00, 0x00, 0xfb,
         0x48, 0x05, 0x78, 0x20, 0x00, 0x00,
