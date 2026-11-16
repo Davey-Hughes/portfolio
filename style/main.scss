@@ -453,6 +453,8 @@ img {
 }
 
 .photo-detail-content {
+  // How tall the photo may be. The details beside it read it too (`.photo-detail-info`).
+  --photo-max-height: calc(100vh - 250px);
   flex: 1;
   display: flex;
   flex-direction: row;
@@ -488,7 +490,6 @@ img {
   }
 
   img {
-    --photo-max-height: calc(100vh - 250px);
     display: block;
     max-width: 100%;
     max-height: var(--photo-max-height);
@@ -527,7 +528,16 @@ img {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
+  // On a short window the details are taller than the photo may be. The panel then
+  // takes the photo's height limit, so it lines up with a photo that reaches it, and
+  // scrolls the rest. (Above 1024px wide that limit is always less than the space
+  // the panel sits in; for narrower windows see the 1024px block.) `safe` starts the
+  // details at the top when they scroll, where plain `center` would push them past
+  // both ends.
+  justify-content: safe center;
+  max-height: var(--photo-max-height);
+  overflow: hidden auto;
+  scrollbar-width: thin;
   text-align: left;
   min-width: 200px;
   max-width: 350px;
@@ -540,6 +550,9 @@ img {
     color: #1a1a1a;
     text-transform: uppercase;
     margin-bottom: 2rem;
+    // The panel cuts off what's wider than it, so a long word breaks instead.
+    // `break-word` wouldn't: the title would still grow to the word's width.
+    overflow-wrap: anywhere;
   }
 
   .fullscreen-hint {
@@ -548,6 +561,68 @@ img {
     margin-top: 1rem;
     font-weight: 300;
     letter-spacing: 0.5px;
+  }
+}
+
+// While the details scroll, the panel fades out at an edge with more beyond it, so
+// they don't stop at a hard line. Each fade is as deep as what's out of view on its
+// side, up to 2.5rem or a fifth of the panel: the scroll position drives one animation
+// over the first 2.5rem of the scroll and one over the last. A panel that doesn't
+// scroll has no scroll timeline to run them, so nothing fades.
+@property --photo-info-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --photo-info-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes photo-info-fade-top {
+  from {
+    --photo-info-fade-top: 0px;
+  }
+  to {
+    --photo-info-fade-top: 2.5rem;
+  }
+}
+
+@keyframes photo-info-fade-bottom {
+  from {
+    --photo-info-fade-bottom: 2.5rem;
+  }
+  to {
+    --photo-info-fade-bottom: 0px;
+  }
+}
+
+@supports (animation-timeline: scroll()) {
+  .photo-detail-info {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      #000 min(var(--photo-info-fade-top), 20%),
+      #000 calc(100% - min(var(--photo-info-fade-bottom), 20%)),
+      transparent
+    );
+    // Longhands, so the duration stays `auto`, as a scroll timeline needs. The build's
+    // minifier spells out an `animation` shorthand with two animations, durations
+    // included, and a duration of 0s makes each fade jump straight to its end.
+    animation-name: photo-info-fade-top, photo-info-fade-bottom;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(self);
+    animation-range:
+      0 2.5rem,
+      calc(100% - 2.5rem) 100%;
+  }
+
+  // The mask would hide part of the focus ring.
+  .photo-detail-info:focus-visible {
+    mask-image: none;
   }
 }
 
@@ -1589,11 +1664,14 @@ img {
   }
 
   .photo-detail-content {
+    --photo-max-height: 60vh;
     padding: 2rem;
   }
 
-  .photo-detail-image img {
-    --photo-max-height: 60vh;
+  // Here the photo may be taller than the space inside that padding, so the details
+  // may reach into it too, to stay level with the photo, but no further.
+  .photo-detail-info {
+    max-height: min(var(--photo-max-height), 100% + 4rem);
   }
 
   .about-container {
@@ -1703,6 +1781,7 @@ img {
   }
 
   .photo-detail-content {
+    --photo-max-height: 50vh;
     padding: 1rem;
     flex-direction: column;
     overflow: visible;
@@ -1716,15 +1795,15 @@ img {
     height: auto;
   }
 
-  .photo-detail-image img {
-    --photo-max-height: 50vh;
-  }
-
   .photo-detail-info {
     text-align: center;
     max-width: 100%;
     margin-left: 0;
     position: relative;
+    // The page scrolls here, so the details sit below the photo at their full height.
+    max-height: none;
+    overflow: visible;
+    mask-image: none;
 
     h1.photo-title-toggle {
       cursor: pointer;

@@ -1823,6 +1823,18 @@ fn PhotoDetailPage() -> impl IntoView {
         });
     }
 
+    // On a short window the details panel scrolls. Next and Previous keep the panel,
+    // scroll position and all, so it goes back to the top for each photo, where its
+    // title is.
+    let details_panel = NodeRef::<leptos::html::Div>::new();
+    #[cfg(feature = "hydrate")]
+    Effect::new(move |_| {
+        params.track();
+        if let Some(panel) = details_panel.get_untracked() {
+            panel.set_scroll_top(0);
+        }
+    });
+
     let enter_fullscreen = move |_| {
         state.is_fullscreen.set(true);
         state.show_zoom_controls.set(true);
@@ -1935,7 +1947,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                         />
                                     </picture>
                                 </div>
-                                <div class="photo-detail-info">
+                                <div class="photo-detail-info" node_ref=details_panel>
                                     <h1
                                         class="photo-title-toggle"
                                         class:expanded=move || is_details_expanded.get()

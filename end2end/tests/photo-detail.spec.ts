@@ -380,3 +380,160 @@ test.describe("Photo Detail Page while the photo loads", () => {
     });
   }
 });
+
+// The details beside the photo sit in the space between the header and the navigation.
+// On a short window they are taller than that space, and they used to spill over both
+// ends of it, where the page cut them off with no way to reach them.
+test.describe("Photo Detail Page on a short window", () => {
+  const short = { width: 916, height: 480 };
+
+  /** The part of the screen where the details can be seen, top and bottom. */
+  function detailsView(page: Page) {
+    return page.evaluate(() => {
+      const area = document.querySelector(".photo-detail-content")!.getBoundingClientRect();
+      const panel = document.querySelector(".photo-detail-info")!.getBoundingClientRect();
+      return { top: Math.max(area.top, panel.top), bottom: Math.min(area.bottom, panel.bottom) };
+    });
+  }
+
+  test("shows the whole title", async ({ page }) => {
+    await page.setViewportSize(short);
+    await page.goto("/gallery/home/laika", { waitUntil: "networkidle" });
+    const view = await detailsView(page);
+    const title = (await page.locator(".photo-detail-info h1").boundingBox())!;
+    expect(title.y, "the top of the title is cut off").toBeGreaterThanOrEqual(view.top);
+    expect(title.y + title.height, "the title is cut off below").toBeLessThanOrEqual(view.bottom);
+  });
+
+  test("scrolls the details to the last one", async ({ page }) => {
+    await page.setViewportSize(short);
+    await page.goto("/gallery/home/laika", { waitUntil: "networkidle" });
+    const last = page.locator(".photo-detail-info .exif-section").last();
+    await page.locator(".photo-detail-info").hover();
+    await expect
+      .poll(
+        async () => {
+          // Firefox scrolls at most a panel's height per turn of the wheel.
+          await page.mouse.wheel(0, 200);
+          const view = await detailsView(page);
+          const box = (await last.boundingBox())!;
+          // Scrolled to the end, the last detail's bottom meets the panel's to within
+          // a fraction of a pixel, either way.
+          return box.y >= view.top && box.y + box.height <= view.bottom + 1;
+        },
+        { message: "the last detail can't be scrolled into view" },
+      )
+      .toBe(true);
+  });
+
+  // Each edge fades by as much as is out of view beyond it, up to 2.5rem (40px). The
+  // fade runs on a scroll timeline, which Firefox doesn't have; there the edge is plain.
+  // Checked on a long scroll and on one shorter than 40px, where a fade that reached
+  // full depth too soon would cover the title after a few pixels.
+  for (const [label, viewport, range] of [
+    ["a long scroll", short, (max: number) => max > 80],
+    ["a short scroll", { width: 1280, height: 710 }, (max: number) => max > 0 && max < 40],
+  ] as const) {
+    test(`fades each edge by as much as is out of view on ${label}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/gallery/home/laika", { waitUntil: "networkidle" });
+      const panel = page.locator(".photo-detail-info");
+      test.skip(
+        !(await page.evaluate(() => CSS.supports("animation-timeline: scroll()"))),
+        "no scroll timelines in this browser",
+      );
+      const fades = (scrollTop: number) =>
+        panel.evaluate((el, top) => {
+          el.scrollTop = top;
+          const max = el.scrollHeight - el.clientHeight;
+          // The timeline catches up with the scroll position by the next frame.
+          return new Promise<number[]>((done) =>
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                const style = getComputedStyle(el);
+                done([
+                  parseFloat(style.getPropertyValue("--photo-info-fade-top")),
+                  parseFloat(style.getPropertyValue("--photo-info-fade-bottom")),
+                  max,
+                  // Where the browser scrolled to, which can be a whole pixel
+                  // rather than the half asked for.
+                  el.scrollTop,
+                ]);
+              }),
+            ),
+          );
+        }, scrollTop);
+      const [, , max] = await fades(0);
+      expect(range(max), `the details scroll ${max}px, the wrong distance to test`).toBe(true);
+      for (const asked of [0, 10, max / 2, max - 10, max].filter((t) => t >= 0 && t <= max)) {
+        const [fadeTop, fadeBottom, , scrollTop] = await fades(asked);
+        expect(fadeTop, `top fade at scrollTop ${scrollTop}`).toBeCloseTo(
+          Math.min(scrollTop, 40),
+          0,
+        );
+        expect(fadeBottom, `bottom fade at scrollTop ${scrollTop}`).toBeCloseTo(
+          Math.min(max - scrollTop, 40),
+          0,
+        );
+      }
+    });
+  }
+
+  // Next and Previous keep the page's elements, the details panel among them, so it
+  // would keep its scroll position from the last photo.
+  test("shows the next photo's title after scrolling to the end", async ({ page }) => {
+    await page.setViewportSize(short);
+    await page.goto("/gallery/home/laika", { waitUntil: "networkidle" });
+    await page
+      .locator(".photo-detail-info")
+      .evaluate((panel) => (panel.scrollTop = panel.scrollHeight));
+    await page.keyboard.press("ArrowRight");
+    await expect(page).not.toHaveURL(/\/laika$/);
+    const title = page.locator(".photo-detail-info h1");
+    await expect(title).not.toHaveText(/laika/i);
+    await expect
+      .poll(async () => (await title.boundingBox())!.y - (await detailsView(page)).top, {
+        message: "the title is scrolled out of view",
+      })
+      .toBeGreaterThanOrEqual(0);
+  });
+
+  // When the details scroll, the panel is as tall as the photo may be, so it lines up
+  // with a photo that reaches that height, as a portrait one does. Below 1025px wide
+  // the photo may reach into the padding around it, and the panel does too.
+  for (const viewport of [
+    { width: 1280, height: 600 },
+    { width: 916, height: 551 },
+  ]) {
+    test(`lines the details up with the photo at ${viewport.width}×${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/gallery/home/contrail", { waitUntil: "networkidle" });
+      const scrolls = await page
+        .locator(".photo-detail-info")
+        .evaluate((panel) => panel.scrollHeight > panel.clientHeight);
+      expect(scrolls, "the details don't scroll here, so there's nothing to line up").toBe(true);
+      const view = await detailsView(page);
+      const photo = (await page.locator(".photo-detail-image img").boundingBox())!;
+      expect(Math.abs(view.top - photo.y), "the details' top isn't level").toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(view.bottom - (photo.y + photo.height)),
+        "the details' bottom isn't level",
+      ).toBeLessThanOrEqual(1);
+    });
+  }
+
+  test("still centres the details when they fit", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/gallery/home/laika", { waitUntil: "networkidle" });
+    const area = (await page.locator(".photo-detail-content").boundingBox())!;
+    const title = (await page.locator(".photo-detail-info h1").boundingBox())!;
+    const last = (await page.locator(".photo-detail-info .exif-section").last().boundingBox())!;
+    const middle = (title.y + last.y + last.height) / 2;
+    expect(
+      Math.abs(middle - (area.y + area.height / 2)),
+      "the details aren't centred beside the photo",
+    ).toBeLessThanOrEqual(1);
+  });
+});
