@@ -403,8 +403,9 @@ pub async fn get_gallery_photos_by_name(
 /// `Ok(None)` means there is no gallery of that name, so the page can show the
 /// not-found page; an empty gallery directory is `Ok(Some(_))` with no photos.
 /// `Err` means the lookup itself failed, including when the images root can't be
-/// read or holds no galleries but `home`, as it does while its mount is down;
-/// then `home` itself, empty, is an error too.
+/// read or holds no gallery but the directories the server makes for itself (the
+/// home gallery's, and those on the way to it), as it does while its mount is
+/// down; then any of those, found empty, is an error too.
 #[server(GetGalleryDataByName, "/api")]
 pub async fn get_gallery_data_by_name(
     gallery_name: String,
@@ -433,7 +434,8 @@ pub async fn get_gallery_data_by_name(
             return Ok(None);
         };
         // Found but empty while the root looks unmounted: that can only be the home
-        // gallery's directory, which the server made for itself. Fail, as above.
+        // gallery's directory or one on the way to it, which the server made for
+        // itself. Fail, as above.
         if photos.is_empty() && images_root_looks_unmounted() {
             return Err(ServerFnError::new("the images root holds no galleries"));
         }
@@ -1128,6 +1130,28 @@ mod tests {
         invalidate_caches();
 
         assert!(data.is_err(), "{data:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn lookups_are_errors_when_only_the_way_to_a_nested_gallery_path_home_exists() {
+        // GALLERY_PATH can put the home gallery inside another gallery too. Then the
+        // server makes `nature` on its way to `nature/featured`, so with nothing else
+        // in it, `nature` is no sign of the share either: a missing gallery and an
+        // empty photo list are failed lookups, not 404s.
+        let root = tempfile::TempDir::new().unwrap();
+        let featured = root.path().join("nature").join("featured");
+        std::fs::create_dir_all(&featured).unwrap();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        let _gallery_path = EnvVarGuard::set("GALLERY_PATH", &featured);
+
+        invalidate_caches();
+        let data = block_on(get_gallery_data_by_name("city".to_string()));
+        let photos = block_on(get_all_gallery_photos());
+        invalidate_caches();
+
+        assert!(data.is_err(), "{data:?}");
+        assert!(photos.is_err(), "{photos:?}");
     }
 
     #[test]

@@ -2,7 +2,7 @@ use crate::types::{GalleryInfo, ImageSource, PhotoConfig, PhotoInfo};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 static LEADING_NUMBER_DASH: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^[\d.]+\s*-\s*").expect("valid regex"));
@@ -165,20 +165,67 @@ pub fn discover_gallery_directories() -> Vec<String> {
     gallery_directories_in(&crate::paths::images_root())
 }
 
-/// True when `images_root` holds no gallery besides `home_dir`, the home gallery's
-/// own directory: it can't be read, or it holds nothing else but files and
-/// `categories`. That is what a NAS mount that is down looks like, since the server
-/// makes both of those directories by itself: the image watcher the images root,
-/// and `load_home_photos` the home gallery's (`home`, or wherever `GALLERY_PATH`
-/// points). Then what can't be found may only be out of sight. An empty lookup is
-/// a failure, not proof that a gallery or photo doesn't exist, which would answer
-/// 404 for all of them; and a cache file whose photo can't be found isn't an orphan.
+/// True when `images_root` can't be read or holds no gallery but the directories
+/// the server makes for itself, which is what a NAS mount that is down looks like.
+/// Then what can't be found may only be out of sight. An empty lookup is a failure,
+/// not proof that a gallery or photo doesn't exist, which would answer 404 for all
+/// of them; and a cache file whose photo can't be found isn't an orphan.
+///
+/// The image watcher makes the images root, and `load_home_photos` makes the home
+/// gallery's directory, `home_dir` (`home`, or wherever `GALLERY_PATH` points), with
+/// every directory on the way to it: a `GALLERY_PATH` of
+/// `<images root>/nature/featured` makes `nature` too. So only a directory the
+/// server didn't make counts as a sign of the share: in the images root, one
+/// besides the first step toward home (and besides `categories`, which is no
+/// gallery); in a directory on the way to home, one besides the next step.
+/// Nothing inside home counts, and no file does, in the root or on the way. A file
+/// on the way to home is no surer sign of the share than a photo in home: either
+/// can sit on a dead mountpoint, left there before the share was mounted or copied
+/// in while it was down. Paths compare by where they really are, links resolved.
 pub fn images_root_looks_unmounted(images_root: &Path, home_dir: &Path) -> bool {
-    let canonical = |p: &Path| fs::canonicalize(p).unwrap_or(p.into());
     let home = canonical(home_dir);
-    !gallery_directories_in(images_root)
-        .iter()
-        .any(|dir| canonical(Path::new(dir)) != home)
+    !gallery_directories_in(images_root).iter().any(|dir| {
+        let dir = canonical(Path::new(dir));
+        home.strip_prefix(&dir)
+            .map_or(true, |way| branches_off_the_way(&dir, way))
+    })
+}
+
+/// Whether `dir`, or a directory on `way` down from it, holds a directory that
+/// isn't the next step along `way`. The end of `way` itself isn't looked in.
+fn branches_off_the_way(dir: &Path, way: &Path) -> bool {
+    let mut dir = dir.to_path_buf();
+    for step in way {
+        // A directory on the way may hold thousands of photos. The listing already
+        // knows each entry's type, so only a link costs a lookup, to follow it as
+        // `Path::is_dir` does.
+        let branches = fs::read_dir(&dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry.file_name().as_os_str() != step
+                    && entry.file_type().is_ok_and(|kind| {
+                        kind.is_dir() || (kind.is_symlink() && entry.path().is_dir())
+                    })
+            })
+        });
+        if branches {
+            return true;
+        }
+        dir.push(step);
+    }
+    false
+}
+
+/// `path` with its links resolved as far as it exists, and the rest added on as it
+/// stands, so that the home gallery's directory compares by where it will be before
+/// `load_home_photos` has made it.
+fn canonical(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if parent.as_os_str().is_empty() => {
+            canonical(Path::new(".")).join(name)
+        }
+        (Some(parent), Some(name)) => canonical(parent).join(name),
+        _ => path.into(),
+    })
 }
 
 /// Every gallery directory under `images_root`: each subdirectory but `categories`.
@@ -1655,6 +1702,96 @@ mod tests {
         assert!(
             !images_root_looks_unmounted(&images, &dir.path().join("landing")),
             "with the home gallery elsewhere, `home` is a gallery like any other"
+        );
+    }
+
+    // `GALLERY_PATH` can put the home gallery inside another gallery, and then the
+    // server makes the directories on the way to it, `nature` here, on an empty
+    // mountpoint as well. A file in one of them can sit on a dead mountpoint as a
+    // photo in home can, so it takes a directory the server didn't make to count.
+    #[test]
+    fn images_root_looks_unmounted_while_it_holds_only_the_way_to_a_nested_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let nature = images.join("nature");
+        let home = nature.join("featured");
+        let unmounted = || images_root_looks_unmounted(&images, &home);
+
+        fs::create_dir_all(&home).unwrap();
+        assert!(
+            unmounted(),
+            "the directories the server makes on the way to home"
+        );
+        for photo in [home.join("sunset.jpg"), nature.join("bird.jpg")] {
+            image::RgbImage::new(4, 3).save(photo).unwrap();
+        }
+        assert!(unmounted(), "photos in home and on the way to it");
+        fs::create_dir_all(nature.join("birds")).unwrap();
+        assert!(!unmounted(), "a directory beside the way to home");
+    }
+
+    #[test]
+    fn images_root_looks_mounted_with_a_directory_beside_the_way_to_home_at_any_depth() {
+        for stray in ["city", "a/city", "a/b/city"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let images = dir.path().join("images");
+            let home = images.join("a/b/home");
+            fs::create_dir_all(home.join("album")).unwrap();
+            assert!(
+                images_root_looks_unmounted(&images, &home),
+                "only the way to home, and a directory inside home"
+            );
+
+            fs::create_dir_all(images.join(stray)).unwrap();
+            assert!(!images_root_looks_unmounted(&images, &home), "{stray}");
+        }
+    }
+
+    // On the way to home, as at the top, directories compare by where they really
+    // are: here the images root is reached through a link, and home through another
+    // link or not made yet.
+    #[test]
+    fn images_root_looks_unmounted_finds_the_way_to_a_nested_home_by_where_it_really_is() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let real = dir.path().join("images");
+        fs::create_dir_all(real.join("nature")).unwrap();
+        let images = dir.path().join("images-link");
+        std::os::unix::fs::symlink(&real, &images).unwrap();
+        let home = images.join("nature/featured");
+        let unmounted = |home: &Path| images_root_looks_unmounted(&images, home);
+
+        assert!(unmounted(&home), "a home the server hasn't made yet");
+        fs::create_dir_all(&home).unwrap();
+        let home_link = dir.path().join("home-link");
+        std::os::unix::fs::symlink(&home, &home_link).unwrap();
+        assert!(unmounted(&home_link), "the home gallery through a link");
+        fs::create_dir_all(real.join("nature/birds")).unwrap();
+        assert!(!unmounted(&home_link), "a directory beside the way to home");
+    }
+
+    // Beside the way to home, a link to a directory counts as the directory would,
+    // and a link to a file counts no more than the file.
+    #[test]
+    fn images_root_looks_mounted_with_a_link_to_a_directory_beside_the_way_to_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let nature = images.join("nature");
+        let home = nature.join("featured");
+        fs::create_dir_all(&home).unwrap();
+        let photo = dir.path().join("bird.jpg");
+        image::RgbImage::new(4, 3).save(&photo).unwrap();
+        std::os::unix::fs::symlink(&photo, nature.join("bird.jpg")).unwrap();
+        assert!(
+            images_root_looks_unmounted(&images, &home),
+            "a link to a file on the way to home"
+        );
+
+        let birds = dir.path().join("birds");
+        fs::create_dir_all(&birds).unwrap();
+        std::os::unix::fs::symlink(&birds, nature.join("birds")).unwrap();
+        assert!(
+            !images_root_looks_unmounted(&images, &home),
+            "a link to a directory beside the way to home"
         );
     }
 

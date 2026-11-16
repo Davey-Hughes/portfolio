@@ -858,9 +858,11 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
 ///
 /// `None` when some photos may be out of sight, so that no cache file counts as an
 /// orphan: once the share is back those photos would have to be made again. A NAS
-/// share that is down holds no gallery but the home gallery's directory, which the
-/// server makes for itself and which may hold a photo or two; the server tells an
-/// outage from a missing gallery by the same rule.
+/// share that is down holds no gallery but the home gallery's directory and the
+/// directories on the way to it, which the server makes for itself. Those may hold a
+/// photo or two, so only a directory besides them counts as a sign of the share
+/// (see [`crate::gallery::images_root_looks_unmounted`]); the server tells an outage
+/// from a missing gallery by the same rule.
 fn valid_prefixes_unless_out_of_sight(
     images_dir: &str,
 ) -> Option<std::collections::HashSet<String>> {
@@ -1856,6 +1858,29 @@ pub(crate) mod tests {
         write_jpeg(&images.join("landing/sunset.jpg"), STUB);
         let _gallery_path = EnvVarGuard::set("GALLERY_PATH", images.join("landing"));
         let cached = cache_files(&cache, &["landing_sunset", "nature_bird"]);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for file in cached {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
+    }
+
+    // With the home gallery inside another gallery, the server makes that gallery's
+    // folder too, on its way to home. Holding nothing else, it doesn't count either.
+    #[test]
+    #[serial]
+    fn cleanup_cache_removes_no_orphans_while_only_the_way_to_a_nested_gallery_path_is_there() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("nature/featured/sunset.jpg"), STUB);
+        let _gallery_path = EnvVarGuard::set("GALLERY_PATH", images.join("nature/featured"));
+        let cached = cache_files(
+            &cache,
+            &["nature_featured_sunset", "nature_bird", "travel_glacier"],
+        );
 
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
 
