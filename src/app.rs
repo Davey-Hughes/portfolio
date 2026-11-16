@@ -719,6 +719,32 @@ fn GalleryHero(gallery_name: String) -> impl IntoView {
     }
 }
 
+/// A `Transition` that reports through `set_pending` in the browser only.
+///
+/// Given `set_pending`, leptos calls it from an effect, and runs that effect on the
+/// server too, on a worker thread of its own, where nothing it sets reaches the HTML.
+/// There it races the render for the `Transition`'s locks. With `reactive_graph`
+/// 0.2.14 the two can deadlock: the page never answers, and both threads stay
+/// blocked for good. Even where that is fixed (0.2.15), the effect panics now and
+/// then with "Tried to access a reactive value that has already been disposed" when
+/// a read of its own finds a lock taken.
+#[component]
+fn PageTransition<Chil>(
+    #[prop(into)] fallback: ViewFnOnce,
+    #[prop(into)] set_pending: SignalSetter<bool>,
+    children: TypedChildren<Chil>,
+) -> impl IntoView
+where
+    Chil: IntoView + Send + 'static,
+{
+    let set_pending = (!cfg!(feature = "ssr")).then_some(set_pending);
+    Transition(TransitionProps {
+        fallback,
+        set_pending,
+        children,
+    })
+}
+
 /// A gallery page. Its resources are created here, at the page's top level, keyed
 /// on the route's `name`, for two reasons:
 ///
@@ -756,7 +782,7 @@ fn GalleryPage() -> impl IntoView {
     // The `.home-page` wrapper sits inside the arms, so the not-found page is never
     // wrapped in a gallery's page.
     view! {
-        <Transition set_pending=set_loading fallback=|| {
+        <PageTransition set_pending=set_loading fallback=|| {
             view! {
                 <div class="home-page">
                     <div class="hero-simple">
@@ -823,7 +849,7 @@ fn GalleryPage() -> impl IntoView {
                         .into_any(),
                 )
             }}
-        </Transition>
+        </PageTransition>
     }
 }
 
@@ -2703,17 +2729,16 @@ mod ssr_tests {
         }
     }
 
-    /// Send `method` for `path` through the app's Leptos routes, fallback and
-    /// trailing-slash redirect, wired the way src/main.rs wires them (minus the file
-    /// mounts, the HTML cache and compression).
-    async fn request(method: Method, path: &str) -> Response {
+    /// The app's Leptos routes, fallback and trailing-slash redirect, wired the way
+    /// src/main.rs wires them (minus the file mounts, the HTML cache and compression).
+    fn app() -> axum::Router {
         let options = LeptosOptions::builder().output_name("portfolio").build();
         // A resource first polled anywhere in the process while the route list is
         // being built never loads, so any test that builds it or renders resources
         // must be #[serial].
         let routes = generate_route_list(App);
         let pages = PageRoutes::new(&routes);
-        let app = axum::Router::new()
+        axum::Router::new()
             .leptos_routes(&options, routes, {
                 let options = options.clone();
                 move || shell(options.clone())
@@ -2723,9 +2748,14 @@ mod ssr_tests {
             .layer(axum::middleware::from_fn_with_state(
                 pages,
                 trailing_slash::redirect,
-            ));
+            ))
+    }
+
+    /// Send `method` for `path` through [`app`].
+    async fn request(method: Method, path: &str) -> Response {
         let request = Request::builder().method(method).uri(path);
-        app.oneshot(request.body(Body::empty()).unwrap())
+        app()
+            .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap()
     }
@@ -2799,6 +2829,149 @@ mod ssr_tests {
         assert!(
             body.contains(r#"<code class="not-found-path">/a&amp;b</code>"#),
             "{body}"
+        );
+    }
+
+    type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
+
+    /// While it lives, counts the panics on threads named `thread`, and hands every
+    /// panic on to the hook that was there before. Dropped during a panic, it leaves
+    /// itself in place, since the hook can't be changed then; it still passes
+    /// everything on.
+    struct PanicCount {
+        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        previous: Option<std::sync::Arc<PanicHook>>,
+    }
+
+    impl PanicCount {
+        fn on_threads_named(thread: &'static str) -> Self {
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let previous = std::sync::Arc::new(std::panic::take_hook());
+            std::panic::set_hook(Box::new({
+                let (count, previous) = (count.clone(), previous.clone());
+                move |info| {
+                    if std::thread::current().name() == Some(thread) {
+                        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    previous(info);
+                }
+            }));
+            Self {
+                count,
+                previous: Some(previous),
+            }
+        }
+
+        fn get(&self) -> usize {
+            self.count.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for PanicCount {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                return;
+            }
+            drop(std::panic::take_hook());
+            if let Some(previous) = self.previous.take() {
+                match std::sync::Arc::try_unwrap(previous) {
+                    Ok(previous) => std::panic::set_hook(previous),
+                    Err(shared) => std::panic::set_hook(Box::new(move |info| shared(info))),
+                }
+            }
+        }
+    }
+
+    /// Gallery pages, rendered 3000 times one after another on a runtime with two
+    /// worker threads, all answer, and nothing on those threads panics.
+    ///
+    /// While the server still ran the effect behind the gallery page's `Transition`
+    /// (see `PageTransition`), the effect could deadlock against the render. The
+    /// render, writing to the `Transition`'s task list as it read a resource, held
+    /// a memo's lock and waited for the effect's, while the effect, re-running on
+    /// the other worker, held its own lock and waited for the memo's. The page
+    /// never answered, and both workers stayed blocked for good.
+    ///
+    /// The two have to run at the same time, so this takes two CPUs or more to catch
+    /// it. Against that version it failed in all 16 runs on 2, 4 and 32 CPUs, after
+    /// 27 to 2217 pages, and passed in all 3 on a single CPU.
+    ///
+    /// Newer Leptos releases fix the deadlock, but that effect still panics now and
+    /// then. The panic only ends the effect's own task, which would leave the test
+    /// green, so the test counts panics on the runtime's threads too.
+    ///
+    /// The runtime gets a thread of its own, so a page that never answers fails the
+    /// test after 10 seconds instead of hanging it.
+    #[test]
+    #[serial]
+    fn gallery_pages_all_answer_under_load() {
+        const PAGES: usize = 3000;
+        const THREADS: &str = "gallery-pages-under-load";
+        let _site = Site::with_home_photo();
+        let panics = PanicCount::on_threads_named(THREADS);
+        let (answered, answers) = std::sync::mpsc::channel();
+        let server = std::thread::Builder::new()
+            .name(THREADS.into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name(THREADS)
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async move {
+                    let app = app();
+                    for n in 0..PAGES {
+                        let path = if n % 2 == 0 {
+                            "/gallery/home"
+                        } else {
+                            "/gallery/nature"
+                        };
+                        let request = Request::get(path).body(Body::empty()).unwrap();
+                        // On a worker, as the server runs each request.
+                        let page = tokio::spawn({
+                            let app = app.clone();
+                            async move {
+                                let res = app.oneshot(request).await.unwrap();
+                                let status = res.status();
+                                axum::body::to_bytes(res.into_body(), usize::MAX)
+                                    .await
+                                    .unwrap();
+                                status
+                            }
+                        });
+                        // Once the test has failed, it has dropped `Site` and let the
+                        // next serial test start, so stop rather than render against
+                        // that test's settings.
+                        if answered.send(page.await.unwrap()).is_err() {
+                            break;
+                        }
+                    }
+                });
+                // Dropping a runtime waits for its workers with no limit, so a worker
+                // stuck after the last page would hang the test. Wait 10 s at most and
+                // report whether that was enough.
+                let start = std::time::Instant::now();
+                runtime.shutdown_timeout(std::time::Duration::from_secs(10));
+                start.elapsed() < std::time::Duration::from_secs(10)
+            })
+            .unwrap();
+        for n in 0..PAGES {
+            let status = answers
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap_or_else(|err| panic!("{n} of {PAGES} pages answered ({err})"));
+            assert_eq!(status, StatusCode::OK);
+        }
+        // The runtime is gone before `Site` is, and before the next serial test.
+        assert!(
+            server.join().unwrap(),
+            "the server's runtime didn't shut down within 10 s"
+        );
+        let count = panics.get();
+        drop(panics);
+        assert_eq!(
+            count, 0,
+            "panics on the server's threads; see the output above"
         );
     }
 
