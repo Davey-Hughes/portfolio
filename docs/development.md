@@ -118,7 +118,10 @@ release build against it and run Playwright. As in CI, everything below stays in
 Don't drop `IMAGE_CACHE_DIR`, though: without it the server prunes every entry in
 `public/cache` that the fixtures don't account for. Stop any other server on port 4000
 first, or the health check below passes at once against the wrong one. If you skip the
-fixtures, the tests that need photos fail on a missing selector.
+fixtures, the tests that need photos fail on a missing selector. The fixtures are dated
+an hour back on purpose: the server sends a file changed in the last ten seconds with
+`no-store`, since it may still be being written, and the specs expect the year-long
+`immutable` header.
 
 ```bash
 rm -rf target/e2e-fixtures

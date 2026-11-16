@@ -19,13 +19,20 @@ use leptos_router::{
 
 #[must_use]
 pub fn shell(options: LeptosOptions) -> impl IntoView {
+    // The shell is rendered on the server only, and the browser hydrates `<App />`
+    // alone, so the favicon's versioned address doesn't have to reach the client.
+    #[cfg(feature = "ssr")]
+    let favicon = crate::gallery::favicon_url();
+    #[cfg(not(feature = "ssr"))]
+    let favicon = "/images/favicon.ico";
+
     view! {
         <!DOCTYPE html>
         <html lang="en">
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
+                <link rel="icon" type="image/x-icon" href=favicon />
                 // Emits <link rel="stylesheet"> with the content-hashed CSS name
                 // (reads hash.txt via LeptosOptions). Must live in the server shell
                 // since LeptosOptions isn't available in the App body.
@@ -1926,9 +1933,6 @@ fn AboutContent() -> impl IntoView {
         <Suspense fallback=|| {
             view! {
                 <div class="about-container">
-                    <div class="about-image">
-                        <img src="/images/profile.jpg" alt="Photographer" />
-                    </div>
                     <div class="about-content">
                         <h1>"About Me"</h1>
                         <p>"Loading..."</p>

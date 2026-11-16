@@ -2591,6 +2591,7 @@ dependencies = [
  "dhat",
  "dotenvy",
  "fast_image_resize",
+ "httpdate",
  "image",
  "js-sys",
  "jxl-oxide",

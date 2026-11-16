@@ -441,16 +441,19 @@ mod tests {
         assert_eq!(photo.width, cloned.width);
     }
 
+    // The addresses are shaped as `gallery.rs` builds them, versions included.
     #[test]
     fn viewer_image_from_photo_keeps_what_the_viewer_reads() {
         let webp = ImageSource {
-            url: "/images/home/sunset.webp".to_string(),
+            url: "/images/home/sunset.webp?v=1731652405".to_string(),
             mime_type: "image/webp".to_string(),
         };
         let photo = PhotoInfo {
-            url: "/cache/sunset-1200.webp".to_string(),
-            original_url: "/images/home/sunset.jpg".to_string(),
-            detail_url: "/cache/sunset-4000.webp".to_string(),
+            url: "/images/compressed/home/sunset.jpg?width=2400&quality=90&v=1731652405"
+                .to_string(),
+            original_url: "/images/home/sunset.jpg?v=1731652400".to_string(),
+            detail_url: "/images/compressed/home/sunset.jpg?width=4000&quality=90&v=1731652405"
+                .to_string(),
             srcset: String::new(),
             sources: vec![],
             original_sources: vec![webp.clone()],
@@ -477,8 +480,9 @@ mod tests {
         assert_eq!(
             ViewerImage::from(photo),
             ViewerImage {
-                detail_url: "/cache/sunset-4000.webp".to_string(),
-                original_url: "/images/home/sunset.jpg".to_string(),
+                detail_url: "/images/compressed/home/sunset.jpg?width=4000&quality=90&v=1731652405"
+                    .to_string(),
+                original_url: "/images/home/sunset.jpg?v=1731652400".to_string(),
                 original_sources: vec![webp],
                 alt: "Sunset".to_string(),
                 width: Some(9000),

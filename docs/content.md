@@ -22,9 +22,28 @@ public/images/
   a gallery in the navigation.
 - Every other non-empty directory shows up in the nav as a gallery, except one named
   `categories`, which is skipped.
-- To remove a gallery or photo, delete the directory or file. The running server
-  watches `IMAGES_DIR` and picks up changes without a restart, and it prunes the
-  matching cache entries too.
+- To remove a gallery or photo, delete the directory or file. No restart is needed;
+  see below for when the change shows.
+- To replace a photo, save the new file under the old name. The site's addresses for
+  a photo end in `?v=` and the file's modification time, so they change with the
+  file, and browsers and Cloudflare fetch the new one instead of the copy they keep
+  for a year. The same goes for the profile photo and for the favicon, which is
+  `favicon.ico` at the top of `IMAGES_DIR`.
+
+When a change shows:
+
+- The running server watches `IMAGES_DIR`. When a file is added, changed or deleted
+  on the server itself, on its own disk or through its mount of a network share, it
+  sees that within about a second and prunes the matching cache entries. Pages show
+  the change within about 15 seconds, since the server keeps each rendered page that
+  long.
+- The watcher doesn't see changes made from another machine on a network share such
+  as NFS, and it ignores a change to a file's modification time alone, such as
+  `touch`. Those show once the server's photo lists expire: within 10 minutes on a
+  photo page, 5 minutes on a gallery with a plain grid, and the gallery's
+  `mosaic_cache_duration` on a mosaic gallery, which is an hour unless set. The home
+  gallery's `gallery.toml` in this repository sets it to an hour too.
+- A new profile photo or favicon shows on the next page the server renders.
 
 ### Filenames, titles, and ordering
 
@@ -113,8 +132,8 @@ The about page also uses two files in `public/content/`:
 
 - `about.txt`: the about text. Blank lines separate paragraphs, and each one becomes
   a `<p>`. If the file is missing, the page shows placeholder text.
-- `profile.{jpg,jpeg,png,webp}`: the profile photo. The first matching file is
-  used, with `/images/profile.jpg` as the fallback.
+- `profile.jpg`, `profile.png` or `profile.webp`: the profile photo, the first of
+  those that exists. Without one, the page shows no photo.
 
 ### Open source page
 

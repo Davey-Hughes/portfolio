@@ -237,3 +237,64 @@ test.describe("Image Cache-Control", () => {
     }
   });
 });
+
+// The site's image addresses end in `v=` and the file's modification time in whole
+// seconds, so a photo replaced under its old name gets a new address that no browser or
+// CDN holds yet. The servers ignore `v`.
+test.describe("Image URL versions", () => {
+  const IMMUTABLE = "public, max-age=31536000, immutable";
+  const COMPRESSED = /^\/images\/compressed\/home\/[^?]+\?width=\d+&quality=\d+&v=\d+$/;
+
+  test("a photo page's image addresses carry a version, and load", async ({ page, request }) => {
+    await page.goto("/gallery/home/contrail", { waitUntil: "networkidle" });
+
+    const detail = await page.locator(".photo-detail-image img").getAttribute("src");
+    const original = await page
+      .locator(".photo-detail-image source:not([type])")
+      .getAttribute("srcset");
+    expect(detail).toMatch(/^\/images\/compressed\/home\/contrail\.jpg\?width=4000&quality=90&v=\d+$/);
+    expect(original).toMatch(/^\/images\/home\/contrail\.jpg\?v=\d+$/);
+
+    for (const url of [detail!, original!]) {
+      const response = await request.get(url);
+      expect(response.status(), url).toBe(200);
+      expect(response.headers()["cache-control"], url).toBe(IMMUTABLE);
+    }
+  });
+
+  test("a thumbnail's src and every srcset entry carry a version, and load", async ({ page, request }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+
+    const image = (await visibleGrid(page)).locator("img").first();
+    const src = await image.getAttribute("src");
+    const srcset = await image.getAttribute("srcset");
+    expect(src).toMatch(COMPRESSED);
+    const entries = srcset!.split(", ").map((entry) => entry.split(" "));
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [url, descriptor] of entries) {
+      expect(url).toMatch(COMPRESSED);
+      expect(descriptor).toMatch(/^\d+w$/);
+    }
+
+    for (const url of [src!, ...entries.map(([url]) => url)]) {
+      const response = await request.get(url);
+      expect(response.status(), url).toBe(200);
+      expect(response.headers()["cache-control"], url).toBe(IMMUTABLE);
+    }
+  });
+
+  test("a compressed address with a version answers 200 and is cached for a year", async ({ request }) => {
+    const response = await request.get(`${FIXTURE_IMAGE}?width=2400&quality=90&v=1731652400`);
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()["content-type"]).toBe("image/webp");
+    expect(response.headers()["cache-control"]).toBe(IMMUTABLE);
+  });
+
+  test("an original with a version answers 200 and is cached for a year", async ({ request }) => {
+    const response = await request.get("/images/home/contrail.jpg?v=1731652400");
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toBe(IMMUTABLE);
+  });
+});

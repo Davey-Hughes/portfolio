@@ -96,22 +96,34 @@ fn compression_layer()
 /// Sets Cache-Control on a response from the `/images` and `/content` file servers or
 /// from the compressed-image endpoint, going by its status.
 ///
-/// A file at one of these addresses is treated as never changing under the same name,
+/// A file at one of these addresses is treated as never changing under the same address,
 /// so a success is cached for a year: any 2xx, including the 206 a video player gets for
 /// a range. So is a 304, because a cache copies a 304's headers onto the copy it already
-/// holds, so the 304 has to carry the same Cache-Control as the 200. A photo replaced in
-/// place under its old name won't reach a browser that already holds it.
+/// holds, so the 304 has to carry the same Cache-Control as the 200.
+///
+/// The addresses the site builds for these files end in `?v=` and the file's
+/// modification time (see `portfolio::gallery`), and nothing here reads `v`. So a file
+/// replaced under its old name gets a new address that no browser or CDN holds yet: a
+/// photo once the server's cached photo lists see the change, the favicon and the
+/// profile photo on the next render. An address without the version, such as an image
+/// path written into `opensource.toml`, still keeps the old file for up to a year.
 ///
 /// Everything else gets `no-store`: a 404, a redirect, a 405 or 416, the endpoint's 400
 /// for bad parameters, a 5xx. A missing file may appear later, when a photo is added or
 /// the images share comes back after an outage, so nobody should remember its absence.
 /// Nor should anyone keep a redirect or an error, which may answer differently next time.
+///
+/// So does a success that may hold part of a file still being written: one from a file
+/// whose `Last-Modified` is within `image_cache::SETTLE_TIME` of now, or one the
+/// compressed endpoint marked [`Unsettled`]. Its address may stay the same once the
+/// file is finished.
 #[cfg(feature = "ssr")]
 fn file_cache_control<B>(mut response: axum::http::Response<B>) -> axum::http::Response<B> {
     use axum::http::{HeaderValue, StatusCode, header};
 
     let status = response.status();
-    let value = if status.is_success() || status == StatusCode::NOT_MODIFIED {
+    let kept = status.is_success() || status == StatusCode::NOT_MODIFIED;
+    let value = if kept && is_settled(&response) {
         "public, max-age=31536000, immutable"
     } else {
         "no-store"
@@ -121,6 +133,30 @@ fn file_cache_control<B>(mut response: axum::http::Response<B>) -> axum::http::R
         .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
     response
 }
+
+/// Whether `response` comes from a file the server trusts to be whole: not marked
+/// [`Unsettled`], and from a file left alone long enough, going by its `Last-Modified`.
+#[cfg(feature = "ssr")]
+fn is_settled<B>(response: &axum::http::Response<B>) -> bool {
+    use axum::http::header;
+    use portfolio::image_cache::has_settled;
+
+    if response.extensions().get::<Unsettled>().is_some() {
+        return false;
+    }
+    response
+        .headers()
+        .get(header::LAST_MODIFIED)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| httpdate::parse_http_date(value).ok())
+        .is_none_or(|modified| has_settled(modified, std::time::SystemTime::now()))
+}
+
+/// Put on a response whose body may be part of a file that is still being written.
+/// [`file_cache_control`] then sends `no-store`, whatever the status.
+#[cfg(feature = "ssr")]
+#[derive(Clone, Copy, Debug)]
+struct Unsettled;
 
 /// What the `/images` and `/content` file servers answer with.
 #[cfg(feature = "ssr")]
@@ -151,9 +187,14 @@ fn immutable_files(
 
 /// The `/images` routes: the original files in `images_dir`, and the transcoding
 /// endpoint at `/images/compressed/<path>`, which keeps the WebP files it makes in
-/// `cache_dir`.
+/// `cache_dir`. A request that has to make a size first takes one of `transcodes`'
+/// permits.
 #[cfg(feature = "ssr")]
-fn image_routes<S>(images_dir: &str, cache_dir: &str) -> axum::Router<S>
+fn image_routes<S>(
+    images_dir: &str,
+    cache_dir: &str,
+    transcodes: std::sync::Arc<tokio::sync::Semaphore>,
+) -> axum::Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -167,7 +208,13 @@ where
     let images: Arc<str> = Arc::from(images_dir);
     let cache: Arc<str> = Arc::from(cache_dir);
     let compressed = move |Path(image_path): Path<String>, Query(params): Query<ImageParams>| {
-        serve_compressed_image(Arc::clone(&images), Arc::clone(&cache), image_path, params)
+        serve_compressed_image(
+            Arc::clone(&images),
+            Arc::clone(&cache),
+            Arc::clone(&transcodes),
+            image_path,
+            params,
+        )
     };
 
     axum::Router::new()
@@ -248,52 +295,108 @@ fn build_html_cache() -> cache_middleware::HtmlCache {
     )
 }
 
+/// The startup work, in the background: clear out cache files without a source, make
+/// the default size of every photo, then fill the all-photos list.
+///
+/// It runs on a thread of its own, not as a task on the async runtime. The cache
+/// pre-warm transcodes and blocks for as long as it runs, which after a deploy can be
+/// minutes, and as a runtime task it held a worker that whole time. On a one-CPU host,
+/// where the runtime has one worker, the site answered nothing, not even `/healthz`.
+#[cfg(feature = "ssr")]
+fn spawn_startup_work(images_dir: String, cache_dir: String) -> std::thread::JoinHandle<()> {
+    use portfolio::image_cache::{cleanup_cache, prewarm_cache};
+
+    std::thread::spawn(move || {
+        // Run cleanup first, then prewarming
+        cleanup_cache(&images_dir, &cache_dir);
+        prewarm_cache(&images_dir, &cache_dir);
+
+        // Pre-warm the all-photos cache for faster photo detail page loads
+        portfolio::server::prewarm_all_photos_cache();
+    })
+}
+
 /// Transcode-on-demand image endpoint.
 ///
 /// Image processing is CPU/IO heavy, so the work goes to the blocking pool rather
 /// than tying up a tokio worker thread. Cache-Control is left to the
 /// [`file_cache_control`] layer that [`image_routes`] puts around the route.
+///
+/// A size already in the cache is only a file read. A size that has to be made waits
+/// for one of `transcodes`' permits and keeps it until the work is done, even if the
+/// client goes away, so a burst of requests (a gallery opened just after a deploy)
+/// can't decode every photo at once.
 #[cfg(feature = "ssr")]
 async fn serve_compressed_image(
     images_dir: std::sync::Arc<str>,
     cache_dir: std::sync::Arc<str>,
+    transcodes: std::sync::Arc<tokio::sync::Semaphore>,
     image_path: String,
     params: portfolio::image_params::ImageParams,
 ) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
     use leptos::logging::log;
+    use portfolio::image_cache::{Lookup, Webp, cached_image, process_and_cache_image};
+    use std::sync::Arc;
 
     let (width, quality) = match params.validate() {
         Ok(values) => values,
         Err(err_msg) => return (StatusCode::BAD_REQUEST, err_msg).into_response(),
     };
 
-    let path_without_ext = match image_path.rfind('.') {
-        Some(dot) => image_path[..dot].to_string(),
-        None => image_path.clone(),
+    let path_without_ext: Arc<str> = Arc::from(match image_path.rfind('.') {
+        Some(dot) => &image_path[..dot],
+        None => image_path.as_str(),
+    });
+
+    let cached = {
+        let (images_dir, cache_dir, path) = (
+            Arc::clone(&images_dir),
+            Arc::clone(&cache_dir),
+            Arc::clone(&path_without_ext),
+        );
+        tokio::task::spawn_blocking(move || {
+            cached_image(&images_dir, &cache_dir, &path, width, quality)
+        })
+        .await
+    };
+    let result = match cached {
+        Ok(Lookup::NoSource) => Ok(None),
+        Ok(Lookup::Cached(data)) => Ok(Some(Webp {
+            data,
+            settled: true,
+        })),
+        Ok(Lookup::Missing) => {
+            // Nothing closes the semaphore, so this only ever waits.
+            let Ok(permit) = transcodes.acquire_owned().await else {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed")
+                    .into_response();
+            };
+            // Checks the cache again: another request may have made the size while
+            // this one waited.
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                process_and_cache_image(&images_dir, &cache_dir, &path_without_ext, width, quality)
+            })
+            .await
+        }
+        Err(err) => Err(err),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        portfolio::image_cache::process_and_cache_image(
-            &images_dir,
-            &cache_dir,
-            &path_without_ext,
-            width,
-            quality,
-        )
-    })
-    .await;
-
     match result {
-        Ok(Some(webp_data)) => {
+        Ok(Some(webp)) => {
             log!("Serving image: {}", image_path);
-            (
+            let mut response = (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "image/webp")],
-                webp_data,
+                webp.data,
             )
-                .into_response()
+                .into_response();
+            if !webp.settled {
+                response.extensions_mut().insert(Unsettled);
+            }
+            response
         }
         Ok(None) => {
             log!("Failed to process image: {}", image_path);
@@ -318,7 +421,6 @@ async fn main() {
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::{App, shell};
-    use portfolio::image_cache::{cleanup_cache, prewarm_cache};
     use portfolio::paths::{images_root, resolve_dir};
 
     // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
@@ -344,17 +446,7 @@ async fn main() {
     log!("Serving content from: {}", content_dir);
     log!("Serving README assets from: {}", readme_dir);
 
-    // Clean up orphaned cache files and pre-generate cache in background (async, non-blocking)
-    let images_dir_clone = images_dir.clone();
-    let cache_dir_clone = cache_dir.clone();
-    tokio::spawn(async move {
-        // Run cleanup first, then prewarming
-        cleanup_cache(&images_dir_clone, &cache_dir_clone);
-        prewarm_cache(&images_dir_clone, &cache_dir_clone);
-
-        // Pre-warm the all-photos cache for faster photo detail page loads
-        portfolio::server::prewarm_all_photos_cache();
-    });
+    spawn_startup_work(images_dir.clone(), cache_dir.clone());
 
     // Periodic in-memory cache sweep (mosaic + gallery TTLs). Off the request path.
     portfolio::server::spawn_cache_sweeper();
@@ -383,7 +475,13 @@ async fn main() {
             "/os",
             axum::routing::get(|| async { axum::response::Redirect::permanent("/open-source") }),
         )
-        .merge(image_routes(&images_dir, &cache_dir))
+        .merge(image_routes(
+            &images_dir,
+            &cache_dir,
+            std::sync::Arc::new(tokio::sync::Semaphore::new(
+                portfolio::image_cache::transcode_limit(),
+            )),
+        ))
         .nest_service("/content", immutable_files(&content_dir))
         .merge(readme_routes(&readme_dir))
         .fallback(leptos_axum::file_and_error_handler(shell))
@@ -547,6 +645,7 @@ mod tests {
         let app = image_routes::<()>(
             root.path().to_str().unwrap(),
             cache.path().to_str().unwrap(),
+            std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
         );
 
         for method in [Method::GET, Method::HEAD] {
@@ -580,7 +679,10 @@ mod tests {
         use axum::body::Body;
         use axum::http::{HeaderValue, Request, Response, StatusCode, header};
         use std::convert::Infallible;
+        use std::sync::Arc;
+        use std::time::Duration;
         use tempfile::TempDir;
+        use tokio::sync::Semaphore;
         use tower::{Layer, ServiceExt, service_fn, util::MapResponseLayer};
 
         const IMMUTABLE: &str = "public, max-age=31536000, immutable";
@@ -592,7 +694,23 @@ mod tests {
         fn files() -> TempDir {
             let dir = TempDir::new().expect("a temp dir");
             std::fs::write(dir.path().join("clip.mp4"), [b'v'; CLIP_LEN]).expect("a file");
+            backdate(&dir.path().join("clip.mp4"));
             dir
+        }
+
+        /// Give the file at `path` a modification time an hour ago, long enough for the
+        /// server to trust it whole.
+        fn backdate(path: &std::path::Path) {
+            set_modified(path, std::time::SystemTime::now() - Duration::from_hours(1));
+        }
+
+        fn set_modified(path: &std::path::Path, time: std::time::SystemTime) {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .expect("a file to date")
+                .set_modified(time)
+                .expect("a time set");
         }
 
         fn get(uri: &str) -> Request<Body> {
@@ -766,27 +884,37 @@ mod tests {
         }
 
         /// The `/images` routes as `main` wires them, over a gallery holding one small
-        /// PNG, `home/dot.png`, and an empty cache directory.
+        /// PNG, `home/dot.png`, and an empty cache directory, with two permits to make
+        /// sizes.
         struct Images {
-            images: TempDir,
+            photos: TempDir,
             cache: TempDir,
+            transcodes: Arc<Semaphore>,
         }
 
         impl Images {
+            const PERMITS: u32 = 2;
+
             fn new() -> Self {
-                let images = TempDir::new().expect("a temp dir");
-                std::fs::create_dir(images.path().join("home")).expect("a gallery dir");
+                let photos = TempDir::new().expect("a temp dir");
+                std::fs::create_dir(photos.path().join("home")).expect("a gallery dir");
                 image::RgbImage::new(4, 4)
-                    .save(images.path().join("home/dot.png"))
+                    .save(photos.path().join("home/dot.png"))
                     .expect("a PNG");
+                backdate(&photos.path().join("home/dot.png"));
                 let cache = TempDir::new().expect("a temp dir");
-                Self { images, cache }
+                let transcodes = Arc::new(Semaphore::new(Self::PERMITS as usize));
+                Self {
+                    photos,
+                    cache,
+                    transcodes,
+                }
             }
 
             async fn send(&self, request: Request<Body>) -> Response<Body> {
-                let images = self.images.path().to_str().expect("a UTF-8 temp path");
+                let images = self.photos.path().to_str().expect("a UTF-8 temp path");
                 let cache = self.cache.path().to_str().expect("a UTF-8 temp path");
-                image_routes::<()>(images, cache)
+                image_routes::<()>(images, cache, Arc::clone(&self.transcodes))
                     .oneshot(request)
                     .await
                     .expect("the router is infallible")
@@ -839,6 +967,240 @@ mod tests {
             let response = images.send(get("/images/home/gone.png")).await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
             assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
+
+        /// The site adds `v=<file version>` to the image addresses it builds, so that
+        /// they change when the file does. Both routes answer as they would without it.
+        #[tokio::test]
+        async fn a_version_in_the_query_is_ignored() {
+            let images = Images::new();
+            for (plain, versioned) in [
+                (
+                    "/images/compressed/home/dot.png?width=2400&quality=90",
+                    "/images/compressed/home/dot.png?width=2400&quality=90&v=1731652400",
+                ),
+                (
+                    "/images/compressed/home/dot.png",
+                    "/images/compressed/home/dot.png?v=1731652400",
+                ),
+                ("/images/home/dot.png", "/images/home/dot.png?v=1731652400"),
+            ] {
+                let expected = images.send(get(plain)).await;
+                let expected = axum::body::to_bytes(expected.into_body(), usize::MAX)
+                    .await
+                    .expect("a body");
+                let response = images.send(get(versioned)).await;
+                assert_eq!(response.status(), StatusCode::OK, "{versioned}");
+                assert_eq!(cache_control(&response), Some(IMMUTABLE), "{versioned}");
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("a body");
+                assert_eq!(body, expected, "{versioned}");
+            }
+        }
+
+        /// A size that has to be made waits for a permit. One already in the cache is
+        /// only a file read, and is served even while every permit is taken.
+        #[tokio::test]
+        async fn only_a_size_to_make_waits_for_a_permit() {
+            use tokio::time::timeout;
+
+            const CACHED: &str = "/images/compressed/home/dot.png?width=2400&quality=90";
+            const TO_MAKE: &str = "/images/compressed/home/dot.png?width=4000&quality=90";
+
+            let images = Images::new();
+            assert_eq!(images.send(get(CACHED)).await.status(), StatusCode::OK);
+            let every_permit = Arc::clone(&images.transcodes)
+                .acquire_many_owned(Images::PERMITS)
+                .await
+                .expect("an open semaphore");
+
+            let cached = timeout(Duration::from_secs(10), images.send(get(CACHED)))
+                .await
+                .expect("a cached size needs no permit");
+            assert_eq!(cached.status(), StatusCode::OK);
+
+            let to_make = images.send(get(TO_MAKE));
+            tokio::pin!(to_make);
+            assert!(
+                timeout(Duration::from_millis(300), &mut to_make)
+                    .await
+                    .is_err(),
+                "a size to make waits while every permit is taken"
+            );
+            drop(every_permit);
+            let made = timeout(Duration::from_secs(10), to_make)
+                .await
+                .expect("made once a permit is free");
+            assert_eq!(made.status(), StatusCode::OK);
+        }
+
+        /// A size of a photo that isn't there is a 404 at once, without waiting for a
+        /// permit to make it.
+        #[tokio::test]
+        async fn a_missing_source_is_a_404_without_a_permit() {
+            let images = Images::new();
+            let _every_permit = Arc::clone(&images.transcodes)
+                .acquire_many_owned(Images::PERMITS)
+                .await
+                .expect("an open semaphore");
+
+            let response = tokio::time::timeout(
+                Duration::from_secs(2),
+                images.send(get(
+                    "/images/compressed/home/gone.jpg?width=2400&quality=90",
+                )),
+            )
+            .await
+            .expect("a missing source needs no permit");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
+
+        /// A response marked [`crate::Unsettled`] isn't kept, whatever its status.
+        #[tokio::test]
+        async fn a_response_marked_unsettled_is_not_stored() {
+            let inner = service_fn(|_req: Request<Body>| async {
+                let mut response = Response::new(Body::empty());
+                response.extensions_mut().insert(crate::Unsettled);
+                Ok::<_, Infallible>(response)
+            });
+            let response = MapResponseLayer::new(file_cache_control)
+                .layer(inner)
+                .oneshot(get("/photo.jpg"))
+                .await
+                .expect("the stand-in is infallible");
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
+
+        // A file written moments ago may still be being written, so what is read may be
+        // part of it. Once it has been left alone long enough, it is kept for a year.
+        #[tokio::test]
+        async fn an_original_changed_moments_ago_is_not_stored() {
+            let dir = files();
+            let clip = dir.path().join("clip.mp4");
+
+            set_modified(&clip, std::time::SystemTime::now());
+            let response = serve_file(&dir, get("/clip.mp4")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+
+            backdate(&clip);
+            let response = serve_file(&dir, get("/clip.mp4")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+        }
+
+        /// A file dated a day ahead, as a copy from a camera card with its clock ahead
+        /// would be, is kept for a year like any settled file.
+        #[tokio::test]
+        async fn an_original_dated_a_day_ahead_is_cached_for_a_year() {
+            let dir = files();
+            let clip = dir.path().join("clip.mp4");
+
+            set_modified(
+                &clip,
+                std::time::SystemTime::now() + Duration::from_hours(24),
+            );
+            let response = serve_file(&dir, get("/clip.mp4")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+        }
+
+        /// A size made from a source written moments ago is sent, but neither kept nor
+        /// cached. Once the source has been left alone long enough, it is both.
+        #[tokio::test]
+        async fn a_size_of_a_source_changed_moments_ago_is_neither_kept_nor_cached() {
+            const SIZE: &str = "/images/compressed/home/dot.png?width=2400&quality=90";
+            let images = Images::new();
+            let dot = images.photos.path().join("home/dot.png");
+            let cached =
+                || std::fs::read_dir(images.cache.path()).map_or(0, std::iter::Iterator::count);
+
+            set_modified(&dot, std::time::SystemTime::now());
+            let response = images.send(get(SIZE)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+            assert_eq!(cached(), 0, "nothing cached");
+
+            backdate(&dot);
+            let response = images.send(get(SIZE)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+            assert_eq!(cached(), 1, "the size is cached");
+        }
+    }
+
+    /// The startup work leaves the async runtime free while it runs.
+    mod startup {
+        use crate::spawn_startup_work;
+        use std::time::{Duration, Instant};
+        use tempfile::TempDir;
+
+        /// `IMAGES_DIR` for the life of one `#[serial]` test, removed again on drop.
+        struct ImagesDir;
+
+        impl ImagesDir {
+            fn set(dir: &str) -> Self {
+                unsafe { std::env::set_var("IMAGES_DIR", dir) };
+                Self
+            }
+        }
+
+        impl Drop for ImagesDir {
+            fn drop(&mut self) {
+                unsafe { std::env::remove_var("IMAGES_DIR") };
+            }
+        }
+
+        /// On a runtime with one worker, as on a one-CPU host, anything else the
+        /// runtime runs, such as a `/healthz` request, gets an answer while the cache is
+        /// still being pre-warmed.
+        #[tokio::test(flavor = "current_thread")]
+        #[serial_test::serial] // sets IMAGES_DIR
+        async fn the_runtime_answers_while_the_cache_is_prewarmed() {
+            // Enough to keep the pre-warm busy for a good while: noise transcodes slowly.
+            let dir = TempDir::new().expect("a temp dir");
+            let gallery = dir.path().join("images/home");
+            std::fs::create_dir_all(&gallery).expect("a gallery dir");
+            let mut state = 0x2545_f491_u32;
+            for n in 0..2 {
+                image::RgbImage::from_fn(640, 480, |_, _| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    let [r, g, b, _] = state.to_le_bytes();
+                    image::Rgb([r, g, b])
+                })
+                .save(gallery.join(format!("{n}.png")))
+                .expect("a PNG");
+            }
+            let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+            // The all-photos list the startup work fills reads IMAGES_DIR, which would
+            // otherwise be the checkout's own `public/images`.
+            let _images_dir = ImagesDir::set(&path("images"));
+
+            let started = Instant::now();
+            let work = spawn_startup_work(path("images"), path("cache"));
+            // Gives the one worker to anything that is waiting for it, as a request
+            // would.
+            tokio::spawn(async {})
+                .await
+                .expect("a task that can't fail");
+            let answered = started.elapsed();
+            let still_working = !work.is_finished();
+            work.join().expect("the startup work doesn't panic");
+            let finished = started.elapsed();
+
+            assert!(
+                still_working,
+                "answered after {answered:?}, but the pre-warm was done by then; it took {finished:?}"
+            );
+            assert!(
+                answered < Duration::from_millis(200),
+                "took {answered:?} to answer; the pre-warm took {finished:?}"
+            );
         }
     }
 }

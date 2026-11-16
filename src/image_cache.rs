@@ -8,6 +8,148 @@
 
 use leptos::logging::log;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+/// How many images may be decoded and transcoded at once: the startup pre-warm's
+/// workers, and separately the compressed endpoint's requests, so twice this at worst.
+/// A transcode takes about 8 MB of memory per megapixel at its peak, about 2.2 GB for a
+/// 283-megapixel photo, and about 10–35 ms of CPU per megapixel, a few seconds for the
+/// largest.
+pub fn transcode_limit() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(4)
+}
+
+/// One size of one image: its source file and the cache file made from it.
+struct CacheEntry {
+    source: PathBuf,
+    /// Read before the source is decoded: a source replaced meanwhile then leaves a
+    /// cache file that doesn't match it, which is made again next time.
+    source_modified: Option<SystemTime>,
+    cache_path: PathBuf,
+}
+
+impl CacheEntry {
+    fn find(
+        images_dir: &str,
+        cache_dir: &str,
+        path_without_ext: &str,
+        width: u32,
+        quality: u8,
+    ) -> Option<Self> {
+        let supported_extensions = ["jpg", "jpeg", "jxl", "avif", "webp", "png", "gif"];
+
+        // Find the actual file with any supported extension
+        let source = find_image_file(images_dir, path_without_ext, &supported_extensions)?;
+
+        // Cache filename without timestamp - makes cache persistent. The `_l1`
+        // suffix is an encoder-version tag: it changed when we switched from
+        // the `image` crate's lossless WebP encoder to libwebp lossy. Bumping
+        // this string invalidates older cache entries automatically (they
+        // don't match the new name; the orphan sweep removes them in time).
+        let cache_filename = format!(
+            "{}_w{}_q{}_l1.webp",
+            path_without_ext.replace(['/', '\\'], "_"),
+            width,
+            quality
+        );
+
+        Some(Self {
+            source_modified: source.metadata().ok().and_then(|m| m.modified().ok()),
+            source,
+            cache_path: PathBuf::from(cache_dir).join(&cache_filename),
+        })
+    }
+}
+
+/// How long a file has to be left alone before the server trusts it to be whole.
+///
+/// A photo exported in place passes through part-written states, and the `image` crate
+/// decodes a JPEG that stops halfway without complaint. A size made from one would
+/// carry the source's time, and if the export ends within the same whole second, that
+/// is the finished file's time too: the size would count as fresh and go out under the
+/// photo's address for a year. So a source modified less than this long ago is made
+/// again for each request, not cached, and sent with `no-store`; so is an original.
+///
+/// One second covers that when the file server's clock agrees with this one; the rest
+/// allows for its clock running up to nine seconds behind. For a time ahead of this
+/// clock, see [`has_settled`]. The cost is a transcode per request in the first ten
+/// seconds after a photo changes, and on the NFS share nobody asks for it that soon:
+/// pages only show the new address once the photo lists see the change.
+pub const SETTLE_TIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How far ahead of this server's clock a file's time can be and still be taken for the
+/// file server's own clock running fast, that is, for a write that may be going on now.
+const FAST_CLOCK: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// Whether a file last modified at `modified` has been left alone for [`SETTLE_TIME`]
+/// by `now`.
+///
+/// A time up to [`FAST_CLOCK`] ahead counts once `now` has passed it by the settle time.
+/// A time further ahead wasn't set by a write happening now: it was set on purpose
+/// after the file was written, copied from a camera card or a machine whose clock is
+/// ahead (`cp -p`, `rsync -a`), or by `touch -d`. Such a file counts as settled at once,
+/// like one whose time can't be read. Waiting for this clock to catch up could take
+/// days, with every view of the photo transcoded again and sent with `no-store`.
+pub fn has_settled(modified: SystemTime, now: SystemTime) -> bool {
+    match now.duration_since(modified) {
+        Ok(age) => age >= SETTLE_TIME,
+        Err(ahead) => ahead.duration() > FAST_CLOCK,
+    }
+}
+
+/// Whether a source whose time was `before` when it was found and `after` once it was
+/// decoded can be trusted to have been read whole: the same both times, and settled.
+///
+/// The second reading matters on NFS, where the client keeps a file's attributes for up
+/// to a minute, so `before` can be older than the file. Opening the file to decode it
+/// fetches them again, so a write in progress shows in `after`.
+fn source_settled(before: Option<SystemTime>, after: Option<SystemTime>, now: SystemTime) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => before == after && has_settled(after, now),
+        // A time that can't be read can't be checked; the cache check trusts such a
+        // source too.
+        _ => true,
+    }
+}
+
+/// What the cache holds for one size of one image.
+pub enum Lookup {
+    /// There is no source image at that path.
+    NoSource,
+    /// A WebP made from the source as it is now.
+    Cached(Vec<u8>),
+    /// Nothing made from the source as it is now.
+    Missing,
+}
+
+/// One size of one image, as WebP.
+pub struct Webp {
+    pub data: Vec<u8>,
+    /// False when the source may still have been being written as it was read, so
+    /// `data` may be part of a picture. Such a WebP isn't cached, and nobody should
+    /// keep it.
+    pub settled: bool,
+}
+
+/// What the cache holds for one size of an image. Only reads; never transcodes.
+pub fn cached_image(
+    images_dir: &str,
+    cache_dir: &str,
+    path_without_ext: &str,
+    width: u32,
+    quality: u8,
+) -> Lookup {
+    let Some(entry) = CacheEntry::find(images_dir, cache_dir, path_without_ext, width, quality)
+    else {
+        return Lookup::NoSource;
+    };
+    match try_use_cached_image(entry.source_modified, &entry.cache_path) {
+        Some(data) => Lookup::Cached(data),
+        None => Lookup::Missing,
+    }
+}
 
 /// Process and cache a single image with the given parameters
 /// Returns the WebP data or None if processing failed
@@ -17,38 +159,28 @@ pub fn process_and_cache_image(
     path_without_ext: &str,
     width: u32,
     quality: u8,
-) -> Option<Vec<u8>> {
-    let supported_extensions = ["jpg", "jpeg", "jxl", "avif", "webp", "png", "gif"];
+) -> Option<Webp> {
+    let entry = CacheEntry::find(images_dir, cache_dir, path_without_ext, width, quality)?;
 
-    // Find the actual file with any supported extension
-    let full_path = find_image_file(images_dir, path_without_ext, &supported_extensions)?;
-
-    // Cache filename without timestamp - makes cache persistent. The `_l1`
-    // suffix is an encoder-version tag: it changed when we switched from
-    // the `image` crate's lossless WebP encoder to libwebp lossy. Bumping
-    // this string invalidates older cache entries automatically (they
-    // don't match the new name; the orphan sweep removes them in time).
-    let cache_filename = format!(
-        "{}_w{}_q{}_l1.webp",
-        path_without_ext.replace(['/', '\\'], "_"),
-        width,
-        quality
-    );
-
-    let cache_path = std::path::PathBuf::from(cache_dir).join(&cache_filename);
-
-    // Check if cached version exists and is newer than source
-    if let Some(cached_data) = try_use_cached_image(&full_path, &cache_path) {
-        return Some(cached_data);
+    // Check if a cached version exists and was made from the source as it is now
+    if let Some(data) = try_use_cached_image(entry.source_modified, &entry.cache_path) {
+        return Some(Webp {
+            data,
+            settled: true,
+        });
     }
 
     // Process the image
-    let webp_data = process_image(&full_path, width, quality)?;
+    let data = process_image(&entry.source, width, quality)?;
 
-    // Save to cache
-    save_to_cache(cache_dir, &cache_path, &webp_data);
+    // Save to cache, unless the source may have been mid-write as it was read
+    let modified_after = entry.source.metadata().ok().and_then(|m| m.modified().ok());
+    let settled = source_settled(entry.source_modified, modified_after, SystemTime::now());
+    if settled {
+        save_to_cache(cache_dir, &entry.cache_path, &data, entry.source_modified);
+    }
 
-    Some(webp_data)
+    Some(Webp { data, settled })
 }
 
 /// Find an image file with any of the supported extensions, refusing any
@@ -69,29 +201,46 @@ fn find_image_file(
     })
 }
 
-/// Try to use a cached image if it exists and is up-to-date
-fn try_use_cached_image(source_path: &Path, cache_path: &Path) -> Option<Vec<u8>> {
-    use std::fs;
+/// The cached WebP at `cache_path`, if it was made from the source as it is now.
+///
+/// [`save_to_cache`] gives each cache file its source's modification time, so the
+/// file is fresh only while the two match. A source replaced by a newer file or by an
+/// older one (`cp -p`, `rsync -a`, a restore from backup) no longer matches, and
+/// neither does a cache file written before the server did this. A newer-than-source
+/// test would keep serving the old picture for an older replacement, now at the new
+/// address the site builds from the older time. The times match in whole seconds, as
+/// the version in that address does, so a cache directory that keeps coarser times
+/// than the photos still matches, as long as it keeps them to the second. An empty
+/// file never counts.
+fn try_use_cached_image(source_modified: Option<SystemTime>, cache_path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
 
-    if !cache_path.exists() {
+    // The check and the read go through one open file, so a file renamed into place
+    // between the two can't be read under the other's check.
+    let mut file = std::fs::File::open(cache_path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if metadata.len() == 0 {
         return None;
     }
 
-    // Compare modification times: only regenerate if source is newer than cache
-    let source_mtime = source_path.metadata().ok().and_then(|m| m.modified().ok());
-    let cache_mtime = cache_path.metadata().ok().and_then(|m| m.modified().ok());
-
-    if let (Some(source_time), Some(cache_time)) = (source_mtime, cache_mtime) {
-        // If cache is newer than or equal to source, use it
-        if cache_time >= source_time {
-            return fs::read(cache_path).ok();
+    // If we can't get timestamps, just use the cache if it exists
+    if let (Some(source_time), Ok(cache_time)) = (source_modified, metadata.modified()) {
+        let source_secs = whole_seconds(source_time);
+        if source_secs.is_none() || source_secs != whole_seconds(cache_time) {
+            return None;
         }
-    } else {
-        // If we can't get timestamps, just use the cache if it exists
-        return fs::read(cache_path).ok();
     }
 
-    None
+    let mut data = Vec::new();
+    file.read_to_end(&mut data).ok()?;
+    Some(data)
+}
+
+/// `time` in whole seconds since 1970, or `None` before then.
+fn whole_seconds(time: SystemTime) -> Option<u64> {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_secs())
 }
 
 /// Process an image: load, resize, and convert to WebP
@@ -206,10 +355,24 @@ pub fn convert_to_webp(img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>
     Some(encoder.to_vec())
 }
 
-/// Save processed image data to cache. Failures (full disk, read-only
-/// cache dir, …) are logged but otherwise non-fatal: the image was still
-/// produced for this request, only the cache speedup is lost.
-fn save_to_cache(cache_dir: &str, cache_path: &PathBuf, data: &[u8]) {
+/// Save processed image data to cache, with `source_modified`, the source's
+/// modification time read before it was decoded, as the file's own (see
+/// [`try_use_cached_image`]).
+///
+/// Several requests, and the startup pre-warm, can make the same file at once, while
+/// others read it. So each writer fills and dates a file of its own beside it, then
+/// renames that over the cache file in one step: a reader gets the whole of one file
+/// or the whole of another, never part of one.
+///
+/// Failures (full disk, read-only cache dir, …) are logged but otherwise
+/// non-fatal: the image was still produced for this request, only the cache
+/// speedup is lost.
+fn save_to_cache(
+    cache_dir: &str,
+    cache_path: &Path,
+    data: &[u8],
+    source_modified: Option<SystemTime>,
+) {
     use std::fs;
     use std::io::Write;
 
@@ -217,14 +380,54 @@ fn save_to_cache(cache_dir: &str, cache_path: &PathBuf, data: &[u8]) {
         log!("cache: create_dir_all({}) failed: {err}", cache_dir);
         return;
     }
-    match fs::File::create(cache_path) {
-        Ok(mut file) => {
-            if let Err(err) = file.write_all(data) {
-                log!("cache: write {} failed: {err}", cache_path.display());
-            }
+    let temporary = temporary_path(cache_path);
+    // A name that is already taken belongs to someone else, such as a server that
+    // crashed: in Docker every server is process 1. Leave that file alone.
+    let mut file = match fs::File::create_new(&temporary) {
+        Ok(file) => file,
+        Err(err) => {
+            log!("cache: creating {} failed: {err}", temporary.display());
+            return;
         }
-        Err(err) => log!("cache: create {} failed: {err}", cache_path.display()),
+    };
+    // No fsync before the rename: a power cut can still leave the cache file empty,
+    // which counts as a miss, or cut short, and a cache isn't worth waiting on the disk.
+    let saved = file
+        .write_all(data)
+        .and_then(|()| match source_modified {
+            Some(modified) => file.set_modified(modified),
+            None => Ok(()),
+        })
+        .and_then(|()| fs::rename(&temporary, cache_path));
+    if let Err(err) = saved {
+        log!("cache: saving {} failed: {err}", cache_path.display());
+        fs::remove_file(&temporary).ok();
     }
+}
+
+/// A file of one writer's own beside `cache_path`, for [`save_to_cache`]:
+/// `<cache file name>.<process id>-<count>.tmp`. [`cleanup_cache`] removes any that a
+/// crash leaves behind.
+fn temporary_path(cache_path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+    let count = WRITES.fetch_add(1, Ordering::Relaxed);
+    let mut name = cache_path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}-{count}.tmp", std::process::id()));
+    cache_path.with_file_name(name)
+}
+
+/// Whether `filename` is one of [`temporary_path`]'s names.
+fn is_temporary_file(filename: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    filename
+        .strip_suffix(".tmp")
+        .and_then(|rest| rest.rsplit_once('.'))
+        .and_then(|(cache_name, writer)| Some((cache_name, writer.split_once('-')?)))
+        .is_some_and(|(cache_name, (process, count))| {
+            digits(process) && digits(count) && cache_file_prefix(cache_name).is_some()
+        })
 }
 
 /// Clean up orphaned cache files that no longer have corresponding source images
@@ -249,6 +452,7 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
 
     let mut orphaned_count = 0;
     let mut old_count = 0;
+    let mut unfinished_count = 0;
     let mut error_count = 0;
 
     // Cache files not accessed in 30 days will be removed
@@ -273,6 +477,19 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
         let Some(filename) = cache_file.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
+
+        // A writer's unfinished file, left by a crash. One a request is writing right
+        // now goes too, which only costs that request its cache file.
+        if is_temporary_file(filename) {
+            match fs::remove_file(&cache_file) {
+                Ok(()) => unfinished_count += 1,
+                Err(e) => {
+                    log!("Failed to remove unfinished cache file {}: {}", filename, e);
+                    error_count += 1;
+                }
+            }
+            continue;
+        }
 
         let Some(prefix) = cache_file_prefix(filename) else {
             // Unknown filename pattern — leave it alone rather than risk
@@ -310,9 +527,10 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
     }
 
     log!(
-        "Cache cleanup complete: removed {} orphaned, {} old (30+ days), {} errors",
+        "Cache cleanup complete: removed {} orphaned, {} old (30+ days), {} unfinished, {} errors",
         orphaned_count,
         old_count,
+        unfinished_count,
         error_count
     );
 }
@@ -438,14 +656,13 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
     log!("Found {} images to process", image_paths.len());
 
     // Prewarm across a bounded worker pool. Each transcode is CPU- and
-    // memory-heavy (a full-res decode can peak ~185 MB), so cap parallelism at
-    // min(4, cores): fast startup on multi-core boxes without a memory spike on
-    // large galleries. Workers pull from a shared index, so uneven per-image
-    // cost stays balanced. Each image maps to a distinct cache file, so the
-    // concurrent `process_and_cache_image` calls never contend.
-    let workers = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZeroUsize::get)
-        .min(4);
+    // memory-heavy (see `transcode_limit`: about 2.2 GB at its peak for the largest
+    // photos), so cap parallelism at min(4, cores): fast startup on multi-core boxes
+    // without a memory spike on large galleries. Workers pull from a shared index, so uneven per-image
+    // cost stays balanced. Two images can share a cache file (`sunset.jpg` and
+    // `sunset.webp`), and requests can be making the same file meanwhile;
+    // `save_to_cache` renames each finished file into place, so that is safe.
+    let workers = transcode_limit();
 
     let next = AtomicUsize::new(0);
     let processed = AtomicU32::new(0);
@@ -535,6 +752,16 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    /// Give the file at `path` a modification time an hour ago.
+    fn backdate(path: &std::path::Path) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_hours(1))
+            .unwrap();
+    }
+
     /// 2-byte file is enough for `path.exists()` checks; we never decode it
     /// in these tests.
     const STUB: &[u8] = b"\xff\xd8";
@@ -571,7 +798,10 @@ mod tests {
             )
             .unwrap();
         for i in 0..5 {
-            write_jpeg(&images.join(format!("g/pic{i}.jpg")), &jpeg);
+            let path = images.join(format!("g/pic{i}.jpg"));
+            write_jpeg(&path, &jpeg);
+            // Old enough to be trusted whole, so the pre-warm keeps what it makes.
+            backdate(&path);
         }
 
         prewarm_cache(images.to_str().unwrap(), cache.to_str().unwrap());
@@ -619,49 +849,353 @@ mod tests {
         assert!(escape.is_none(), "traversal escape was not blocked");
     }
 
-    #[test]
-    fn try_use_cached_image_returns_data_when_cache_newer() {
-        let dir = TempDir::new().unwrap();
-        let source = dir.path().join("source.jpg");
-        let cache = dir.path().join("source.webp");
-        fs::write(&source, b"source").unwrap();
-        // Write source first, then cache — cache will have the later mtime.
-        std::thread::sleep(Duration::from_millis(20));
-        fs::write(&cache, b"cached").unwrap();
+    /// 2024-11-15 06:33:20 UTC, a source's modification time.
+    fn source_time() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_731_652_400)
+    }
 
-        let data = try_use_cached_image(&source, &cache);
+    /// A cache file holding `cached`, modified at `modified`.
+    fn cache_file_at(dir: &TempDir, modified: SystemTime) -> PathBuf {
+        let cache = dir.path().join("source.webp");
+        fs::write(&cache, b"cached").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&cache)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        cache
+    }
+
+    #[test]
+    fn try_use_cached_image_returns_data_with_the_source_time() {
+        let dir = TempDir::new().unwrap();
+        let cache = cache_file_at(&dir, source_time());
+
+        let data = try_use_cached_image(Some(source_time()), &cache);
         assert_eq!(data.as_deref(), Some(b"cached".as_slice()));
     }
 
     #[test]
     fn try_use_cached_image_misses_when_source_newer() {
         let dir = TempDir::new().unwrap();
-        let source = dir.path().join("source.jpg");
-        let cache = dir.path().join("source.webp");
-        fs::write(&cache, b"cached").unwrap();
-        std::thread::sleep(Duration::from_millis(20));
-        fs::write(&source, b"source").unwrap();
+        let cache = cache_file_at(&dir, source_time());
 
-        assert!(try_use_cached_image(&source, &cache).is_none());
+        let newer = source_time() + Duration::from_mins(1);
+        assert!(try_use_cached_image(Some(newer), &cache).is_none());
+    }
+
+    #[test]
+    fn try_use_cached_image_misses_when_source_older() {
+        let dir = TempDir::new().unwrap();
+        let cache = cache_file_at(&dir, source_time());
+
+        let older = source_time() - Duration::from_hours(24);
+        assert!(try_use_cached_image(Some(older), &cache).is_none());
     }
 
     #[test]
     fn try_use_cached_image_misses_when_cache_absent() {
         let dir = TempDir::new().unwrap();
-        let source = dir.path().join("source.jpg");
         let cache = dir.path().join("source.webp");
-        fs::write(&source, b"source").unwrap();
         // No cache file written.
-        assert!(try_use_cached_image(&source, &cache).is_none());
+        assert!(try_use_cached_image(Some(source_time()), &cache).is_none());
+    }
+
+    /// An images dir holding `home/pic.png`, a `width`×`height` picture modified at
+    /// `secs` seconds after 1970, and an empty cache dir beside it.
+    fn one_picture(width: u32, height: u32, secs: u64) -> (TempDir, String, String) {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        replace_picture(&images, width, height, secs);
+        let images = images.to_str().unwrap().to_owned();
+        let cache = cache.to_str().unwrap().to_owned();
+        (dir, images, cache)
+    }
+
+    /// Write `home/pic.png` under `images` as a `width`×`height` picture, modified at
+    /// `secs` seconds after 1970.
+    fn replace_picture(images: &Path, width: u32, height: u32, secs: u64) {
+        let path = images.join("home/pic.png");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbImage::new(width, height).save(&path).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    /// The compressed endpoint's answer for `home/pic`, decoded to its size.
+    fn compressed_size(images: &str, cache: &str) -> (u32, u32) {
+        let webp = process_and_cache_image(images, cache, "home/pic", 2400, 90)
+            .unwrap()
+            .data;
+        let picture = image::load_from_memory(&webp).unwrap();
+        (picture.width(), picture.height())
+    }
+
+    /// The one cache file `process_and_cache_image` made for `home/pic` at 2400/90.
+    fn cache_file(cache: &str) -> PathBuf {
+        PathBuf::from(cache).join("home_pic_w2400_q90_l1.webp")
+    }
+
+    // Replaced by an earlier export (`cp -p`, `rsync -a`, a restore from backup) with
+    // no watcher event to prune the cache, as on an NFS share written from elsewhere.
+    #[test]
+    fn a_source_replaced_by_an_older_file_is_made_again() {
+        let (_dir, images, cache) = one_picture(8, 4, 1_731_652_400);
+        assert_eq!(compressed_size(&images, &cache), (8, 4));
+
+        replace_picture(Path::new(&images), 6, 6, 1_731_652_400 - 86_400);
+
+        assert_eq!(compressed_size(&images, &cache), (6, 6));
     }
 
     #[test]
-    fn save_to_cache_creates_dir_and_writes_bytes() {
+    fn an_unchanged_source_is_served_from_the_cache() {
+        let (_dir, images, cache) = one_picture(8, 4, 1_731_652_400);
+        compressed_size(&images, &cache);
+
+        // Different bytes under the times the server left on the file: served as they
+        // are only if the server takes the file from the cache without making it again.
+        let path = cache_file(&cache);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, b"from the cache").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+
+        let served = process_and_cache_image(&images, &cache, "home/pic", 2400, 90).map(|w| w.data);
+        assert_eq!(served.as_deref(), Some(b"from the cache".as_slice()));
+    }
+
+    // What every cache file made before the server stamped them looks like: newer
+    // than its source, with no other link to it.
+    #[test]
+    fn a_cache_file_not_stamped_with_its_source_is_made_again() {
+        let (_dir, images, cache) = one_picture(8, 4, 1_731_652_400);
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache_file(&cache), b"made before the stamp").unwrap();
+
+        assert_eq!(compressed_size(&images, &cache), (8, 4));
+    }
+
+    /// `time` as whole seconds since 1970.
+    fn secs(time: SystemTime) -> u64 {
+        time.duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    // An export written in place: part of the new picture is on disk when the request
+    // comes, and the rest follows within the same second, which leaves the address and
+    // the time the cache goes by as they were.
+    #[test]
+    fn a_source_changed_moments_ago_is_made_but_not_cached() {
+        let (_dir, images, cache) = one_picture(8, 4, secs(SystemTime::now()));
+
+        let webp = process_and_cache_image(&images, &cache, "home/pic", 2400, 90).unwrap();
+
+        assert!(
+            !webp.settled,
+            "a source this new may still be being written"
+        );
+        assert!(
+            !cache_file(&cache).exists(),
+            "and nothing made from it is kept"
+        );
+    }
+
+    #[test]
+    fn a_source_left_alone_for_the_settle_time_is_cached() {
+        let then = SystemTime::now() - SETTLE_TIME - Duration::from_secs(1);
+        let (_dir, images, cache) = one_picture(8, 4, secs(then));
+
+        let webp = process_and_cache_image(&images, &cache, "home/pic", 2400, 90).unwrap();
+
+        assert!(webp.settled);
+        assert!(cache_file(&cache).exists());
+    }
+
+    #[test]
+    fn a_file_has_settled_only_once_the_settle_time_has_passed() {
+        let now = SystemTime::now();
+        assert!(!has_settled(now, now));
+        assert!(!has_settled(
+            now - SETTLE_TIME + Duration::from_millis(500),
+            now
+        ));
+        assert!(has_settled(now - SETTLE_TIME, now));
+        // A clock ahead of this one, as a file server's can be: not yet.
+        assert!(!has_settled(now + Duration::from_secs(5), now));
+        assert!(!has_settled(now + Duration::from_secs(30), now));
+    }
+
+    // A time set on purpose rather than by a write: copied from a camera card or a
+    // machine whose clock is ahead (`cp -p`, `rsync -a`), or `touch -d`. Waiting for
+    // this clock to pass it could take days, with every view made again meanwhile.
+    #[test]
+    fn a_time_far_ahead_of_this_clock_counts_as_settled() {
+        let now = SystemTime::now();
+        assert!(has_settled(now + Duration::from_secs(61), now));
+        assert!(has_settled(now + Duration::from_hours(24), now));
+    }
+
+    #[test]
+    fn a_source_dated_a_day_ahead_is_cached() {
+        let tomorrow = SystemTime::now() + Duration::from_hours(24);
+        let (_dir, images, cache) = one_picture(8, 4, secs(tomorrow));
+
+        let webp = process_and_cache_image(&images, &cache, "home/pic", 2400, 90).unwrap();
+
+        assert!(webp.settled);
+        assert!(cache_file(&cache).exists());
+    }
+
+    // Read before and after it was decoded, the source's time differs: it was written
+    // meanwhile, so what was read may be part of a picture.
+    #[test]
+    fn a_source_changed_while_it_was_decoded_has_not_settled() {
+        let old = SystemTime::now() - Duration::from_hours(1);
+        let later = old + Duration::from_secs(30);
+        let now = SystemTime::now();
+        assert!(source_settled(Some(old), Some(old), now));
+        assert!(!source_settled(Some(old), Some(later), now));
+        assert!(!source_settled(Some(old), Some(now), now));
+    }
+
+    #[test]
+    fn cached_image_tells_a_missing_source_from_a_missing_size() {
+        let (_dir, images, cache) = one_picture(8, 4, 1_731_652_400);
+
+        assert!(matches!(
+            cached_image(&images, &cache, "home/gone", 2400, 90),
+            Lookup::NoSource
+        ));
+        assert!(matches!(
+            cached_image(&images, &cache, "home/pic", 2400, 90),
+            Lookup::Missing
+        ));
+        process_and_cache_image(&images, &cache, "home/pic", 2400, 90).unwrap();
+        assert!(matches!(
+            cached_image(&images, &cache, "home/pic", 2400, 90),
+            Lookup::Cached(_)
+        ));
+    }
+
+    // What a crash between creating and filling a cache file can leave.
+    #[test]
+    fn an_empty_cache_file_is_made_again() {
+        let (_dir, images, cache) = one_picture(8, 4, 1_731_652_400);
+        fs::create_dir_all(&cache).unwrap();
+        let path = cache_file(&cache);
+        fs::write(&path, b"").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_731_652_400))
+            .unwrap();
+
+        assert_eq!(compressed_size(&images, &cache), (8, 4));
+    }
+
+    /// Several requests make the same size at once while others read it, as after a
+    /// deploy or when a photo comes in two formats. Every answer must be the whole
+    /// picture: never part of one, and never an empty one.
+    #[test]
+    fn concurrent_makers_and_readers_only_ever_get_whole_pictures() {
+        const MAKERS: usize = 4;
+        const READERS: usize = 4;
+        const ROUNDS: u64 = 4;
+
+        let (_dir, images, cache) = one_picture(8, 4, 1_731_652_400);
+        // Noise compresses badly, so each cache file takes a while to write, and a
+        // read in the middle of a write is likely to be caught.
+        let source = Path::new(&images).join("home/pic.png");
+        let mut state = 0x2545_f491_u32;
+        let noise = image::RgbImage::from_fn(640, 480, |_, _| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let [r, g, b, _] = state.to_le_bytes();
+            image::Rgb([r, g, b])
+        });
+        noise.save(&source).unwrap();
+        let whole = process_and_cache_image(&images, &cache, "home/pic", 2400, 90)
+            .unwrap()
+            .data;
+
+        let mut bad = Vec::new();
+        for round in 1..=ROUNDS {
+            // A new time makes every cached size stale, so each maker writes it again.
+            fs::File::options()
+                .write(true)
+                .open(&source)
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_731_652_400 + round))
+                .unwrap();
+            let start = std::sync::Barrier::new(MAKERS + READERS);
+            let making = std::sync::atomic::AtomicUsize::new(MAKERS);
+            let answers = std::sync::Mutex::new(Vec::new());
+            std::thread::scope(|scope| {
+                for _ in 0..MAKERS {
+                    scope.spawn(|| {
+                        start.wait();
+                        let answer = process_and_cache_image(&images, &cache, "home/pic", 2400, 90)
+                            .map(|w| w.data);
+                        answers.lock().unwrap().push(answer);
+                        making.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    });
+                }
+                for _ in 0..READERS {
+                    scope.spawn(|| {
+                        start.wait();
+                        while making.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                            let answer =
+                                process_and_cache_image(&images, &cache, "home/pic", 2400, 90)
+                                    .map(|w| w.data);
+                            answers.lock().unwrap().push(answer);
+                        }
+                    });
+                }
+            });
+            for answer in answers.into_inner().unwrap() {
+                if answer.as_ref() != Some(&whole) {
+                    bad.push(answer.map_or(0, |bytes| bytes.len()));
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{} answers were not the whole {}-byte picture; their lengths: {bad:?}",
+            bad.len(),
+            whole.len()
+        );
+    }
+
+    #[test]
+    fn save_to_cache_creates_dir_and_writes_bytes_with_the_source_time() {
         let dir = TempDir::new().unwrap();
         let cache_dir = dir.path().join("nested/cache");
         let cache_path = cache_dir.join("foo.webp");
-        save_to_cache(cache_dir.to_str().unwrap(), &cache_path, b"webp-data");
+        save_to_cache(
+            cache_dir.to_str().unwrap(),
+            &cache_path,
+            b"webp-data",
+            Some(source_time()),
+        );
         assert_eq!(fs::read(&cache_path).unwrap(), b"webp-data");
+        assert_eq!(
+            fs::metadata(&cache_path).unwrap().modified().unwrap(),
+            source_time()
+        );
     }
 
     #[test]
@@ -784,6 +1318,28 @@ mod tests {
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
 
         assert!(stray.exists());
+    }
+
+    // What a crash in the middle of `save_to_cache` leaves.
+    #[test]
+    fn cleanup_cache_removes_leftover_temporary_files() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        let leftover = cache.join("home_pic_w2400_q90_l1.webp.4242-7.tmp");
+        fs::write(&leftover, b"half a picture").unwrap();
+        let stray = cache.join("notes.tmp");
+        fs::write(&stray, b"not ours").unwrap();
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        assert!(!leftover.exists(), "a leftover temporary file is removed");
+        assert!(
+            stray.exists(),
+            "a name the server doesn't make is left alone"
+        );
     }
 
     #[test]

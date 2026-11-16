@@ -999,6 +999,52 @@ mod tests {
         );
     }
 
+    /// A photo's addresses carry its file's modification time. The cached photo lists
+    /// keep the old one until they are cleared, which the image watcher does when the
+    /// file is written, or until they expire.
+    #[test]
+    #[serial_test::serial]
+    fn a_changed_photo_gets_its_new_address_once_the_caches_are_cleared() {
+        let root = images_dir_with_gallery("nature", "");
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        let photo = root.path().join("nature/photo.jpg");
+        let set_mtime = |secs| {
+            std::fs::File::options()
+                .write(true)
+                .open(&photo)
+                .unwrap()
+                .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(secs))
+                .unwrap();
+        };
+        let addresses = || {
+            let all = block_on(get_all_gallery_photos()).unwrap()[0]
+                .original_url
+                .clone();
+            let gallery = block_on(get_gallery_data_by_name("nature".to_string()))
+                .unwrap()
+                .expect("the nature gallery exists")
+                .photos[0]
+                .original_url
+                .clone();
+            [all, gallery]
+        };
+
+        invalidate_caches();
+        set_mtime(1_731_652_400);
+        let before = addresses();
+        set_mtime(1_731_652_460);
+        let cached = addresses();
+        invalidate_caches();
+        let after = addresses();
+        invalidate_caches();
+
+        let old = "/images/nature/photo.jpg?v=1731652400";
+        let new = "/images/nature/photo.jpg?v=1731652460";
+        assert_eq!(before, [old, old]);
+        assert_eq!(cached, [old, old], "still cached");
+        assert_eq!(after, [new, new]);
+    }
+
     #[test]
     #[serial_test::serial]
     fn gallery_data_is_an_error_when_the_images_root_is_unreadable() {

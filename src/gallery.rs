@@ -15,6 +15,43 @@ fn url_encode_path(path: &str) -> String {
         .join("/")
 }
 
+/// A file's version, for the addresses that point at it: its modification time in
+/// whole seconds since 1970. `None` when that can't be read, or is before 1970.
+///
+/// Browsers and Cloudflare keep a file from `/images` or `/content` for a year
+/// without asking again, so a file replaced under its old name would never reach
+/// them at its old address. With the version in it, the address changes along with
+/// the file. Whole seconds keep the address short and are plenty to tell one export
+/// of a photo from the next. The time comes from a `stat` that the caller has
+/// usually made anyway, so it costs nothing extra on the NFS share.
+fn file_version(metadata: &fs::Metadata) -> Option<u64> {
+    let modified = metadata.modified().ok()?;
+    let since_1970 = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(since_1970.as_secs())
+}
+
+/// `url` with `v=<version>` added to its query, or `url` as it is without a version.
+/// The server ignores `v`; it is only there to change the address.
+fn with_version(url: String, version: Option<u64>) -> String {
+    match version {
+        Some(version) => {
+            let separator = if url.contains('?') { '&' } else { '?' };
+            format!("{url}{separator}v={version}")
+        }
+        None => url,
+    }
+}
+
+/// The favicon's address: `favicon.ico` at the top of the images root, with its
+/// version. The page shell asks for it on every render, which costs one `stat`.
+pub fn favicon_url() -> String {
+    let metadata = fs::metadata(crate::paths::images_root().join("favicon.ico")).ok();
+    with_version(
+        "/images/favicon.ico".to_string(),
+        metadata.as_ref().and_then(file_version),
+    )
+}
+
 /// Get MIME type from file extension
 fn get_mime_type(extension: &str) -> &'static str {
     match extension {
@@ -53,10 +90,23 @@ fn load_photo_config(photo_path: &Path) -> PhotoConfig {
 #[cfg(feature = "ssr")]
 const SRCSET_MAX_WIDTH: u32 = 2400;
 
+/// The compressed endpoint's address for `encoded_path` at one preset, with `version`.
+fn compressed_image_url(
+    encoded_path: &str,
+    width: u32,
+    quality: u8,
+    version: Option<u64>,
+) -> String {
+    with_version(
+        format!("/images/compressed/{encoded_path}?width={width}&quality={quality}"),
+        version,
+    )
+}
+
 /// Build a responsive srcset string for the compressed endpoint.
 /// Each preset becomes "url Ww", letting the browser pick by viewport+DPR.
 #[cfg(feature = "ssr")]
-fn build_compressed_srcset(encoded_path: &str) -> String {
+fn build_compressed_srcset(encoded_path: &str, version: Option<u64>) -> String {
     use crate::image_params::ImageParams;
     let mut presets: Vec<_> = ImageParams::get_valid_presets()
         .into_iter()
@@ -66,13 +116,13 @@ fn build_compressed_srcset(encoded_path: &str) -> String {
     presets.sort_by_key(|(w, _)| *w);
     presets
         .into_iter()
-        .map(|(w, q)| format!("/images/compressed/{encoded_path}?width={w}&quality={q} {w}w"))
+        .map(|(w, q)| format!("{} {w}w", compressed_image_url(encoded_path, w, q, version)))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 #[cfg(not(feature = "ssr"))]
-fn build_compressed_srcset(_encoded_path: &str) -> String {
+fn build_compressed_srcset(_encoded_path: &str, _version: Option<u64>) -> String {
     String::new()
 }
 
@@ -179,7 +229,7 @@ fn find_images_recursive_with_gallery(
     gallery_name: &str,
 ) {
     // First pass: collect all image files and group by basename
-    let mut image_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut image_groups: HashMap<String, Vec<ImageFile>> = HashMap::new();
     collect_image_files(dir, gallery_root, &mut image_groups);
 
     // Second pass: create PhotoInfo for each group
@@ -193,7 +243,7 @@ fn find_images_recursive_with_gallery(
         });
 
         // Use the first variant as the primary image (fallback)
-        let (primary_relative_path, primary_ext) = &sorted_variants[0];
+        let (primary_relative_path, primary_ext, _) = &sorted_variants[0];
         let primary_full_path = gallery_root.join(primary_relative_path);
 
         // Extract metadata from the primary image
@@ -223,40 +273,7 @@ fn find_images_recursive_with_gallery(
         // Extract EXIF data from primary image
         let exif = extract_exif_data(&primary_full_path);
 
-        // Build sources for compressed versions
-        let (img_width, img_quality) = get_default_image_params();
-        let mut sources = Vec::new();
-        let mut original_sources = Vec::new();
-
-        for (relative_path, ext) in &sorted_variants {
-            if relative_path != primary_relative_path {
-                // Add as alternative source (URL-encode the path)
-                let encoded_path = url_encode_path(relative_path);
-                let compressed_url = format!(
-                    "/images/compressed/{encoded_path}?width={img_width}&quality={img_quality}"
-                );
-                let original_url = format!("/images/{encoded_path}");
-                let mime_type = get_mime_type(ext).to_string();
-
-                sources.push(ImageSource {
-                    url: compressed_url,
-                    mime_type: "image/webp".to_string(), // Compressed endpoint always returns WebP
-                });
-                original_sources.push(ImageSource {
-                    url: original_url,
-                    mime_type,
-                });
-            }
-        }
-
-        // Primary image URLs (URL-encode the path)
-        let encoded_primary_path = url_encode_path(primary_relative_path);
-        let compressed_url = format!(
-            "/images/compressed/{encoded_primary_path}?width={img_width}&quality={img_quality}"
-        );
-        let original_url = format!("/images/{encoded_primary_path}");
-        let detail_url = format!("/images/compressed/{encoded_primary_path}?width=4000&quality=90");
-        let srcset = build_compressed_srcset(&encoded_primary_path);
+        let addresses = photo_addresses(&sorted_variants);
 
         // Extract subfolder from relative path
         let subfolder = Path::new(primary_relative_path).parent().and_then(|p| {
@@ -277,12 +294,12 @@ fn find_images_recursive_with_gallery(
             .or(exif.lens_model);
 
         photos.push(PhotoInfo {
-            url: compressed_url,
-            original_url,
-            detail_url,
-            srcset,
-            sources,
-            original_sources,
+            url: addresses.url,
+            original_url: addresses.original_url,
+            detail_url: addresses.detail_url,
+            srcset: addresses.srcset,
+            sources: addresses.sources,
+            original_sources: addresses.original_sources,
             title,
             filename: filename_str,
             slug,
@@ -305,17 +322,73 @@ fn find_images_recursive_with_gallery(
     }
 }
 
+/// An image file found under a gallery: its path relative to the images root, its
+/// extension in lower case, and its [`file_version`].
+type ImageFile = (String, String, Option<u64>);
+
+/// The addresses of one photo's files, as [`PhotoInfo`] holds them.
+struct PhotoAddresses {
+    url: String,
+    original_url: String,
+    detail_url: String,
+    srcset: String,
+    sources: Vec<ImageSource>,
+    original_sources: Vec<ImageSource>,
+}
+
+/// The addresses of the photo whose files are `variants`, the primary first.
+///
+/// Each carries a version: an original its own file's, and a compressed address the
+/// newest variant's. The compressed endpoint finds its source by the name without the
+/// extension, so any of the variants can be behind a compressed address, and the
+/// newest version changes whichever one is replaced.
+fn photo_addresses(variants: &[ImageFile]) -> PhotoAddresses {
+    let (primary_path, _, primary_version) = &variants[0];
+    let compressed_version = variants.iter().filter_map(|(_, _, version)| *version).max();
+    let (width, quality) = get_default_image_params();
+
+    // Alternative sources: the other formats, compressed and original
+    let mut sources = Vec::new();
+    let mut original_sources = Vec::new();
+    for (relative_path, ext, version) in variants {
+        if relative_path != primary_path {
+            let encoded_path = url_encode_path(relative_path);
+            sources.push(ImageSource {
+                url: compressed_image_url(&encoded_path, width, quality, compressed_version),
+                mime_type: "image/webp".to_string(), // Compressed endpoint always returns WebP
+            });
+            original_sources.push(ImageSource {
+                url: with_version(format!("/images/{encoded_path}"), *version),
+                mime_type: get_mime_type(ext).to_string(),
+            });
+        }
+    }
+
+    let encoded_path = url_encode_path(primary_path);
+    PhotoAddresses {
+        url: compressed_image_url(&encoded_path, width, quality, compressed_version),
+        original_url: with_version(format!("/images/{encoded_path}"), *primary_version),
+        detail_url: compressed_image_url(&encoded_path, 4000, 90, compressed_version),
+        srcset: build_compressed_srcset(&encoded_path, compressed_version),
+        sources,
+        original_sources,
+    }
+}
+
 /// Helper function to collect all image files and group them by basename
 fn collect_image_files(
     dir: &Path,
     gallery_root: &Path,
-    groups: &mut HashMap<String, Vec<(String, String)>>,
+    groups: &mut HashMap<String, Vec<ImageFile>>,
 ) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            // One `stat` per entry, following links as `Path::is_dir` does. It says
+            // whether this is a directory and, for a file, when it last changed.
+            let metadata = fs::metadata(&path).ok();
 
-            if path.is_dir() {
+            if metadata.as_ref().is_some_and(fs::Metadata::is_dir) {
                 collect_image_files(&path, gallery_root, groups);
             } else if let Some(extension) = path.extension() {
                 let ext = extension.to_string_lossy().to_lowercase();
@@ -334,10 +407,11 @@ fn collect_image_files(
                         .trim_end_matches(&format!(".{ext}"))
                         .to_string();
 
-                    groups
-                        .entry(base_path)
-                        .or_default()
-                        .push((relative_path, ext.clone()));
+                    groups.entry(base_path).or_default().push((
+                        relative_path,
+                        ext.clone(),
+                        metadata.as_ref().and_then(file_version),
+                    ));
                 }
             }
         }
@@ -1065,13 +1139,17 @@ pub fn load_about_content() -> crate::types::AboutContent {
         (default_about_text(), false)
     };
 
-    // Check if profile image exists
+    // The first profile image that exists, with its version. The `stat` that finds it
+    // also gives the version.
     let image_url = ["profile.jpg", "profile.png", "profile.webp"]
         .iter()
-        .map(|name| Path::new(&content_path).join(name))
-        .find(|path| path.exists())
-        .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
-        .map(|filename| format!("/content/{filename}"));
+        .find_map(|name| {
+            let metadata = fs::metadata(Path::new(&content_path).join(name)).ok()?;
+            Some(with_version(
+                format!("/content/{name}"),
+                file_version(&metadata),
+            ))
+        });
 
     crate::types::AboutContent {
         image_url,
@@ -1372,7 +1450,10 @@ mod tests {
 
         let about = load_about_content();
 
-        assert_eq!(about.image_url, Some("/content/profile.jpg".to_string()));
+        assert_eq!(
+            about.image_url.as_deref().map(without_version),
+            Some("/content/profile.jpg")
+        );
         assert_eq!(about.content, "Custom text");
 
         unsafe { std::env::remove_var("ABOUT_CONTENT_PATH") };
@@ -1394,7 +1475,10 @@ mod tests {
         let about = load_about_content();
 
         // Should prefer .jpg as it's first in the array
-        assert_eq!(about.image_url, Some("/content/profile.jpg".to_string()));
+        assert_eq!(
+            about.image_url.as_deref().map(without_version),
+            Some("/content/profile.jpg")
+        );
 
         unsafe { std::env::remove_var("ABOUT_CONTENT_PATH") };
         fs::remove_dir_all(&temp_dir).ok();
@@ -1460,8 +1544,12 @@ mod tests {
         let photos = load_gallery_photos("nature");
 
         // The URL is relative to IMAGES_DIR, which is what the /images mount serves.
-        let urls: Option<Vec<String>> =
-            photos.map(|photos| photos.into_iter().map(|p| p.original_url).collect());
+        let urls: Option<Vec<String>> = photos.map(|photos| {
+            photos
+                .iter()
+                .map(|p| without_version(&p.original_url).to_owned())
+                .collect()
+        });
         assert_eq!(urls, Some(vec!["/images/nature/bird.jpg".to_string()]));
     }
 
@@ -1473,8 +1561,8 @@ mod tests {
         let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
 
         let urls: Vec<String> = load_home_photos()
-            .into_iter()
-            .map(|p| p.original_url)
+            .iter()
+            .map(|p| without_version(&p.original_url).to_owned())
             .collect();
 
         assert_eq!(urls, vec!["/images/home/contrail.jpg".to_string()]);
@@ -1487,8 +1575,8 @@ mod tests {
         let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
 
         let urls: Vec<String> = load_all_gallery_photos()
-            .into_iter()
-            .map(|p| p.original_url)
+            .iter()
+            .map(|p| without_version(&p.original_url).to_owned())
             .collect();
 
         assert_eq!(
@@ -1498,6 +1586,240 @@ mod tests {
                 "/images/nature/bird.jpg".to_string()
             ]
         );
+    }
+
+    /// `url` without its version, once it is checked to end in one: `v=` and a whole
+    /// number of seconds, as the last parameter of its query.
+    fn without_version(url: &str) -> &str {
+        let (address, version) = url
+            .rsplit_once("v=")
+            .unwrap_or_else(|| panic!("no version in {url}"));
+        assert!(
+            !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit()),
+            "the version in {url} is not a whole number of seconds"
+        );
+        address
+            .strip_suffix(['?', '&'])
+            .unwrap_or_else(|| panic!("v= is not a query parameter in {url}"))
+    }
+
+    /// 2024-11-15 06:33:20 UTC, a modification time to give a file.
+    const MTIME: u64 = 1_731_652_400;
+
+    /// Set the modification time of the file at `path` to `secs` seconds after 1970.
+    fn set_mtime(path: &Path, secs: u64) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    /// The one photo in the `nature` gallery under `IMAGES_DIR`.
+    fn the_nature_photo() -> PhotoInfo {
+        let mut photos = load_gallery_photos("nature").expect("a nature gallery");
+        assert_eq!(photos.len(), 1, "{photos:?}");
+        photos.remove(0)
+    }
+
+    #[test]
+    #[serial]
+    fn every_address_of_a_photo_carries_its_file_version() {
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
+        let root = images_dir_with_two_galleries();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        set_mtime(&root.path().join("nature/bird.jpg"), MTIME);
+
+        let photo = the_nature_photo();
+
+        assert_eq!(photo.original_url, "/images/nature/bird.jpg?v=1731652400");
+        assert_eq!(
+            photo.url,
+            "/images/compressed/nature/bird.jpg?width=2400&quality=90&v=1731652400"
+        );
+        assert_eq!(
+            photo.detail_url,
+            "/images/compressed/nature/bird.jpg?width=4000&quality=90&v=1731652400"
+        );
+        assert_eq!(
+            photo.srcset,
+            "/images/compressed/nature/bird.jpg?width=2400&quality=90&v=1731652400 2400w"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn every_srcset_entry_carries_the_version() {
+        let _presets = EnvVarGuard::set("IMAGE_PRESETS", "800,70;1600,90;4000,90");
+        let root = images_dir_with_two_galleries();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        set_mtime(&root.path().join("nature/bird.jpg"), MTIME);
+
+        let photo = the_nature_photo();
+
+        // 4000 is wider than the grid ever asks for, so it isn't in the srcset.
+        assert_eq!(
+            photo.srcset,
+            "/images/compressed/nature/bird.jpg?width=800&quality=70&v=1731652400 800w, \
+             /images/compressed/nature/bird.jpg?width=1600&quality=90&v=1731652400 1600w"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_photo_gets_new_addresses_when_its_file_changes() {
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
+        let root = images_dir_with_two_galleries();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        let bird = root.path().join("nature/bird.jpg");
+        set_mtime(&bird, MTIME);
+        let before = the_nature_photo();
+
+        // Exported again a minute later, under the same name.
+        set_mtime(&bird, MTIME + 60);
+        let after = the_nature_photo();
+
+        for (old, new) in [
+            (&before.url, &after.url),
+            (&before.original_url, &after.original_url),
+            (&before.detail_url, &after.detail_url),
+            (&before.srcset, &after.srcset),
+        ] {
+            assert!(new.contains("v=1731652460"), "{new}");
+            assert_eq!(new.replace("v=1731652460", "v=1731652400"), *old);
+        }
+    }
+
+    /// The compressed endpoint finds its source by the name without the extension, so
+    /// any of a photo's formats can be behind a compressed address.
+    #[test]
+    #[serial]
+    fn originals_carry_their_own_version_and_compressed_addresses_the_newest() {
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
+        let root = tempfile::TempDir::new().unwrap();
+        let dir = root.path().join("nature");
+        fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(dir.join("sunset.jpg"))
+            .unwrap();
+        fs::write(dir.join("sunset.webp"), b"webp").unwrap();
+        set_mtime(&dir.join("sunset.jpg"), MTIME);
+        set_mtime(&dir.join("sunset.webp"), MTIME + 5);
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let photo = the_nature_photo();
+
+        assert_eq!(photo.original_url, "/images/nature/sunset.jpg?v=1731652400");
+        assert_eq!(
+            photo.original_sources,
+            vec![ImageSource {
+                url: "/images/nature/sunset.webp?v=1731652405".to_string(),
+                mime_type: "image/webp".to_string(),
+            }]
+        );
+        assert_eq!(
+            photo.sources,
+            vec![ImageSource {
+                url: "/images/compressed/nature/sunset.webp?width=2400&quality=90&v=1731652405"
+                    .to_string(),
+                mime_type: "image/webp".to_string(),
+            }]
+        );
+        assert_eq!(
+            photo.url,
+            "/images/compressed/nature/sunset.jpg?width=2400&quality=90&v=1731652405"
+        );
+        assert_eq!(
+            photo.detail_url,
+            "/images/compressed/nature/sunset.jpg?width=4000&quality=90&v=1731652405"
+        );
+        assert_eq!(
+            photo.srcset,
+            "/images/compressed/nature/sunset.jpg?width=2400&quality=90&v=1731652405 2400w"
+        );
+    }
+
+    /// Here the file is a link to nothing, so there is nothing to read the time from.
+    #[cfg(unix)]
+    #[test]
+    #[serial]
+    fn a_photo_without_a_readable_modification_time_gets_plain_addresses() {
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
+        let root = tempfile::TempDir::new().unwrap();
+        let dir = root.path().join("nature");
+        fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone.jpg"), dir.join("ghost.jpg")).unwrap();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        let photo = the_nature_photo();
+
+        assert_eq!(photo.original_url, "/images/nature/ghost.jpg");
+        assert_eq!(
+            photo.url,
+            "/images/compressed/nature/ghost.jpg?width=2400&quality=90"
+        );
+        assert_eq!(
+            photo.detail_url,
+            "/images/compressed/nature/ghost.jpg?width=4000&quality=90"
+        );
+        assert_eq!(
+            photo.srcset,
+            "/images/compressed/nature/ghost.jpg?width=2400&quality=90 2400w"
+        );
+    }
+
+    #[test]
+    fn a_modification_time_before_1970_is_no_version() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("old.jpg");
+        fs::write(&path, b"jpg").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .unwrap();
+
+        assert_eq!(file_version(&fs::metadata(&path).unwrap()), None);
+        assert_eq!(
+            with_version("/images/old.jpg".to_string(), None),
+            "/images/old.jpg"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn the_profile_photo_address_carries_its_version() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let profile = dir.path().join("profile.png");
+        fs::write(&profile, b"png").unwrap();
+        let _content = EnvVarGuard::set("ABOUT_CONTENT_PATH", dir.path());
+
+        set_mtime(&profile, MTIME);
+        assert_eq!(
+            load_about_content().image_url.as_deref(),
+            Some("/content/profile.png?v=1731652400")
+        );
+        set_mtime(&profile, MTIME + 60);
+        assert_eq!(
+            load_about_content().image_url.as_deref(),
+            Some("/content/profile.png?v=1731652460")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn the_favicon_address_carries_its_version() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        assert_eq!(favicon_url(), "/images/favicon.ico", "no favicon yet");
+
+        let favicon = root.path().join("favicon.ico");
+        fs::write(&favicon, b"ico").unwrap();
+        set_mtime(&favicon, MTIME);
+        assert_eq!(favicon_url(), "/images/favicon.ico?v=1731652400");
     }
 
     #[test]

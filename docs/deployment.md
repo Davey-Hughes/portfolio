@@ -100,7 +100,34 @@ Thumbnails and the viewer never get the originals. They load
 caches the result under `public/cache/`, with filenames like
 `gallery_photo_w2400_q90_l1.webp`. On startup the server pre-warms the cache and
 removes orphaned entries, and the filesystem watcher prunes cache files when their
-source image changes or is deleted.
+source image changes or is deleted. Each cache file is given its source's
+modification time, and is made again whenever the two differ, so a photo replaced by
+an older file still gets new sizes when the watcher misses the change. The cache
+directory therefore needs a filesystem that keeps modification times to the second or
+finer. On FAT, which keeps them to two seconds, every request would make its size
+again.
+
+A photo changed in the last 10 seconds may still be being written, and a half-written
+JPEG still decodes. Until it has been left alone that long, its sizes are made for each
+request and not cached, and they and the original are sent with `no-store`, so nobody
+keeps half a picture under an address that won't change. That relies on the file
+server's clock being no more than nine seconds behind this server's and no more than a
+minute ahead. A file dated more than a minute ahead, as a copy from a camera card whose
+clock is ahead would be, is trusted at once, since waiting for it could take days.
+
+Transcoding doesn't block the rest of the site. The pre-warm runs on a thread of its
+own with at most four workers, fewer on a smaller host, and requests make at most as
+many sizes again at a time, each waiting its turn otherwise. A transcode takes about
+8 MB of memory per megapixel at its peak, about 2.2 GB for a 283-megapixel photo, and
+about 10–35 ms of CPU per megapixel, a few seconds for the largest. With eight running
+at once on the largest photos that is about 18 GB, so a small host could run out of
+memory.
+
+The first start of a server that dates its cache files this way makes every size
+again, since files made by an older server don't carry their source's time. The
+pre-warm remakes every photo's 2400px size, and each 4000px size is made on its first
+request. With several photos of 250 megapixels or more, expect that to take minutes;
+the site keeps answering meanwhile.
 
 The endpoint accepts only a fixed list of `(width, quality)` presets, and anything
 else gets a 400. The defaults are `2400×q90`, used for the grid `srcset` and for
@@ -124,6 +151,11 @@ In production the compiled JS, WASM and CSS under `pkg/` get content-hashed name
 then cache `/pkg/*` as immutable without ever serving stale JS next to freshly
 deployed WASM. That `wasm-bindgen` mismatch would otherwise break hydration after a
 deploy, and with hashed names there's no cache to purge either.
+
+Files under `/images` and `/content` are cached for a year too. The site's addresses
+for them end in `?v=` and the file's modification time, so a replaced file gets a new
+address. That only works while the CDN keeps the query string in its cache key, as
+Cloudflare's default (Standard) caching level does.
 
 For the server to emit the hashed names at runtime:
 

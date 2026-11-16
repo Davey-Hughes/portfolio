@@ -295,8 +295,8 @@ fn write_readme_fixtures(content_dir: &Path) -> Result<PathBuf, Box<dyn std::err
     // A real WebP rather than arbitrary bytes, so the file is what its name says.
     let shot = RgbImage::from_pixel(8, 8, Rgb([200, 120, 40]));
     let webp = webp::Encoder::from_rgb(shot.as_raw(), shot.width(), shot.height()).encode(80.0);
-    fs::write(dir.join("shot.webp"), &*webp)?;
-    fs::write(content_dir.join("readme-outside.webp"), &*webp)?;
+    write(dir.join("shot.webp"), &*webp)?;
+    write(content_dir.join("readme-outside.webp"), &*webp)?;
     // What `image_invert` is for: white art on a transparent background. 16:10 like
     // the card, so the card shows all of it, with a solid block in the middle that
     // open-source.spec.ts samples. Lossless, so the alpha stays exactly 0 or 255.
@@ -308,12 +308,12 @@ fn write_readme_fixtures(content_dir: &Path) -> Result<PathBuf, Box<dyn std::err
         });
         webp::Encoder::from_rgba(art.as_raw(), art.width(), art.height()).encode_lossless()
     };
-    fs::write(dir.join("art.webp"), &*art(2))?;
+    write(dir.join("art.webp"), &*art(2))?;
     // The same art at half the size, for `image_card`: what the card shows.
-    fs::write(dir.join("art-card.webp"), &*art(1))?;
-    fs::write(dir.join("clip.mp4"), fixture_clip())?;
-    fs::write(dir.join("notes.toml"), FIXTURE_README_NOTES)?;
-    fs::write(album.join("index.html"), FIXTURE_README_ALBUM_INDEX)?;
+    write(dir.join("art-card.webp"), &*art(1))?;
+    write(dir.join("clip.mp4"), fixture_clip())?;
+    write(dir.join("notes.toml"), FIXTURE_README_NOTES)?;
+    write(album.join("index.html"), FIXTURE_README_ALBUM_INDEX)?;
     Ok(readme_root)
 }
 
@@ -417,6 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // take an EXIF blob, so little_exif splices the APP1 segment into the file
         // that was just saved.
         write_exif(&path, fixture)?;
+        backdate(&path)?;
 
         let size = fs::metadata(&path)?.len();
         println!(
@@ -446,7 +447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // already exists; but never into public/images, where it is the checked-in file.
     if !into_public_images {
         let home_gallery_toml = images_root.join("home").join("gallery.toml");
-        fs::write(&home_gallery_toml, FIXTURE_HOME_GALLERY)?;
+        write(&home_gallery_toml, FIXTURE_HOME_GALLERY)?;
         println!("wrote {}", home_gallery_toml.display());
     }
 
@@ -456,9 +457,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     fs::create_dir_all(&content_dir)?;
     let config_path = content_dir.join("config.toml");
-    fs::write(&config_path, FIXTURE_CONFIG)?;
-    fs::write(content_dir.join("about.txt"), FIXTURE_ABOUT)?;
-    fs::write(content_dir.join("opensource.toml"), FIXTURE_OPEN_SOURCE)?;
+    write(&config_path, FIXTURE_CONFIG)?;
+    write(content_dir.join("about.txt"), FIXTURE_ABOUT)?;
+    write(content_dir.join("opensource.toml"), FIXTURE_OPEN_SOURCE)?;
     println!(
         "wrote {}, about.txt and opensource.toml",
         config_path.display()
@@ -496,4 +497,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Whether `a` and `b` are the same existing directory, however each is spelled.
 fn same_dir(a: &Path, b: &Path) -> bool {
     matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// Write `contents` to `path`, then [`backdate`] it.
+fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    fs::write(&path, contents)?;
+    backdate(path.as_ref())
+}
+
+/// Date the file at `path` an hour back. The server sends a file changed in the last
+/// ten seconds with `no-store`, as it may still be being written (`SETTLE_TIME` in
+/// `src/image_cache.rs`), and the specs expect the year-long header on fixtures they
+/// ask for moments after this writes them.
+fn backdate(path: &Path) -> std::io::Result<()> {
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(1);
+    fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(an_hour_ago)
 }
