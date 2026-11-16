@@ -13,6 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static MOSAIC_CACHE: std::sync::LazyLock<Arc<Mutex<MosaicCache>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(MosaicCache::new())));
 
+/// A `std::sync::Mutex`, not an async lock, on purpose: `get_all_gallery_photos` must
+/// not wait (see its doc comment).
 #[cfg(feature = "ssr")]
 static ALL_PHOTOS_CACHE: std::sync::LazyLock<Arc<Mutex<AllPhotosCache>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(AllPhotosCache::new())));
@@ -343,6 +345,12 @@ fn load_all_photos_unless_unmounted() -> Option<Arc<Vec<PhotoInfo>>> {
 }
 
 /// Server function to get photos from ALL galleries (for photo detail page)
+///
+/// On the server this must finish without waiting: no `.await` that can be pending,
+/// no async lock, no `spawn_blocking`. The photo page counts a shown photo while its
+/// Suspense makes its first pass, before the footer is written, and that only works
+/// if this has already returned. A photo page whose request waits here goes out with
+/// its footer showing, and hydration keeps it. See `Footer` in `app.rs`.
 #[server(GetAllGalleryPhotos, "/api")]
 pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnError> {
     #[cfg(feature = "ssr")]

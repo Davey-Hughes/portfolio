@@ -77,6 +77,16 @@ fn site_config() -> Resource<Result<SiteConfig, ServerFnError>> {
 #[derive(Clone, Copy)]
 struct PageLoading(WriteSignal<bool>);
 
+/// How many photos the photo page has on screen, which the footer hides behind. A
+/// count, not a flag, so it doesn't matter whether one photo's view goes before or
+/// after the next one's comes.
+///
+/// A `signal`'s two halves rather than an `RwSignal`, as for `routing`'s count in
+/// `App`: the bundle already has their code, and an `RwSignal` cost about 1 KB more
+/// of the WASM budget.
+#[derive(Clone, Copy)]
+struct PhotosShown(ReadSignal<u32>, WriteSignal<u32>);
+
 // Helper component for page title
 #[component]
 fn PageTitle() -> impl IntoView {
@@ -126,6 +136,8 @@ pub fn App() -> impl IntoView {
     });
     let (page_loading, set_page_loading) = signal(false);
     provide_context(PageLoading(set_page_loading));
+    let (photos_shown, set_photos_shown) = signal(0);
+    provide_context(PhotosShown(photos_shown, set_photos_shown));
     let loading = move || routing.get() || page_loading.get();
 
     view! {
@@ -167,7 +179,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("contact") view=ContactPage />
                 </Routes>
             </main>
-            <Footer routing />
+            <Footer />
         </Router>
     }
 }
@@ -256,29 +268,26 @@ fn Nav() -> impl IntoView {
     }
 }
 
-/// One footer for the whole visit, hidden rather than removed on photo pages, so a
-/// page change never rebuilds it.
+/// One footer for the whole visit, hidden rather than removed while the photo page
+/// shows a photo, so a page change never rebuilds it.
 ///
-/// The router's location changes at the click, while the old page is still on
-/// screen until the new one has loaded. So while `routing` is true the footer keeps
-/// whatever it was showing, and it hides or shows when the new page appears.
+/// It goes by what is on screen (`PhotosShown`), not by the address. A missing
+/// photo's address looks like a photo page's but shows the not-found page, which
+/// has the footer. And the address changes at the click, while the router keeps the
+/// old page on screen until the new one has loaded; the count changes only when the
+/// pages do.
 ///
-/// That relies on the router marking a page change as started before this footer
-/// sees the new location. It does, because `Routes` subscribes to the URL before
-/// anything reads `use_location().pathname`. A component built before `Routes`
-/// that read the pathname would reverse the order and hide the footer at the click
-/// again. page-loading.spec.ts would catch that.
+/// The server writes the footer before the photo page's Suspense resolves, but the
+/// count is in by then. The footer comes after `Routes` in `App`, that Suspense
+/// builds its children once before it waits, and the photo list loads on its first
+/// poll, because `get_all_gallery_photos` never waits (its doc comment says why it
+/// mustn't). The browser keeps the server's `hidden` as it hydrates, without a
+/// warning if it is wrong, so ssr_tests checks it there.
 #[component]
-fn Footer(routing: Memo<bool>) -> impl IntoView {
+fn Footer() -> impl IntoView {
     let config = site_config();
-    let location = use_location();
-    let hidden = Memo::new(move |previous: Option<&bool>| {
-        let routing = routing.get();
-        match previous {
-            Some(&previous) if routing => previous,
-            _ => is_photo_path(&location.pathname.get()),
-        }
-    });
+    let PhotosShown(shown, _) = expect_context();
+    let hidden = move || shown.get() > 0;
 
     view! {
         <footer class="footer" hidden=hidden>
@@ -339,20 +348,6 @@ fn Footer(routing: Memo<bool>) -> impl IntoView {
             </Suspense>
         </footer>
     }
-}
-
-/// Whether the router shows the photo page for `path`: `/gallery/{gallery}/{photo}`,
-/// both segments non-empty. One trailing slash is allowed too: the router takes it
-/// as no slash at all, and shows the photo page.
-fn is_photo_path(path: &str) -> bool {
-    let Some(rest) = path.strip_prefix("/gallery/") else {
-        return false;
-    };
-    let rest = rest.strip_suffix('/').unwrap_or(rest);
-    matches!(
-        rest.split_once('/'),
-        Some((gallery, photo)) if !gallery.is_empty() && !photo.is_empty() && !photo.contains('/')
-    )
 }
 
 // Helper function to determine orientation class from dimensions
@@ -1757,6 +1752,7 @@ fn PhotoDetailPage() -> impl IntoView {
     let photos = Resource::new(|| (), |()| async { get_all_gallery_photos().await });
     let state = ZoomPanState::new();
     let is_details_expanded = RwSignal::new(false);
+    let PhotosShown(_, photos_shown) = expect_context();
 
     // Arrow keys step through the photos. Removed on cleanup: left behind after a
     // client-side visit, the listener would read this page's disposed signals on
@@ -1880,6 +1876,9 @@ fn PhotoDetailPage() -> impl IntoView {
                 } else {
                     format!("/gallery/{}", photo.gallery_name)
                 };
+                // The footer hides while this photo is on screen.
+                photos_shown.update(|n| *n += 1);
+                on_cleanup(move || photos_shown.update(|n| *n = n.saturating_sub(1)));
                 view! {
                     <div class="photo-detail-page">
                         <div class="photo-detail-container">
@@ -2669,47 +2668,6 @@ mod not_found_tests {
     }
 }
 
-// Runs under both feature sets: the footer makes this check in the browser.
-#[cfg(test)]
-mod footer_tests {
-    use super::is_photo_path;
-
-    #[test]
-    fn a_photo_page_path_is_one() {
-        assert!(is_photo_path("/gallery/home/laika"));
-        assert!(is_photo_path("/gallery/nature/blue-angels"));
-    }
-
-    // The router shows the photo page for these too: it takes one trailing slash
-    // as no slash at all.
-    #[test]
-    fn a_photo_page_path_with_one_trailing_slash_is_one() {
-        assert!(is_photo_path("/gallery/home/laika/"));
-    }
-
-    #[test]
-    fn other_paths_are_not() {
-        for path in [
-            "/",
-            "/about",
-            "/gallery",
-            "/gallery/",
-            "/gallery/home",
-            "/gallery/home/",
-            "/gallery/home//",
-            "/gallery//laika",
-            "/gallery/home//laika",
-            "/gallery/home/laika//",
-            "/gallery/a/b/c",
-            "/gallery/a/b/c/",
-            "/galleryx/home/laika",
-            "/x/gallery/home/laika",
-        ] {
-            assert!(!is_photo_path(path), "{path}");
-        }
-    }
-}
-
 /// Whole pages rendered through the app's routes, the way the server serves them.
 #[cfg(all(test, feature = "ssr"))]
 mod ssr_tests {
@@ -3095,6 +3053,54 @@ mod ssr_tests {
         assert!(!body.contains("not-found-page"), "{body}");
     }
 
+    /// The `<footer>` start tag in a page's HTML.
+    fn footer_tag(body: &str) -> &str {
+        let start = body.find("<footer").expect("no <footer>");
+        let end = start + body[start..].find('>').expect("unclosed <footer");
+        &body[start..=end]
+    }
+
+    // The browser keeps the server's `hidden` while it hydrates, so the server's
+    // HTML has to hide the footer only where the photo page shows a photo.
+    #[tokio::test]
+    #[serial]
+    async fn the_footer_shows_on_a_not_found_page_at_a_photo_address() {
+        let _site = Site::with_home_photo();
+        for path in ["/gallery/home/nope", "/gallery/nope/x"] {
+            let (status, body) = get(path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(body.contains(r#"class="not-found-page""#), "{path}: {body}");
+            let footer = footer_tag(&body);
+            assert!(!footer.contains("hidden"), "{path}: {footer}");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn the_footer_is_hidden_on_a_photo_page() {
+        let _site = Site::with_home_photo();
+        // Twice: the first request walks the galleries, the second reads the cache.
+        // Either path waiting would send the footer out showing.
+        for pass in ["cold", "warm"] {
+            let (status, body) = get("/gallery/home/photo").await;
+            assert_eq!(status, StatusCode::OK, "{pass}");
+            let footer = footer_tag(&body);
+            assert!(footer.contains(" hidden"), "{pass}: {footer}");
+        }
+    }
+
+    // Only a photo hides the footer. When the photo list fails to load, the photo
+    // page's error message has the footer under it.
+    #[tokio::test]
+    #[serial]
+    async fn the_footer_shows_when_the_photo_list_fails_to_load() {
+        let _site = Site::new();
+        let (_, body) = get("/gallery/home/photo").await;
+        assert!(body.contains("Failed to load photo"), "{body}");
+        let footer = footer_tag(&body);
+        assert!(!footer.contains("hidden"), "{footer}");
+    }
+
     #[tokio::test]
     #[serial]
     async fn missing_gallery_and_photo_answer_404() {
@@ -3179,7 +3185,7 @@ mod ssr_tests {
     #[tokio::test]
     #[serial]
     async fn a_loading_photo_page_marks_nothing() {
-        use leptos::prelude::{Owner, RenderHtml, provide_context, view};
+        use leptos::prelude::{Owner, RenderHtml, provide_context, signal, view};
         use leptos_router::{
             ParamSegment, StaticSegment,
             components::{Route, Router, Routes},
@@ -3193,6 +3199,10 @@ mod ssr_tests {
         Owner::new().with(|| {
             provide_context(response.clone());
             provide_context(RequestUrl::new("http://leptos.dev/gallery/home/photo"));
+            // The photo page counts itself for the footer, which `App` provides; this
+            // test renders the page without `App`.
+            let (shown, set_shown) = signal(0_u32);
+            provide_context(super::PhotosShown(shown, set_shown));
             let _pending = leptos::server::SuppressResourceLoad::new();
             let _stream = view! {
                 <Router>
