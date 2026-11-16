@@ -162,11 +162,30 @@ fn get_default_image_params() -> (u32, u8) {
 
 /// Helper function to discover all gallery directories under [`crate::paths::images_root`]
 pub fn discover_gallery_directories() -> Vec<String> {
-    let images_base = crate::paths::images_root();
+    gallery_directories_in(&crate::paths::images_root())
+}
 
+/// True when `images_root` holds no gallery besides `home_dir`, the home gallery's
+/// own directory: it can't be read, or it holds nothing else but files and
+/// `categories`. That is what a NAS mount that is down looks like, since the server
+/// makes both of those directories by itself: the image watcher the images root,
+/// and `load_home_photos` the home gallery's (`home`, or wherever `GALLERY_PATH`
+/// points). Then what can't be found may only be out of sight. An empty lookup is
+/// a failure, not proof that a gallery or photo doesn't exist, which would answer
+/// 404 for all of them; and a cache file whose photo can't be found isn't an orphan.
+pub fn images_root_looks_unmounted(images_root: &Path, home_dir: &Path) -> bool {
+    let canonical = |p: &Path| fs::canonicalize(p).unwrap_or(p.into());
+    let home = canonical(home_dir);
+    !gallery_directories_in(images_root)
+        .iter()
+        .any(|dir| canonical(Path::new(dir)) != home)
+}
+
+/// Every gallery directory under `images_root`: each subdirectory but `categories`.
+fn gallery_directories_in(images_root: &Path) -> Vec<String> {
     let mut gallery_dirs = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(images_base) {
+    if let Ok(entries) = fs::read_dir(images_root) {
         for entry in entries.flatten() {
             let path = entry.path();
             // Only include directories that are not special directories
@@ -1597,6 +1616,46 @@ mod tests {
             .map(|g| root.path().join(g).to_string_lossy().into_owned())
             .collect();
         assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn images_root_looks_unmounted_until_it_holds_a_gallery_besides_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let home = images.join("home");
+        let unmounted = || images_root_looks_unmounted(&images, &home);
+
+        assert!(unmounted(), "a root that isn't there");
+        fs::create_dir_all(&images).unwrap();
+        assert!(unmounted(), "an empty root");
+        fs::write(images.join("favicon.ico"), b"x").unwrap();
+        fs::create_dir_all(images.join("categories")).unwrap();
+        assert!(unmounted(), "a file and `categories` aren't galleries");
+        fs::create_dir_all(&home).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(home.join("sunset.jpg"))
+            .unwrap();
+        assert!(unmounted(), "a photo in the home gallery");
+        fs::create_dir_all(images.join("nature")).unwrap();
+        assert!(!unmounted(), "another gallery");
+    }
+
+    #[test]
+    fn images_root_looks_unmounted_finds_the_home_gallery_by_where_it_really_is() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        fs::create_dir_all(images.join("home")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(images.join("home"), &link).unwrap();
+
+        assert!(
+            images_root_looks_unmounted(&images, &link),
+            "the home gallery through a link"
+        );
+        assert!(
+            !images_root_looks_unmounted(&images, &dir.path().join("landing")),
+            "with the home gallery elsewhere, `home` is a gallery like any other"
+        );
     }
 
     #[test]

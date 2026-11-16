@@ -34,7 +34,13 @@ pub fn images_root() -> PathBuf {
 
 /// The homepage's gallery: `GALLERY_PATH` when set, else `home` under [`images_root`].
 pub fn home_gallery_dir() -> PathBuf {
-    std::env::var("GALLERY_PATH").map_or_else(|_| images_root().join("home"), PathBuf::from)
+    home_gallery_dir_in(&images_root())
+}
+
+/// The homepage's gallery for the photo tree at `images_root`: `GALLERY_PATH` when
+/// set, else `home` under `images_root`.
+pub fn home_gallery_dir_in(images_root: &Path) -> PathBuf {
+    std::env::var("GALLERY_PATH").map_or_else(|_| images_root.join("home"), PathBuf::from)
 }
 
 #[cfg(test)]

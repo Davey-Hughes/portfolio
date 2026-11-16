@@ -760,28 +760,9 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
         return;
     }
 
-    // Enumerate every source image and compute the path-encoded prefix
-    // `process_and_cache_image` would produce. Doing it this way avoids the
-    // ambiguous reverse decoding that previously deleted cache files for any
-    // source whose name happened to contain `_` or `_w`.
-    //
-    // No photos at all is what a NAS share that is down looks like: an empty
-    // mountpoint, or none. A read error is what one that is partly there looks like.
-    // Either way some cache files would look orphaned only because their photos are
-    // out of sight, and once the share is back those photos would have to be made
-    // again, so `None` removes no orphans. The rest of the cleanup doesn't depend on
-    // the photos and goes ahead.
-    let valid_prefixes = match collect_valid_prefixes(images_dir) {
-        Ok(prefixes) if !prefixes.is_empty() => Some(prefixes),
-        Ok(_) => {
-            log!("No photos found in {images_dir}; removing no orphaned cache files");
-            None
-        }
-        Err(e) => {
-            log!("Couldn't read all of {images_dir} ({e}); removing no orphaned cache files");
-            None
-        }
-    };
+    // `None` removes no orphans. The rest of the cleanup doesn't depend on the photos
+    // and goes ahead.
+    let valid_prefixes = valid_prefixes_unless_out_of_sight(images_dir);
 
     let mut orphaned_count = 0;
     let mut old_count = 0;
@@ -868,6 +849,69 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
         unfinished_count,
         error_count
     );
+}
+
+/// The path-encoded prefix `process_and_cache_image` gives the cache files of each
+/// photo in `images_dir`, for [`cleanup_cache`] to tell orphans by. Building it from
+/// the photos avoids the ambiguous reverse decoding that once deleted cache files for
+/// any photo whose name contained `_` or `_w`.
+///
+/// `None` when some photos may be out of sight, so that no cache file counts as an
+/// orphan: once the share is back those photos would have to be made again. A NAS
+/// share that is down holds no gallery but the home gallery's directory, which the
+/// server makes for itself and which may hold a photo or two; the server tells an
+/// outage from a missing gallery by the same rule.
+fn valid_prefixes_unless_out_of_sight(
+    images_dir: &str,
+) -> Option<std::collections::HashSet<String>> {
+    let images_root = Path::new(images_dir);
+    let home_dir = crate::paths::home_gallery_dir_in(images_root);
+    prefixes_unless_out_of_sight(
+        images_dir,
+        &home_dir,
+        || crate::gallery::images_root_looks_unmounted(images_root, &home_dir),
+        || collect_valid_prefixes(images_dir),
+    )
+}
+
+/// [`valid_prefixes_unless_out_of_sight`], given the check for an unmounted share and
+/// the walk, so tests can change the share while it walks.
+///
+/// The share is checked before the walk and again after it. One that comes up
+/// during the walk, as a share mounted after the server starts can, would show the
+/// walk only part of itself, and so would one that goes down during it. A read error
+/// during the walk is what a share that is partly there looks like, and a walk that
+/// finds no photos at all is taken for one that isn't there.
+fn prefixes_unless_out_of_sight(
+    images_dir: &str,
+    home_dir: &Path,
+    mut looks_unmounted: impl FnMut() -> bool,
+    walk: impl FnOnce() -> std::io::Result<std::collections::HashSet<String>>,
+) -> Option<std::collections::HashSet<String>> {
+    let home = home_dir.display();
+    if looks_unmounted() {
+        log!(
+            "{images_dir} looks unmounted (no gallery but {home}); removing no orphaned cache files"
+        );
+        return None;
+    }
+    match walk() {
+        Ok(_) if looks_unmounted() => {
+            log!(
+                "{images_dir} looks unmounted after the walk (no gallery but {home}); removing no orphaned cache files"
+            );
+            None
+        }
+        Ok(prefixes) if !prefixes.is_empty() => Some(prefixes),
+        Ok(_) => {
+            log!("No photos found in {images_dir}; removing no orphaned cache files");
+            None
+        }
+        Err(e) => {
+            log!("Couldn't read all of {images_dir} ({e}); removing no orphaned cache files");
+            None
+        }
+    }
 }
 
 /// Parse the source-path prefix out of a cache filename.
@@ -1091,6 +1135,7 @@ fn collect_image_paths_recursive(dir: &std::path::Path, base: &str, paths: &mut 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::test_support::EnvVarGuard;
     use serial_test::serial;
     use std::fs;
     use std::time::{Duration, SystemTime};
@@ -1617,7 +1662,7 @@ pub(crate) mod tests {
     #[test]
     fn cleanup_cache_keeps_caches_for_underscored_source_names() {
         // Regression: the previous `_` → `/` reverse decoded
-        // `home_space_needle` as `home/space/needle`, found no source, and
+        // `nature_space_needle` as `nature/space/needle`, found no source, and
         // wrongly deleted the cache. The new code looks up the literal prefix
         // in the set built from a directory walk.
         let dir = TempDir::new().unwrap();
@@ -1625,9 +1670,9 @@ pub(crate) mod tests {
         let cache = dir.path().join("cache");
         fs::create_dir_all(&images).unwrap();
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/space_needle.jpg"), STUB);
+        write_jpeg(&images.join("nature/space_needle.jpg"), STUB);
 
-        let kept = cache.join("home_space_needle_w2400_q80_l1.webp");
+        let kept = cache.join("nature_space_needle_w2400_q80_l1.webp");
         fs::write(&kept, b"webp").unwrap();
 
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
@@ -1644,10 +1689,10 @@ pub(crate) mod tests {
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/kept.jpg"), STUB);
-        let kept = cache.join("home_kept_w2400_q80_l1.webp");
+        write_jpeg(&images.join("nature/kept.jpg"), STUB);
+        let kept = cache.join("nature_kept_w2400_q80_l1.webp");
         fs::write(&kept, b"webp").unwrap();
-        let orphan = cache.join("home_deleted_w2400_q80_l1.webp");
+        let orphan = cache.join("nature_deleted_w2400_q80_l1.webp");
         fs::write(&orphan, b"webp").unwrap();
 
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
@@ -1660,7 +1705,9 @@ pub(crate) mod tests {
     // only the empty home gallery directory the server makes for itself. Every cache
     // file would look orphaned, and remaking them all costs every photo's transcode.
     #[test]
+    #[serial] // reads GALLERY_PATH, which other tests set
     fn cleanup_cache_removes_no_orphans_while_the_images_folder_has_no_photos() {
+        unsafe { std::env::remove_var("GALLERY_PATH") };
         let dir = TempDir::new().unwrap();
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
@@ -1675,6 +1722,170 @@ pub(crate) mod tests {
         assert!(cached.exists(), "a photo out of sight keeps its cache file");
         assert!(!leftover.exists(), "a crash's leftover is removed");
         assert!(!old.exists(), "a file unused for 30 days is removed");
+    }
+
+    /// One cache file in `cache` for each of `prefixes`.
+    fn cache_files(cache: &Path, prefixes: &[&str]) -> Vec<PathBuf> {
+        prefixes
+            .iter()
+            .map(|prefix| {
+                let file = cache.join(format!("{prefix}_w2400_q80_l1.webp"));
+                fs::write(&file, b"webp").unwrap();
+                file
+            })
+            .collect()
+    }
+
+    // An outage with a photo in the home gallery's directory, which the server makes
+    // for itself: a photo there doesn't show that the share is back. The photos of
+    // every other gallery are out of sight, not gone.
+    #[test]
+    #[serial] // reads GALLERY_PATH, which other tests set
+    fn cleanup_cache_removes_no_orphans_while_only_the_home_gallery_is_there() {
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/sunset.jpg"), STUB);
+        let cached = cache_files(&cache, &["home_sunset", "nature_bird", "travel_glacier"]);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for file in cached {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
+    }
+
+    #[test]
+    #[serial] // reads GALLERY_PATH, which other tests set
+    fn cleanup_cache_removes_orphans_once_another_gallery_is_there() {
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/sunset.jpg"), STUB);
+        write_jpeg(&images.join("nature/bird.jpg"), STUB);
+        let kept = cache_files(&cache, &["home_sunset", "nature_bird"]);
+        let orphans = cache_files(&cache, &["travel_glacier"]);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for file in kept {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
+        for file in orphans {
+            assert!(!file.exists(), "{} was kept", file.display());
+        }
+    }
+
+    // The share can go down between the check that it's there and the walk, which
+    // then finds an empty mountpoint. The galleries the check saw are gone, so take
+    // a walk that finds no photos for that, even with gallery folders in place.
+    #[test]
+    #[serial] // reads GALLERY_PATH, which other tests set
+    fn cleanup_cache_removes_no_orphans_when_the_walk_finds_no_photos() {
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(images.join("home")).unwrap();
+        fs::create_dir_all(images.join("nature")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let cached = cache_files(&cache, &["home_sunset", "nature_bird"]);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for file in cached {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
+    }
+
+    /// [`prefixes_unless_out_of_sight`] over a share that is mounted while `mounted`
+    /// holds, with a walk that finds `home/sunset` and leaves the share mounted or not
+    /// as `mounted_after` says.
+    fn prefixes_with_share_changing(
+        mounted: bool,
+        mounted_after: bool,
+    ) -> Option<std::collections::HashSet<String>> {
+        let mounted = std::cell::Cell::new(mounted);
+        prefixes_unless_out_of_sight(
+            "images",
+            Path::new("images/home"),
+            || !mounted.get(),
+            || {
+                mounted.set(mounted_after);
+                Ok(["home_sunset".to_string()].into())
+            },
+        )
+    }
+
+    // A walk while the share goes down sees only part of it, here the photo left in
+    // `home`; the check after the walk catches that.
+    #[test]
+    fn prefixes_unless_out_of_sight_when_the_share_goes_down_during_the_walk() {
+        assert_eq!(prefixes_with_share_changing(true, false), None);
+    }
+
+    // A share mounted after the server starts can come up during the walk, which
+    // then sees only part of it; the check before the walk catches that.
+    #[test]
+    fn prefixes_unless_out_of_sight_when_the_share_comes_up_during_the_walk() {
+        assert_eq!(prefixes_with_share_changing(false, true), None);
+    }
+
+    #[test]
+    fn prefixes_unless_out_of_sight_keeps_what_the_walk_found_while_the_share_stays_up() {
+        assert_eq!(
+            prefixes_with_share_changing(true, true),
+            Some(["home_sunset".to_string()].into())
+        );
+    }
+
+    // `GALLERY_PATH` can put the home gallery inside the images folder under a name
+    // of its own. The server makes that directory too, so it's the one that doesn't
+    // count as a gallery.
+    #[test]
+    #[serial]
+    fn cleanup_cache_removes_no_orphans_while_only_the_gallery_path_gallery_is_there() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("landing/sunset.jpg"), STUB);
+        let _gallery_path = EnvVarGuard::set("GALLERY_PATH", images.join("landing"));
+        let cached = cache_files(&cache, &["landing_sunset", "nature_bird"]);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for file in cached {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
+    }
+
+    // With `GALLERY_PATH` outside the images folder, a `home` inside it is a gallery
+    // like any other.
+    #[test]
+    #[serial]
+    fn cleanup_cache_counts_home_as_a_gallery_while_gallery_path_is_elsewhere() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        write_jpeg(&images.join("home/sunset.jpg"), STUB);
+        let _gallery_path = EnvVarGuard::set("GALLERY_PATH", dir.path().join("landing"));
+        let kept = cache_files(&cache, &["home_sunset"]);
+        let orphans = cache_files(&cache, &["home_gone"]);
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for file in kept {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
+        for file in orphans {
+            assert!(!file.exists(), "{} was kept", file.display());
+        }
     }
 
     // A share that is only partly there: one gallery lists, another can't be. The
@@ -1721,7 +1932,7 @@ pub(crate) mod tests {
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        write_jpeg(&images.join("travel/pic.jpg"), STUB);
         std::os::unix::fs::symlink("nature", images.join("nature")).unwrap();
         let hidden = cache.join("nature_bird_w2400_q80_l1.webp");
         fs::write(&hidden, b"webp").unwrap();
@@ -1739,7 +1950,7 @@ pub(crate) mod tests {
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        write_jpeg(&images.join("travel/pic.jpg"), STUB);
         std::os::unix::fs::symlink("nature", images.join("nature")).unwrap();
         let hidden = cache.join("nature_bird_w2400_q80_l1.webp");
         fs::write(&hidden, b"webp").unwrap();
@@ -1778,11 +1989,11 @@ pub(crate) mod tests {
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        write_jpeg(&images.join("nature/pic.jpg"), STUB);
         std::os::unix::fs::symlink("gone", images.join("missing")).unwrap();
-        std::os::unix::fs::symlink("home/pic.jpg/x", images.join("through_a_file")).unwrap();
+        std::os::unix::fs::symlink("nature/pic.jpg/x", images.join("through_a_file")).unwrap();
         std::os::unix::fs::symlink("x".repeat(300), images.join("name_too_long")).unwrap();
-        let orphan = cache.join("home_deleted_w2400_q80_l1.webp");
+        let orphan = cache.join("nature_deleted_w2400_q80_l1.webp");
         fs::write(&orphan, b"webp").unwrap();
 
         cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
@@ -1798,7 +2009,7 @@ pub(crate) mod tests {
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/pic.jpg"), STUB);
+        write_jpeg(&images.join("nature/pic.jpg"), STUB);
         let stray = cache.join("README.txt");
         fs::write(&stray, b"hello").unwrap();
 
@@ -1814,8 +2025,8 @@ pub(crate) mod tests {
         let images = dir.path().join("images");
         let cache = dir.path().join("cache");
         fs::create_dir_all(&cache).unwrap();
-        write_jpeg(&images.join("home/pic.jpg"), STUB);
-        let leftover = cache.join("home_pic_w2400_q90_l1.webp.4242-7.tmp");
+        write_jpeg(&images.join("nature/pic.jpg"), STUB);
+        let leftover = cache.join("nature_pic_w2400_q90_l1.webp.4242-7.tmp");
         fs::write(&leftover, b"half a picture").unwrap();
         let stray = cache.join("notes.tmp");
         fs::write(&stray, b"not ours").unwrap();

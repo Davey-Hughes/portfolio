@@ -316,19 +316,14 @@ pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> 
     }
 }
 
-/// True when the images root holds no gallery besides the home gallery's own
-/// directory: it can't be read, or it is empty apart from what the server makes
-/// by itself (`home`, or wherever `GALLERY_PATH` points, created by the image
-/// watcher and `load_home_photos`). That is what a NAS mount that is down looks
-/// like. Then an empty lookup is a failure, not proof that a gallery or photo
-/// doesn't exist, which would answer 404 for all of them.
+/// [`crate::gallery::images_root_looks_unmounted`] for the server's images root and
+/// home gallery.
 #[cfg(feature = "ssr")]
 fn images_root_looks_unmounted() -> bool {
-    let canonical = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or(p.into());
-    let home = canonical(&crate::paths::home_gallery_dir());
-    !crate::gallery::discover_gallery_directories()
-        .iter()
-        .any(|dir| canonical(std::path::Path::new(dir)) != home)
+    crate::gallery::images_root_looks_unmounted(
+        &crate::paths::images_root(),
+        &crate::paths::home_gallery_dir(),
+    )
 }
 
 /// Every gallery's photos (an expensive walk), or `None` when there are none and
