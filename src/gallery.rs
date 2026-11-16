@@ -766,17 +766,20 @@ fn extract_lens_candidates_from_xmp(path: &Path) -> XmpLensCandidates {
 /// Pixel dimensions from EXIF, falling back to the image header.
 ///
 /// A surprising number of exports carry EXIF but omit the dimension tags, so the
-/// header read is the common path rather than an exotic fallback.
+/// header read is the common path rather than an exotic fallback. A tag that says 0
+/// counts as missing too.
 fn exif_dimensions(exif_reader: &exif::Exif, path: &Path) -> (Option<u32>, Option<u32>) {
     let mut width = exif_reader
         .get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
         .or_else(|| exif_reader.get_field(exif::Tag::ImageWidth, exif::In::PRIMARY))
-        .and_then(|f| f.value.get_uint(0));
+        .and_then(|f| f.value.get_uint(0))
+        .filter(|&w| w > 0);
 
     let mut height = exif_reader
         .get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
         .or_else(|| exif_reader.get_field(exif::Tag::ImageLength, exif::In::PRIMARY))
-        .and_then(|f| f.value.get_uint(0));
+        .and_then(|f| f.value.get_uint(0))
+        .filter(|&h| h > 0);
 
     if (width.is_none() || height.is_none())
         && let Ok(mut reader) = image::ImageReader::open(path)
@@ -2150,6 +2153,23 @@ mod tests {
         let model = exif.camera_model.expect("Model should parse");
         assert!(make.contains("ACME"), "got: {make}");
         assert!(model.contains("X100"), "got: {model}");
+    }
+
+    // The photo page sizes the photo's box from these, so a 0 would hide the photo.
+    #[test]
+    fn extract_exif_data_reads_the_header_when_the_size_tags_say_zero() {
+        use little_exif::{exif_tag::ExifTag, metadata::Metadata};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fixture.jpg");
+        image::RgbImage::new(40, 30).save(&path).unwrap();
+        let mut meta = Metadata::new();
+        meta.set_tag(ExifTag::ExifImageWidth(vec![0]));
+        meta.set_tag(ExifTag::ExifImageHeight(vec![0]));
+        meta.write_to_file(&path).unwrap();
+
+        let exif = extract_exif_data(&path);
+        assert_eq!((exif.width, exif.height), (Some(40), Some(30)));
     }
 
     #[test]

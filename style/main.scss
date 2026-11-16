@@ -471,11 +471,16 @@ img {
   flex: 0 1 auto;
   min-width: 0;
   min-height: 0;
+  // With `min-width: 0` on the picture, this keeps a photo that failed to load
+  // within the screen. A failed photo no longer sizes like an image, so nothing
+  // else narrows the width the photo below reserves for it.
+  max-width: 100%;
   margin-right: 2rem;
   padding: 2rem 0;
 
   picture {
     display: block;
+    min-width: 0;
     max-width: 100%;
     max-height: 100%;
     width: auto;
@@ -483,13 +488,37 @@ img {
   }
 
   img {
+    --photo-max-height: calc(100vh - 250px);
     display: block;
     max-width: 100%;
-    max-height: calc(100vh - 250px);
+    max-height: var(--photo-max-height);
     height: auto;
-    width: auto;
+    // The size the photo will have, so its box holds that space before the file
+    // arrives: as tall as the limit above allows, but no wider than the photo itself,
+    // and `max-width` narrows it to the space it has. The shape is set too, because
+    // Next and Previous keep this <img> and the browser would otherwise keep the last
+    // photo's shape until the new file arrives.
+    //
+    // Both need `--photo-width` and `--photo-height`, which the page sets when it
+    // knows the photo's size, and that size has to match the file shown. Without
+    // them both declarations are invalid, `width` and `aspect-ratio` fall back to
+    // `auto`, and the box takes its size from the file when it arrives.
+    width: min(
+      calc(var(--photo-width) * 1px),
+      calc(var(--photo-max-height) * var(--photo-width) / var(--photo-height))
+    );
+    aspect-ratio: var(--photo-width) / var(--photo-height);
     object-fit: contain;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+    // Nothing is drawn in the box until a photo arrives (after Next or Previous, the
+    // last photo stays up until then). The shadow follows the photo's pixels rather
+    // than the box. drop-shadow's blur is half box-shadow's for the same softness,
+    // so this matches the `box-shadow: 0 10px 40px` it replaced on a loaded photo.
+    // The alt text is hidden: Firefox draws it while the photo loads, and both
+    // browsers draw it if the photo fails, which now leaves the box empty in Firefox
+    // and shows only the broken-image icon in Chrome. Screen readers still read it,
+    // and the title next to the photo names it anyway.
+    filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.15));
+    color: transparent;
   }
 }
 
@@ -1564,7 +1593,7 @@ img {
   }
 
   .photo-detail-image img {
-    max-height: 60vh;
+    --photo-max-height: 60vh;
   }
 
   .about-container {
@@ -1688,7 +1717,7 @@ img {
   }
 
   .photo-detail-image img {
-    max-height: 50vh;
+    --photo-max-height: 50vh;
   }
 
   .photo-detail-info {

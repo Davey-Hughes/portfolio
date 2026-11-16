@@ -1871,6 +1871,12 @@ fn PhotoDetailPage() -> impl IntoView {
                 let photo_url_original = StoredValue::new(photo.original_url.clone());
                 let photo_sources_original = StoredValue::new(photo.original_sources.clone());
                 let photo_title = photo.title.clone();
+                // With these, the stylesheet makes room for the photo before the file
+                // arrives (`.photo-detail-image img`).
+                let photo_size_style = photo
+                    .width
+                    .zip(photo.height)
+                    .map(|(w, h)| format!("--photo-width: {w}; --photo-height: {h}"));
                 let back_link = if photo.gallery_name == "home" {
                     "/".to_string()
                 } else {
@@ -1922,6 +1928,7 @@ fn PhotoDetailPage() -> impl IntoView {
                                         <img
                                             src=photo_url_detail.get_value()
                                             alt=photo_title.clone()
+                                            style=photo_size_style
                                             width=photo.width.unwrap_or(3600)
                                             height=photo.height.unwrap_or(2400)
                                             decoding="async"
@@ -2838,6 +2845,36 @@ mod ssr_tests {
     async fn get(path: &str) -> (StatusCode, String) {
         let (status, _, body) = get_with_headers(path).await;
         (status, body)
+    }
+
+    // The stylesheet sizes the photo's box from these before the file arrives
+    // (`.photo-detail-image img` in style/main.scss). A photo whose size isn't known
+    // gets neither, so its box waits for the file rather than taking a guessed shape.
+    #[tokio::test]
+    #[serial]
+    async fn the_photo_page_sends_the_photos_size_when_it_is_known() {
+        use little_exif::{exif_tag::ExifTag, metadata::Metadata};
+
+        let site = Site::with_home_photo();
+        // EXIF without size tags, so the size comes from the image header.
+        let tagged = site.dir.path().join("images/home/tagged.jpg");
+        image::RgbImage::new(40, 30).save(&tagged).unwrap();
+        let mut exif = Metadata::new();
+        exif.set_tag(ExifTag::Make("NIKON CORPORATION".to_string()));
+        exif.write_to_file(&tagged).unwrap();
+
+        let (status, body) = get("/gallery/home/tagged").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.contains(r#"style="--photo-width: 40; --photo-height: 30"#),
+            "{body}"
+        );
+
+        // `photo.jpg` has no EXIF at all, so the server doesn't read its size.
+        let (status, body) = get("/gallery/home/photo").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("photo-detail-image"), "{body}");
+        assert!(!body.contains("--photo-width"), "{body}");
     }
 
     #[tokio::test]

@@ -76,3 +76,17 @@ export async function holdApi(page: Page): Promise<() => void> {
   });
   return release;
 }
+
+/**
+ * Hold every request under `/images/` (the photo files) until the returned `release`
+ * is called, so a test can look at a page before its photos arrive.
+ */
+export async function holdPhotos(page: Page): Promise<() => void> {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/images\//, async (route) => {
+    await held;
+    await route.continue();
+  });
+  return release;
+}
