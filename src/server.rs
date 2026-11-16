@@ -1,6 +1,6 @@
 use crate::config::SiteConfig;
 use crate::open_source::OpenSourceContent;
-use crate::types::{AboutContent, GalleryData, GalleryInfo, PhotoInfo};
+use crate::types::{AboutContent, AllPhotos, GalleryData, GalleryInfo, PhotoInfo};
 use leptos::prelude::*;
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ struct MosaicCache {
 
 #[cfg(feature = "ssr")]
 struct CachedAllPhotos {
-    photos: Arc<Vec<PhotoInfo>>,
+    all: AllPhotos,
     expires_at: u64, // Unix timestamp
 }
 
@@ -91,12 +91,12 @@ impl AllPhotosCache {
         Self { cached_data: None }
     }
 
-    fn get(&mut self) -> Option<Arc<Vec<PhotoInfo>>> {
+    fn get(&mut self) -> Option<AllPhotos> {
         let now = now_unix_secs();
 
         if let Some(cached) = &self.cached_data {
             if cached.expires_at > now {
-                return Some(Arc::clone(&cached.photos));
+                return Some(cached.all.clone());
             }
 
             // Expired, remove it
@@ -105,9 +105,9 @@ impl AllPhotosCache {
         None
     }
 
-    fn set(&mut self, photos: Arc<Vec<PhotoInfo>>, duration_secs: u64) {
+    fn set(&mut self, all: AllPhotos, duration_secs: u64) {
         let expires_at = now_unix_secs() + duration_secs;
-        self.cached_data = Some(CachedAllPhotos { photos, expires_at });
+        self.cached_data = Some(CachedAllPhotos { all, expires_at });
     }
 
     fn clear_all(&mut self) {
@@ -326,20 +326,68 @@ fn images_root_looks_unmounted() -> bool {
     )
 }
 
-/// Every gallery's photos (an expensive walk), or `None` when there are none and
-/// the images root looks unmounted. That is an outage, not an empty site, and the
-/// empty list must not be cached.
+/// How long the all-photos list is cached, in seconds, when it was loaded with the
+/// images root mounted: ten minutes. The image watcher clears it sooner when a photo
+/// changes.
 #[cfg(feature = "ssr")]
-fn load_all_photos_unless_unmounted() -> Option<Arc<Vec<PhotoInfo>>> {
+const ALL_PHOTOS_TTL: u64 = 600;
+
+/// How long the all-photos list is cached, in seconds, when the images root looked
+/// unmounted as it was loaded (`AllPhotos::root_looks_unmounted`): 15 seconds, as
+/// long as the HTML cache in `main.rs` keeps a page.
+///
+/// Short, because such a list may be missing photos that are only out of sight, and
+/// the page of each of them answers 503 until the entry expires. Once the share is
+/// back, that is no longer than a page served from the HTML cache can already be out
+/// of date. Not nothing, because a site whose only gallery is home always looks
+/// unmounted, share up or not, as does one whose only galleries are home and the
+/// directories on the way to a nested `GALLERY_PATH`. Without a cache, such a site
+/// would walk its galleries and read every photo's metadata again for each photo
+/// page and each visit within the app; with one, about once per 15 seconds.
+#[cfg(feature = "ssr")]
+const UNMOUNTED_ALL_PHOTOS_TTL: u64 = 15;
+
+/// How long to cache `all`: [`UNMOUNTED_ALL_PHOTOS_TTL`] when it is marked
+/// `root_looks_unmounted`, else [`ALL_PHOTOS_TTL`].
+#[cfg(feature = "ssr")]
+fn all_photos_ttl(all: &AllPhotos) -> u64 {
+    if all.root_looks_unmounted {
+        UNMOUNTED_ALL_PHOTOS_TTL
+    } else {
+        ALL_PHOTOS_TTL
+    }
+}
+
+/// Every gallery's photos (an expensive walk), marked when the images root looks
+/// unmounted, or `None` when it does and there are none. That is an outage, not an
+/// empty site.
+#[cfg(feature = "ssr")]
+fn load_all_photos() -> Option<AllPhotos> {
     let photos = crate::gallery::load_all_gallery_photos();
-    if photos.is_empty() && images_root_looks_unmounted() {
+    let root_looks_unmounted = images_root_looks_unmounted();
+    if photos.is_empty() && root_looks_unmounted {
         None
     } else {
-        Some(Arc::new(photos))
+        Some(AllPhotos {
+            photos: Arc::new(photos),
+            root_looks_unmounted,
+        })
     }
 }
 
 /// Server function to get photos from ALL galleries (for photo detail page)
+///
+/// While the images root looks unmounted, it is `Err` when no photo is in sight, and
+/// that isn't cached. Otherwise it is the photos that are in sight, such as one left
+/// in the home gallery's directory under the mountpoint, marked
+/// `root_looks_unmounted` and cached for only [`UNMOUNTED_ALL_PHOTOS_TTL`] seconds. A
+/// photo page that can't find its photo in such a list answers 503, not 404.
+///
+/// A site whose only gallery is home always looks unmounted, with the share up too,
+/// as does one whose only galleries are home and the directories on the way to a
+/// nested `GALLERY_PATH`. Such a site always gets the marked list: there a missing
+/// photo answers 503, not 404, and the list is cached only briefly. A missing
+/// gallery answers 503 on such a site already (`get_gallery_data_by_name`).
 ///
 /// On the server this must finish without waiting: no `.await` that can be pending,
 /// no async lock, no `spawn_blocking`. The photo page counts a shown photo while its
@@ -347,7 +395,7 @@ fn load_all_photos_unless_unmounted() -> Option<Arc<Vec<PhotoInfo>>> {
 /// if this has already returned. A photo page whose request waits here goes out with
 /// its footer showing, and hydration keeps it. See `Footer` in `app.rs`.
 #[server(GetAllGalleryPhotos, "/api")]
-pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnError> {
+pub async fn get_all_gallery_photos() -> Result<AllPhotos, ServerFnError> {
     #[cfg(feature = "ssr")]
     {
         use leptos::logging::log;
@@ -361,23 +409,24 @@ pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnErr
             Err(_) => log!("ALL_PHOTOS_CACHE lock poisoned (read); regenerating"),
         }
 
-        // A photo page that can't find its photo here is a 404, so during an
-        // outage fail the lookup instead, and don't cache it past the outage.
-        let Some(photos) = load_all_photos_unless_unmounted() else {
+        // During an outage with no photo in sight at all, the lookup fails.
+        let Some(all) = load_all_photos() else {
             return Err(ServerFnError::new("the images root holds no galleries"));
         };
 
-        // Cache the result for 10 minutes (600 seconds)
         match ALL_PHOTOS_CACHE.lock() {
-            Ok(mut cache) => cache.set(Arc::clone(&photos), 600),
+            Ok(mut cache) => cache.set(all.clone(), all_photos_ttl(&all)),
             Err(_) => log!("ALL_PHOTOS_CACHE lock poisoned (write); skipping cache"),
         }
 
-        Ok(photos)
+        Ok(all)
     }
     #[cfg(not(feature = "ssr"))]
     {
-        Ok(Arc::new(Vec::new()))
+        Ok(AllPhotos {
+            photos: Arc::new(Vec::new()),
+            root_looks_unmounted: false,
+        })
     }
 }
 
@@ -536,22 +585,31 @@ pub async fn has_open_source() -> Result<bool, ServerFnError> {
     }
 }
 
-/// Pre-warm the all-photos cache on server startup
+/// Pre-warm the all-photos cache on server startup, by the same rule as
+/// [`get_all_gallery_photos`]: a marked list only briefly, and no list at all during
+/// an outage with no photo in sight.
 #[cfg(feature = "ssr")]
 pub fn prewarm_all_photos_cache() {
     use leptos::logging::log;
 
     log!("Pre-warming all-photos cache...");
 
-    let Some(photos) = load_all_photos_unless_unmounted() else {
+    let Some(all) = load_all_photos() else {
         log!("All-photos cache not pre-warmed: the images root holds no galleries");
         return;
     };
 
+    let ttl = all_photos_ttl(&all);
+    // A marked list is no sign that all is well, so say why it is kept only briefly.
+    let why = if all.root_looks_unmounted {
+        " (the images root looks unmounted)"
+    } else {
+        ""
+    };
     match ALL_PHOTOS_CACHE.lock() {
         Ok(mut cache) => {
-            cache.set(photos, 600);
-            log!("All-photos cache pre-warmed successfully");
+            cache.set(all, ttl);
+            log!("All-photos cache pre-warmed successfully, for {ttl} s{why}");
         }
         Err(_) => log!("Failed to acquire lock for all-photos cache pre-warming"),
     }
@@ -694,16 +752,27 @@ mod tests {
     fn all_photos_cache_set_and_get_returns_arc() {
         let mut cache = AllPhotosCache::new();
         let photos = Arc::new(Vec::<PhotoInfo>::new());
-        cache.set(Arc::clone(&photos), 600);
+        let all = AllPhotos {
+            photos: Arc::clone(&photos),
+            root_looks_unmounted: true,
+        };
+        cache.set(all, 600);
         let got = cache.get().expect("entry should be cached");
-        assert!(Arc::ptr_eq(&got, &photos));
+        assert!(Arc::ptr_eq(&got.photos, &photos));
+        assert!(
+            got.root_looks_unmounted,
+            "the mark comes back as it was set"
+        );
     }
 
     #[test]
     fn all_photos_cache_get_evicts_expired_entry() {
         let mut cache = AllPhotosCache::new();
         cache.cached_data = Some(CachedAllPhotos {
-            photos: Arc::new(Vec::new()),
+            all: AllPhotos {
+                photos: Arc::new(Vec::new()),
+                root_looks_unmounted: false,
+            },
             expires_at: 0,
         });
         assert!(cache.get().is_none());
@@ -1050,7 +1119,7 @@ mod tests {
                 .unwrap();
         };
         let addresses = || {
-            let all = block_on(get_all_gallery_photos()).unwrap()[0]
+            let all = block_on(get_all_gallery_photos()).unwrap().photos[0]
                 .original_url
                 .clone();
             let gallery = block_on(get_gallery_data_by_name("nature".to_string()))
@@ -1176,7 +1245,11 @@ mod tests {
         invalidate_caches();
 
         assert!(during.is_err(), "{during:?}");
-        assert_eq!(after.unwrap().len(), 1, "the outage result wasn't cached");
+        assert_eq!(
+            after.unwrap().photos.len(),
+            1,
+            "the outage result wasn't cached"
+        );
     }
 
     #[test]
@@ -1196,6 +1269,126 @@ mod tests {
         invalidate_caches();
 
         assert!(after.is_err(), "{after:?}");
+    }
+
+    /// Runs `cache_it`, which caches the all-photos list, and returns its result and
+    /// how long the list is cached for, in seconds. That is a range, since the clock
+    /// can tick between its reading before `cache_it` and the one after.
+    fn cached_for<T>(cache_it: impl FnOnce() -> T) -> (T, std::ops::RangeInclusive<u64>) {
+        let before = now_unix_secs();
+        let result = cache_it();
+        let after = now_unix_secs();
+        // The lock is let go before the `expect`: a test that panics while holding it
+        // would poison the cache for every test after it.
+        let expires_at = ALL_PHOTOS_CACHE
+            .lock()
+            .unwrap()
+            .cached_data
+            .as_ref()
+            .map(|cached| cached.expires_at);
+        let expires_at = expires_at.expect("a list is cached");
+        (result, expires_at - after..=expires_at - before)
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn all_gallery_photos_left_in_home_during_an_outage_are_cached_only_briefly() {
+        // A dead mountpoint whose `home` still holds a photo, such as one left there
+        // under the mountpoint: the walk finds that photo and nothing else. Cached for
+        // the usual ten minutes, that list would make every other photo page fail for
+        // ten minutes after the share came back.
+        let root = images_dir_with_gallery("home", "");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let (during, during_ttl) = cached_for(|| block_on(get_all_gallery_photos()));
+        let dir = root.path().join("nature");
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(dir.join("photo.jpg"))
+            .unwrap();
+        let back = block_on(get_all_gallery_photos());
+        expire_all_photos_cache();
+        let (after, after_ttl) = cached_for(|| block_on(get_all_gallery_photos()));
+        invalidate_caches();
+
+        let during = during.unwrap();
+        assert_eq!(during.photos.len(), 1, "the photo in sight is listed");
+        assert!(during.root_looks_unmounted);
+        assert!(during_ttl.contains(&15), "{during_ttl:?}");
+        let back = back.unwrap();
+        assert_eq!(back.photos.len(), 1, "the outage's list, still cached");
+        assert!(back.root_looks_unmounted, "as it was loaded");
+        let after = after.unwrap();
+        assert_eq!(after.photos.len(), 2, "reloaded once the entry expired");
+        assert!(!after.root_looks_unmounted);
+        assert!(after_ttl.contains(&600), "{after_ttl:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_home_only_site_serves_its_cached_photos_until_they_expire() {
+        // With the share up, a site whose only gallery is home looks unmounted too, so
+        // its list is marked. It is still cached, if briefly: without that, every photo
+        // page and every visit within the app would walk the gallery again.
+        let root = images_dir_with_gallery("home", "");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let first = block_on(get_all_gallery_photos());
+        image::RgbImage::new(4, 3)
+            .save(root.path().join("home/second.jpg"))
+            .unwrap();
+        let second = block_on(get_all_gallery_photos());
+        expire_all_photos_cache();
+        let expired = block_on(get_all_gallery_photos());
+        invalidate_caches();
+
+        assert_eq!(first.unwrap().photos.len(), 1);
+        let second = second.unwrap();
+        assert_eq!(second.photos.len(), 1, "served from the cache, not walked");
+        assert!(second.root_looks_unmounted);
+        let expired = expired.unwrap();
+        assert_eq!(
+            expired.photos.len(),
+            2,
+            "walked again once the entry expired"
+        );
+        assert!(expired.root_looks_unmounted);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn prewarming_caches_the_list_for_as_long_as_a_lookup_does() {
+        // A server that starts during an outage with a photo left in `home`, or on a
+        // site whose only gallery is home: 15 seconds, as above. With another
+        // gallery there, ten minutes.
+        let root = images_dir_with_gallery("home", "");
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let ((), marked_ttl) = cached_for(prewarm_all_photos_cache);
+        let marked = block_on(get_all_gallery_photos());
+        invalidate_caches();
+        let dir = root.path().join("nature");
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbImage::new(4, 3)
+            .save(dir.join("photo.jpg"))
+            .unwrap();
+        let ((), mounted_ttl) = cached_for(prewarm_all_photos_cache);
+        invalidate_caches();
+
+        assert!(marked_ttl.contains(&15), "{marked_ttl:?}");
+        let marked = marked.unwrap();
+        assert_eq!(marked.photos.len(), 1);
+        assert!(
+            marked.root_looks_unmounted,
+            "the prewarmed list, as it was loaded"
+        );
+        assert!(mounted_ttl.contains(&600), "{mounted_ttl:?}");
     }
 
     #[test]
@@ -1314,6 +1507,16 @@ pub fn invalidate_caches() {
     match ALL_PHOTOS_CACHE.lock() {
         Ok(mut cache) => cache.clear_all(),
         Err(_) => log!("ALL_PHOTOS_CACHE lock poisoned during invalidation; skipping"),
+    }
+}
+
+/// Ends the cached all-photos list's time now, as if its TTL had run out, for the
+/// tests that can't wait that long. The entry stays until the next lookup finds it
+/// expired, as it would.
+#[cfg(all(test, feature = "ssr"))]
+pub(crate) fn expire_all_photos_cache() {
+    if let Some(cached) = &mut ALL_PHOTOS_CACHE.lock().unwrap().cached_data {
+        cached.expires_at = 0;
     }
 }
 

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Represents an image source with its URL and MIME type for use in <picture> elements
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -256,6 +257,23 @@ pub struct MosaicLayout {
 pub struct GalleryData {
     pub photos: Vec<PhotoInfo>,
     pub mosaic_layout: Option<MosaicLayout>, // Desktop layout
+}
+
+/// Every gallery's photos, the list a photo page looks its photo up in.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AllPhotos {
+    pub photos: Arc<Vec<PhotoInfo>>,
+    /// The images root looked unmounted when the list was loaded: it held no gallery
+    /// but the directories the server makes for itself, as while the share is down
+    /// (`gallery::images_root_looks_unmounted`). A photo missing from the list may
+    /// then only be out of sight, so the photo page answers 503 rather than 404, and
+    /// the list is cached only briefly.
+    ///
+    /// A site whose only gallery is home always looks this way, with the share up
+    /// too, and so does one whose only galleries are home and the directories on the
+    /// way to a `GALLERY_PATH` inside another gallery. There a missing photo always
+    /// answers 503, not 404, and the list is never cached for long.
+    pub root_looks_unmounted: bool,
 }
 
 /// Content for the About page including optional profile image and text.

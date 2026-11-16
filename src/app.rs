@@ -5,7 +5,7 @@ use crate::server::{
     get_home_gallery_config, get_home_gallery_data, get_open_source, get_site_config,
     has_open_source, random_home_photo,
 };
-use crate::types::{PhotoInfo, ViewerImage};
+use crate::types::{AllPhotos, PhotoInfo, ViewerImage};
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
@@ -1775,7 +1775,10 @@ fn PhotoDetailPage() -> impl IntoView {
             let key = event.key();
 
             if let (Some(photo_list), Ok(current_params)) = (
-                photos.get_untracked().and_then(std::result::Result::ok),
+                photos
+                    .get_untracked()
+                    .and_then(std::result::Result::ok)
+                    .map(|all| all.photos),
                 params.get_untracked(),
             ) && let Some((idx, _)) = photo_list
                 .iter()
@@ -1854,23 +1857,35 @@ fn PhotoDetailPage() -> impl IntoView {
                 let Some(slug_val) = params.get().ok().map(|p| p.photo) else {
                     return view! { <NotFound /> }.into_any();
                 };
-                let Some(photo_list) = photos.get().and_then(std::result::Result::ok) else {
-                    #[cfg(feature = "ssr")]
-                    if load_failed(photos.get_untracked().as_ref()) {
-                        mark_unavailable();
-                    }
-                    return view! {
+                let failed = || {
+                    view! {
                         <div class="photo-detail-page">
                             <div class="error">"Failed to load photo"</div>
                         </div>
                     }
-                        .into_any();
+                        .into_any()
+                };
+                let Some(AllPhotos { photos: photo_list, root_looks_unmounted }) = photos
+                    .get()
+                    .and_then(std::result::Result::ok) else {
+                    #[cfg(feature = "ssr")]
+                    if load_failed(photos.get_untracked().as_ref()) {
+                        mark_unavailable();
+                    }
+                    return failed();
                 };
                 let Some((idx, photo)) = photo_list
                     .iter()
                     .enumerate()
                     .find(|(_, p)| p.slug == slug_val)
                     .map(|(i, p)| (i, p.clone())) else {
+                    // While the images root looks unmounted, a photo missing from the
+                    // list may only be out of sight. That is a failed load, not a 404.
+                    if root_looks_unmounted {
+                        #[cfg(feature = "ssr")]
+                        mark_unavailable();
+                        return failed();
+                    }
                     return view! { <NotFound /> }.into_any();
                 };
                 let prev_photo = if idx > 0 { photo_list.get(idx - 1).cloned() } else { None };
@@ -3256,6 +3271,45 @@ mod ssr_tests {
             assert!(body.contains(message), "{path}: {body}");
             assert!(!body.contains("not-found-page"), "{path}: {body}");
         }
+    }
+
+    /// A dead mountpoint whose `home` still holds a photo, such as one left there
+    /// under the mountpoint. That photo's page shows it. Any other photo may only be
+    /// out of sight, so its page answers 503, not 404. The photo list from the outage
+    /// is cached for 15 seconds, so once the share is back the photo is found when
+    /// that runs out.
+    #[tokio::test]
+    #[serial]
+    async fn a_photo_page_during_an_outage_with_a_photo_left_in_home_answers_503() {
+        let site = Site::during_outage();
+        image::RgbImage::new(4, 3)
+            .save(site.dir.path().join("images/home/left.jpg"))
+            .unwrap();
+
+        let (status, body) = get("/gallery/home/left").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("photo-detail-image"), "{body}");
+
+        let (status, headers, body) = get_with_headers("/gallery/nature/photo").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(
+            headers.get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+            Some("300")
+        );
+        assert!(body.contains("Failed to load photo"), "{body}");
+        assert!(!body.contains("not-found-page"), "{body}");
+
+        site.add_photo("nature");
+        let (status, body) = get("/gallery/nature/photo").await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the outage's list, still cached: {body}"
+        );
+        crate::server::expire_all_photos_cache();
+        let (status, body) = get("/gallery/nature/photo").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("photo-detail-image"), "{body}");
     }
 
     /// Guards the photo page's `load_failed` check: only a failed load marks the
