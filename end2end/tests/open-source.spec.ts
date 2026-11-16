@@ -23,7 +23,7 @@ test.describe("Open Source Page", () => {
     const link = page.locator(".oss-card h3 a", { hasText: "Fixture Project" });
     await expect(link).toHaveAttribute("href", "https://example.com/fixture-project");
     await expect(link).toHaveAttribute("target", "_blank");
-    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(link).toHaveAttribute("rel", "noopener");
   });
 
   test("renders a card name as text when it has no url", async ({ page }) => {
@@ -43,7 +43,7 @@ test.describe("Open Source Page", () => {
     await expect(site).toHaveText("fixture-project.example");
     await expect(site).toHaveAttribute("href", "https://www.fixture-project.example/");
     await expect(site).toHaveAttribute("target", "_blank");
-    await expect(site).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(site).toHaveAttribute("rel", "noopener");
     // The website sits beside the heading, not in it: the heading stays the name.
     await expect(card.locator("h3")).toHaveText("Fixture Project");
   });

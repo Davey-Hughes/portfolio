@@ -2164,11 +2164,15 @@ fn srcset_url(url: &str) -> String {
 /// One card on the `/open-source` page. The name links out only when the entry has
 /// a non-blank `url`; highlights likewise fall back to plain text. A card with an
 /// `image` shows it beside the text, and a click opens it in the full-screen viewer.
+///
+/// The card's links are `noopener` without `noreferrer`: several go to the owner's
+/// other sites, whose visit counts read the referrer to see clicks from this page.
+/// Across sites, browsers send only this site's origin.
 #[component]
 fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
     let name = match entry.link() {
         Some(url) => view! {
-            <a href=url.to_string() target="_blank" rel="noopener noreferrer">
+            <a href=url.to_string() target="_blank" rel="noopener">
                 {entry.name.clone()}
             </a>
         }
@@ -2184,7 +2188,7 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
                 <span class="oss-separator" aria-hidden="true">
                     "·"
                 </span>
-                <a href=href target="_blank" rel="noopener noreferrer">
+                <a href=href target="_blank" rel="noopener">
                     {label}
                 </a>
             </span>
@@ -2207,11 +2211,7 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
                         let item = match h.link() {
                             Some(url) => {
                                 view! {
-                                    <a
-                                        href=url.to_string()
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                    >
+                                    <a href=url.to_string() target="_blank" rel="noopener">
                                         {h.title.clone()}
                                     </a>
                                 }
@@ -3051,6 +3051,31 @@ mod ssr_tests {
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("<h1>Open Source</h1>"), "{body}");
         assert!(!body.contains("not-found-page"), "{body}");
+    }
+
+    // The cards link to the owner's other sites, whose visit counts read the referrer
+    // to see clicks from this page.
+    #[tokio::test]
+    #[serial]
+    async fn open_source_card_links_send_the_referrer() {
+        let site = Site::new();
+        site.write_open_source(
+            "[[projects]]\nname = \"P\"\nurl = \"https://example.com/p\"\n\
+             website = \"https://p.example/\"\nsummary = \"S\"\n\
+             [[projects.highlights]]\ntitle = \"H\"\nurl = \"https://example.com/p/1\"\n",
+        );
+        let (status, body) = get("/open-source").await;
+        assert_eq!(status, StatusCode::OK);
+        let body = without_markers(&body);
+        for href in [
+            "https://example.com/p",
+            "https://p.example/",
+            "https://example.com/p/1",
+        ] {
+            let link = format!(r#"<a href="{href}" target="_blank" rel="noopener">"#);
+            assert!(body.contains(&link), "{href}: {body}");
+        }
+        assert!(!body.contains("noreferrer"), "{body}");
     }
 
     /// The `<footer>` start tag in a page's HTML.
