@@ -31,11 +31,21 @@ test.describe("Trailing slash", () => {
   });
 
   // /pkg is served by the Leptos fallback, the other two by file mounts. /readme's
-  // own directory 404s are in readme-assets.spec.ts.
+  // own directory 404s are in readme-assets.spec.ts. A directory on a file mount is
+  // a 404 without its slash too. The file server used to redirect /images/home to
+  // /home/, because the mount hands it the path with /images already taken off.
+  // /content/readme is the folder gen_fixtures writes the /readme fixtures into.
   test("/pkg and the file mounts are left alone", async ({ request }) => {
-    for (const path of ["/pkg/", "/images/home/", "/content/"]) {
+    for (const path of [
+      "/pkg/",
+      "/images/home/",
+      "/images/home",
+      "/content/",
+      "/content/readme",
+    ]) {
       const response = await request.get(path, { maxRedirects: 0 });
       expect(response.status(), path).toBe(404);
+      expect(response.headers()["location"], path).toBeUndefined();
     }
   });
 });

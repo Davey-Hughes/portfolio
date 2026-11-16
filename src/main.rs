@@ -128,6 +128,13 @@ type FileResponse = axum::http::Response<tower_http::services::fs::ServeFileSyst
 
 /// The file server for the `/images` and `/content` mounts: the files in `dir`, with
 /// Cache-Control set by [`file_cache_control`].
+///
+/// A directory is a 404, with or without a trailing slash; neither mount has index
+/// pages. By default `ServeDir` redirects `/home` to `/home/`, but it builds that
+/// `Location` from the path it is given, and `nest_service` has already taken the
+/// mount's prefix off it, so `/images/home` was sent to `/home/`. `ServeDir` can put
+/// the prefix back (`redirect_path_prefix`), but with no index pages the redirect
+/// would only lead to another 404.
 #[cfg(feature = "ssr")]
 fn immutable_files(
     dir: &str,
@@ -139,7 +146,7 @@ fn immutable_files(
         .layer(MapResponseLayer::new(
             file_cache_control as fn(FileResponse) -> FileResponse,
         ))
-        .service(ServeDir::new(dir))
+        .service(ServeDir::new(dir).append_index_html_on_directories(false))
 }
 
 /// The `/images` routes: the original files in `images_dir`, and the transcoding
@@ -411,11 +418,11 @@ pub fn main() {
 
 #[cfg(all(test, feature = "ssr"))]
 mod tests {
-    use super::compression_layer;
+    use super::{compression_layer, image_routes, immutable_files};
     use axum::body::Body;
-    use axum::http::{Request, Response, header};
+    use axum::http::{HeaderValue, Method, Request, Response, StatusCode, header};
     use std::convert::Infallible;
-    use tower::{Layer, ServiceExt, service_fn};
+    use tower::{Layer, Service, ServiceExt, service_fn};
 
     /// Comfortably above the default predicate's 32-byte floor.
     const LARGE: &[u8] = &[b'a'; 1024];
@@ -476,6 +483,94 @@ mod tests {
     #[tokio::test]
     async fn leaves_small_bodies_uncompressed() {
         assert!(!is_compressed("text/html; charset=utf-8", SMALL).await);
+    }
+
+    /// A folder for a file mount: `home/` holding one photo, and `album/` holding an
+    /// `index.html`, which the mounts don't serve either.
+    fn mount_dir() -> tempfile::TempDir {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(root.path().join("home")).unwrap();
+        std::fs::write(root.path().join("home/photo.jpg"), b"jpeg").unwrap();
+        std::fs::create_dir(root.path().join("album")).unwrap();
+        std::fs::write(root.path().join("album/index.html"), b"<p>album</p>").unwrap();
+        root
+    }
+
+    /// Send `method` `uri` to `service`: the status, and the `Location` header if there
+    /// is one.
+    async fn fetch<S, B>(
+        service: S,
+        method: &Method,
+        uri: &str,
+    ) -> (StatusCode, Option<HeaderValue>)
+    where
+        S: Service<Request<Body>, Response = Response<B>>,
+        S::Error: std::fmt::Debug,
+    {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = service.oneshot(request).await.unwrap();
+        (
+            response.status(),
+            response.headers().get(header::LOCATION).cloned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn file_mount_answers_404_for_a_directory_with_or_without_its_slash() {
+        let root = mount_dir();
+        let dir = root.path().to_str().unwrap();
+
+        for uri in ["/", "/home", "/home/", "/album", "/album/"] {
+            assert_eq!(
+                fetch(immutable_files(dir), &Method::GET, uri).await,
+                (StatusCode::NOT_FOUND, None),
+                "{uri}"
+            );
+        }
+        assert_eq!(
+            fetch(immutable_files(dir), &Method::GET, "/home/photo.jpg").await,
+            (StatusCode::OK, None)
+        );
+    }
+
+    /// Through `image_routes`, as `main` mounts `/images`. `nest_service` hands the file
+    /// server the path without the mount's prefix, so a redirect built from that path
+    /// would leave the mount: it sent `/images/home` to `/home/`.
+    #[tokio::test]
+    async fn nested_file_mount_answers_404_for_a_directory_with_or_without_its_slash() {
+        let root = mount_dir();
+        let cache = tempfile::TempDir::new().unwrap();
+        let app = image_routes::<()>(
+            root.path().to_str().unwrap(),
+            cache.path().to_str().unwrap(),
+        );
+
+        for method in [Method::GET, Method::HEAD] {
+            for uri in [
+                "/images",
+                "/images/",
+                "/images/home",
+                "/images/home/",
+                "/images/home?width=2400",
+                "/images/album",
+                "/images/album/",
+            ] {
+                assert_eq!(
+                    fetch(app.clone(), &method, uri).await,
+                    (StatusCode::NOT_FOUND, None),
+                    "{method} {uri}"
+                );
+            }
+            assert_eq!(
+                fetch(app.clone(), &method, "/images/home/photo.jpg").await,
+                (StatusCode::OK, None),
+                "{method}"
+            );
+        }
     }
 
     /// Cache-Control on the `/images` and `/content` file servers and on the
