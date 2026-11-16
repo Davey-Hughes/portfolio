@@ -59,11 +59,33 @@ top-level files of the same gallery.
 
 ### Supported formats & multiple variants
 
-Recognized extensions: jpg/jpeg, png, webp, gif, jxl, avif.
+Recognized extensions: jpg/jpeg, png, webp, gif, jxl, avif, in any case, so a
+camera's `DSC_0001.JPG` works as it is.
 
 Files that share a basename, such as `sunset.jpg` and `sunset.avif`, are grouped
 into one photo. The browser gets them as `<picture>` sources in order of preference
 (avif → jxl → webp → png → jpg), with JPEG as the fallback that works everywhere.
+The case of the extensions doesn't matter here either. If two files differ only in
+that (`sunset.jpg` and `sunset.JPG`), the lower-case one is the photo's main file.
+An extension in mixed case, such as `.Jpg`, loses to every file of the photo spelled
+all in lower or all in upper case, whatever its format: with `sunset.Jpg` and
+`sunset.webp`, the WebP is the main file, so the link to the original, the EXIF
+details and the title come from it. WebP exports often carry no EXIF, so rename the
+file to `.jpg` or `.JPG` if that matters.
+
+For an animated GIF, the smaller sizes that the grids, phones and the not-found page
+show are made from its first frame, and they don't move. The original, which a
+desktop shows on the photo page, still plays. Only the first frame is read, however
+long the animation.
+
+AVIF originals are listed and served as they are, but the server can't make the
+smaller sizes from them. A photo that also has a jpg, jpeg, jxl, webp, png or gif
+file gets its sizes from that one, so keep a JPEG or WebP copy beside an AVIF. A
+photo that exists only as an AVIF shows as a broken image in the grids, on phones and
+on the not-found page. A JPEG XL over 100 megapixels, which would take the server
+too much memory to read, gets no smaller sizes either, and only a JPEG copy helps
+there: the server tries a JPEG XL before a WebP, PNG or GIF. No picture over 400
+megapixels gets smaller sizes.
 
 ### Image sets (subfolders)
 

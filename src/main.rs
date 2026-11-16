@@ -345,16 +345,16 @@ async fn serve_compressed_image(
         Err(err_msg) => return (StatusCode::BAD_REQUEST, err_msg).into_response(),
     };
 
-    let path_without_ext: Arc<str> = Arc::from(match image_path.rfind('.') {
-        Some(dot) => &image_path[..dot],
-        None => image_path.as_str(),
-    });
+    // The whole path, extension included, for both lookups: that is how a request names
+    // a file whose extension is spelled `Jpg`, which the name alone doesn't find, and
+    // the check after the permit has to find the same file as the one before it.
+    let requested_path: Arc<str> = Arc::from(image_path.as_str());
 
     let cached = {
         let (images_dir, cache_dir, path) = (
             Arc::clone(&images_dir),
             Arc::clone(&cache_dir),
-            Arc::clone(&path_without_ext),
+            Arc::clone(&requested_path),
         );
         tokio::task::spawn_blocking(move || {
             cached_image(&images_dir, &cache_dir, &path, width, quality)
@@ -362,7 +362,8 @@ async fn serve_compressed_image(
         .await
     };
     let result = match cached {
-        Ok(Lookup::NoSource) => Ok(None),
+        // A source that failed to decode before, as it is now, needs no permit to fail.
+        Ok(Lookup::NoSource | Lookup::Undecodable) => Ok(None),
         Ok(Lookup::Cached(data)) => Ok(Some(Webp {
             data,
             settled: true,
@@ -377,7 +378,7 @@ async fn serve_compressed_image(
             // this one waited.
             tokio::task::spawn_blocking(move || {
                 let _permit = permit;
-                process_and_cache_image(&images_dir, &cache_dir, &path_without_ext, width, quality)
+                process_and_cache_image(&images_dir, &cache_dir, &requested_path, width, quality)
             })
             .await
         }
@@ -1202,5 +1203,281 @@ mod tests {
                 "took {answered:?} to answer; the pre-warm took {finished:?}"
             );
         }
+    }
+}
+
+/// Photos whose extensions are in upper or mixed case, as cameras and other tools name
+/// them, through the compressed-image route and the `/images` mount wired as `main`
+/// wires them.
+#[cfg(all(test, feature = "ssr"))]
+mod extension_case_tests {
+    use super::image_routes;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use portfolio::types::PhotoInfo;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use tokio::sync::Semaphore;
+    use tower::ServiceExt;
+
+    /// The home gallery's files, each as wide as it says, so that a compressed answer
+    /// shows which file it was made from: one of each case of extension, a name the
+    /// addresses have to encode, and photos with more than one file.
+    const PHOTOS: [(&str, u32); 14] = [
+        ("Upper.JPG", 16),
+        ("Mixed.Jpg", 17),
+        ("Shot.PNG", 18),
+        ("Pic.WEBP", 19),
+        ("Loop.GIF", 28),
+        ("1 - Harbour.JPG", 20),
+        // Names that differ only in the case of the extension: lower case wins.
+        ("Twin.jpg", 21),
+        ("Twin.JPG", 22),
+        // A mixed spelling yields to any other.
+        ("Pair.Jpg", 23),
+        ("Pair.webp", 24),
+        // jpg before jpeg, as in the endpoint's order.
+        ("Late.jpeg", 25),
+        ("Late.JPG", 26),
+        // An AVIF that this build can't decode is the main file, but the PNG serves.
+        ("Moon.AVIF", 0),
+        ("Moon.png", 27),
+    ];
+
+    /// For each photo in [`PHOTOS`]: its slug, its main file, and the file its
+    /// compressed sizes are made from.
+    const EXPECTED: [(&str, &str, &str); 10] = [
+        ("upper", "Upper.JPG", "Upper.JPG"),
+        ("mixed", "Mixed.Jpg", "Mixed.Jpg"),
+        ("shot", "Shot.PNG", "Shot.PNG"),
+        ("pic", "Pic.WEBP", "Pic.WEBP"),
+        ("loop", "Loop.GIF", "Loop.GIF"),
+        ("harbour", "1 - Harbour.JPG", "1 - Harbour.JPG"),
+        ("twin", "Twin.jpg", "Twin.jpg"),
+        ("pair", "Pair.webp", "Pair.webp"),
+        ("late", "Late.JPG", "Late.JPG"),
+        ("moon", "Moon.AVIF", "Moon.png"),
+    ];
+
+    /// An images dir with [`PHOTOS`] in `home/`, and an empty cache dir. Every file is
+    /// dated an hour ago, long enough for the server to trust it whole and cache what
+    /// it makes from it.
+    fn dirs() -> (TempDir, TempDir) {
+        let images = TempDir::new().expect("a temp dir");
+        let home = images.path().join("home");
+        std::fs::create_dir_all(&home).expect("a gallery dir");
+        for (photo, width) in PHOTOS {
+            if width == 0 {
+                std::fs::write(home.join(photo), b"not an image").expect("a file");
+            } else {
+                image::RgbImage::new(width, 12)
+                    .save(home.join(photo))
+                    .expect("an image");
+            }
+            backdate(&home.join(photo));
+        }
+        (images, TempDir::new().expect("a temp dir"))
+    }
+
+    fn backdate(path: &std::path::Path) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("a file to date")
+            .set_modified(std::time::SystemTime::now() - Duration::from_hours(1))
+            .expect("a time set");
+    }
+
+    /// The image routes over `images` and `cache`, as `main` sets them up, with
+    /// `transcodes` for the permits to make a size.
+    fn router(images: &TempDir, cache: &TempDir, transcodes: Arc<Semaphore>) -> axum::Router {
+        image_routes(
+            images.path().to_str().expect("a UTF-8 temp path"),
+            cache.path().to_str().expect("a UTF-8 temp path"),
+            transcodes,
+        )
+    }
+
+    /// [`router`] with permits enough not to matter.
+    fn app(images: &TempDir, cache: &TempDir) -> axum::Router {
+        router(images, cache, Arc::new(Semaphore::new(4)))
+    }
+
+    /// The status, Content-Type and body of a GET for `uri`.
+    async fn fetch(app: &axum::Router, uri: &str) -> (StatusCode, String, axum::body::Bytes) {
+        let request = Request::get(uri)
+            .body(Body::empty())
+            .expect("a valid request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("the router is infallible");
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map_or_default(|value| value.to_str().expect("an ASCII header").to_owned());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        (status, content_type, body)
+    }
+
+    /// The status and Content-Type of a GET for `uri`.
+    async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
+        let (status, content_type, _) = fetch(app, uri).await;
+        (status, content_type)
+    }
+
+    /// The home gallery's photos as the site lists them.
+    fn home_photos(images: &TempDir) -> Vec<PhotoInfo> {
+        let mut photos = Vec::new();
+        portfolio::gallery::find_images_for_gallery(
+            &images.path().join("home"),
+            images.path(),
+            &mut photos,
+        );
+        photos
+    }
+
+    #[tokio::test]
+    async fn every_address_the_gallery_builds_loads_the_file_it_should() {
+        let (images, cache) = dirs();
+        let app = app(&images, &cache);
+        let mut photos = home_photos(&images);
+        photos.sort_by(|a, b| a.slug.cmp(&b.slug));
+        let mut expected = EXPECTED;
+        expected.sort_unstable();
+        let found: Vec<(&str, &str)> = photos
+            .iter()
+            .map(|p| (p.slug.as_str(), p.filename.as_str()))
+            .collect();
+        let wanted: Vec<(&str, &str)> = expected.iter().map(|e| (e.0, e.1)).collect();
+        assert_eq!(found, wanted);
+
+        for (photo, (_, main, source)) in photos.iter().zip(expected) {
+            let width = PHOTOS
+                .iter()
+                .find(|(name, _)| *name == source)
+                .map(|(_, width)| *width);
+            let srcset = photo
+                .srcset
+                .split(", ")
+                .map(|candidate| candidate.split_once(' ').expect("a width").0);
+            for compressed in [photo.url.as_str(), photo.detail_url.as_str()]
+                .into_iter()
+                .chain(srcset)
+            {
+                let (status, content_type, body) = fetch(&app, compressed).await;
+                assert_eq!(status, StatusCode::OK, "{compressed}");
+                assert_eq!(content_type, "image/webp", "{compressed}");
+                let picture = image::load_from_memory(&body).expect("a WebP");
+                assert_eq!(Some(picture.width()), width, "{compressed} from {source}");
+            }
+            let (status, _, body) = fetch(&app, &photo.original_url).await;
+            assert_eq!(status, StatusCode::OK, "{}", photo.original_url);
+            let file = std::fs::read(images.path().join("home").join(main)).expect("a file");
+            assert_eq!(body, file, "{}", photo.original_url);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_original_answers_at_its_real_name_only() {
+        let (images, cache) = dirs();
+        let app = app(&images, &cache);
+
+        for (uri, expected) in [
+            ("/images/home/Upper.JPG", "image/jpeg"),
+            ("/images/home/Mixed.Jpg", "image/jpeg"),
+            ("/images/home/Shot.PNG", "image/png"),
+            ("/images/home/Pic.WEBP", "image/webp"),
+            ("/images/home/Loop.GIF", "image/gif"),
+        ] {
+            assert_eq!(
+                get(&app, uri).await,
+                (StatusCode::OK, expected.to_owned()),
+                "{uri}"
+            );
+        }
+        // The file server matches names exactly, so the gallery's addresses keep them.
+        let (status, _) = get(&app, "/images/home/Upper.jpg").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_compressed_endpoint_finds_any_case_of_extension_and_nothing_else() {
+        let (images, cache) = dirs();
+        let app = app(&images, &cache);
+
+        for photo in [
+            "Upper.JPG",
+            "Upper.jpg",
+            "Mixed.Jpg",
+            "Shot.PNG",
+            "Pic.WEBP",
+            "Loop.GIF",
+        ] {
+            let uri = format!("/images/compressed/home/{photo}?width=2400&quality=90");
+            assert_eq!(
+                get(&app, &uri).await,
+                (StatusCode::OK, "image/webp".to_owned()),
+                "{uri}"
+            );
+        }
+        // `Mixed.jpg`: a mixed spelling is only looked for through a file the request
+        // names that is there.
+        for missing in ["Gone.JPG", "Gone.Jpg", "Mixed.jpg", "Mixed.JPG"] {
+            let uri = format!("/images/compressed/home/{missing}?width=2400&quality=90");
+            let (status, _) = get(&app, &uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        }
+    }
+
+    /// The handler looks a size up twice, before and after taking a permit, and both
+    /// lookups have to find a mixed spelling the same way. Once made, `Mixed.Jpg`'s size
+    /// comes from the cache with every permit taken, so the first lookup finds it.
+    #[tokio::test]
+    async fn a_mixed_case_photo_comes_from_the_cache_without_a_permit() {
+        const URI: &str = "/images/compressed/home/Mixed.Jpg?width=2400&quality=90";
+        let (images, cache) = dirs();
+        let transcodes = Arc::new(Semaphore::new(1));
+        let app = router(&images, &cache, Arc::clone(&transcodes));
+
+        assert_eq!(get(&app, URI).await.0, StatusCode::OK, "made");
+        assert!(cache.path().join("home_Mixed_w2400_q90_l1.webp").is_file());
+        let _every_permit = transcodes.acquire_owned().await.expect("an open semaphore");
+
+        let again = tokio::time::timeout(Duration::from_secs(10), get(&app, URI))
+            .await
+            .expect("a cached size needs no permit");
+        assert_eq!(again, (StatusCode::OK, "image/webp".to_owned()));
+    }
+
+    /// A source the decode limits refused answers 404 without a permit, once it is
+    /// remembered: a GIF whose header declares a canvas 32,769 pixels wide.
+    #[tokio::test]
+    async fn a_refused_source_is_a_404_without_a_permit() {
+        const URI: &str = "/images/compressed/home/Wide.gif?width=2400&quality=90";
+        let (images, cache) = dirs();
+        let mut gif = Vec::new();
+        image::RgbaImage::new(1, 1)
+            .write_to(&mut std::io::Cursor::new(&mut gif), image::ImageFormat::Gif)
+            .expect("a GIF");
+        gif[6..8].copy_from_slice(&32_769_u16.to_le_bytes());
+        let wide = images.path().join("home/Wide.gif");
+        std::fs::write(&wide, gif).expect("a file");
+        backdate(&wide);
+        let transcodes = Arc::new(Semaphore::new(1));
+        let app = router(&images, &cache, Arc::clone(&transcodes));
+
+        assert_eq!(get(&app, URI).await.0, StatusCode::NOT_FOUND, "refused");
+        let _every_permit = transcodes.acquire_owned().await.expect("an open semaphore");
+
+        let again = tokio::time::timeout(Duration::from_secs(10), get(&app, URI))
+            .await
+            .expect("a refused source needs no permit");
+        assert_eq!(again.0, StatusCode::NOT_FOUND);
     }
 }

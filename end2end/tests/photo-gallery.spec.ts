@@ -76,3 +76,34 @@ test.describe("Photo Gallery", () => {
     }
   });
 });
+
+// gen_fixtures writes the nature gallery's bird as `bird.JPG`, with the upper-case
+// extension cameras give their files.
+test.describe("A photo whose extension is in upper case", () => {
+  test("shows in the grid, and its sizes and original load", async ({ page, request }) => {
+    await page.goto("/gallery/nature", { waitUntil: "networkidle" });
+
+    const grid = await visibleGrid(page);
+    const img = grid.locator('.photo-hero-link[href="/gallery/nature/bird"] img');
+    await img.scrollIntoViewIfNeeded();
+    await expect
+      .poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0))
+      .toBe(true);
+
+    // The addresses keep the file's real name, which the file server needs.
+    const src = (await img.getAttribute("src")) ?? "";
+    expect(src).toMatch(/^\/images\/compressed\/nature\/bird\.JPG\?/);
+    const srcset = (await img.getAttribute("srcset")) ?? "";
+    const sizes = srcset.split(", ").map((candidate) => candidate.split(" ")[0]);
+    expect(sizes.length).toBeGreaterThan(0);
+    for (const url of [src, ...sizes]) {
+      const res = await request.get(url);
+      expect(res.status(), url).toBe(200);
+      expect(res.headers()["content-type"], url).toBe("image/webp");
+    }
+    const original = await request.get("/images/nature/bird.JPG");
+    expect(original.status()).toBe(200);
+    expect(original.headers()["content-type"]).toBe("image/jpeg");
+    expect((await request.get("/gallery/nature/bird")).status()).toBe(200);
+  });
+});

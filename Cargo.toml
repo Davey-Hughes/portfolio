@@ -44,6 +44,7 @@ chrono = { version = "0.4", optional = true }
 toml = { version = "1.1", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = [
+  "gif",
   "hdr",
   "jpeg",
   "nasm",

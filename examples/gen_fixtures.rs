@@ -43,9 +43,13 @@ struct Fixture {
     gallery: &'static str,
     /// Gallery-relative name; also the visible photo title.
     name: &'static str,
-    /// `true` puts the file at `<gallery>/<name>/<name>.jpg` (the nested form the
-    /// production gallery mostly uses), `false` puts it at `<gallery>/<name>.jpg`.
-    /// Both layouts appear in production, so cover both discovery paths.
+    /// The file's extension, as spelled. `JPG` for one photo, the way cameras name
+    /// their files: the site has to find it and keep the real name in its addresses.
+    extension: &'static str,
+    /// `true` puts the file at `<gallery>/<name>/<name>.<extension>` (the nested form
+    /// the production gallery mostly uses), `false` puts it at
+    /// `<gallery>/<name>.<extension>`. Both layouts appear in production, so cover both
+    /// discovery paths.
     nested: bool,
     width: u32,
     height: u32,
@@ -75,6 +79,7 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         gallery: "home",
         name: "laika",
+        extension: "jpg",
         nested: true,
         width: 1200,
         height: 800,
@@ -93,6 +98,7 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         gallery: "home",
         name: "blue-angels",
+        extension: "jpg",
         nested: true,
         width: 1000,
         height: 1000,
@@ -113,6 +119,7 @@ const FIXTURES: &[Fixture] = &[
         // nested directories, so the discovery code must handle both.
         gallery: "home",
         name: "contrail",
+        extension: "jpg",
         nested: false,
         width: 800,
         height: 1200,
@@ -136,6 +143,7 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         gallery: "nature",
         name: "bee",
+        extension: "jpg",
         nested: true,
         width: 1400,
         height: 900,
@@ -154,6 +162,9 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         gallery: "nature",
         name: "bird",
+        // Upper case, as a camera writes it (photo-gallery.spec.ts). In `nature`, so the
+        // home gallery the not-found page draws from stays as it was.
+        extension: "JPG",
         nested: false,
         width: 900,
         height: 1400,
@@ -404,12 +415,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let gallery = images_root.join(fixture.gallery);
         fs::create_dir_all(&gallery)?;
 
+        let file_name = format!("{}.{}", fixture.name, fixture.extension);
         let path = if fixture.nested {
             let dir = gallery.join(fixture.name);
             fs::create_dir_all(&dir)?;
-            dir.join(format!("{}.jpg", fixture.name))
+            dir.join(file_name)
         } else {
-            gallery.join(format!("{}.jpg", fixture.name))
+            gallery.join(file_name)
         };
 
         render(fixture).save(&path)?;
@@ -470,6 +482,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "wrote shot.webp, art.webp, art-card.webp, clip.mp4, notes.toml and album.webp/index.html in {}, and readme-outside.webp beside {}",
         readme_root.join("fixture").display(),
         readme_root.display()
+    );
+
+    // Targets for abuse-cases.spec.ts: real JPEGs one level above the images root, in
+    // the recipe's layout (`IMAGES_DIR` is `<content_dir>/images`), which `/content`
+    // serves so the spec can check they are there. The compressed endpoint must not
+    // reach either through `..`. `images-outside.jpg` is a name it tries with a `stat`;
+    // `images-outside-mixed.Jpg`, a mixed spelling with no other, is only found by
+    // listing a folder, so it tests that path's guard.
+    for name in ["images-outside.jpg", "images-outside-mixed.Jpg"] {
+        let path = content_dir.join(name);
+        RgbImage::from_pixel(8, 8, Rgb([200, 40, 40])).save(&path)?;
+        backdate(&path)?;
+    }
+    println!(
+        "wrote images-outside.jpg and images-outside-mixed.Jpg in {}",
+        content_dir.display()
     );
 
     // A tree outside public/images is only served if IMAGES_DIR points at it, and the

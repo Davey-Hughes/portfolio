@@ -2,6 +2,12 @@ use std::process::Command;
 
 const USAGE: &str = "usage: cargo ci [--release]";
 
+/// Where `--release` writes the e2e fixtures, as CI and the recipe in
+/// docs/development.md do. The one folder the runner ever deletes. The delete names
+/// this literal and nothing else: no variable, joined or computed path that could come
+/// out empty and turn it into something wider.
+const E2E_FIXTURES: &str = "target/e2e-fixtures";
+
 /// Run one CI step. Exits with the step's own status code if it fails, so the first
 /// failure stops the run and `cargo ci` exits non-zero.
 fn run(program: &str, args: &[&str], env: &[(&str, &str)]) {
@@ -109,6 +115,20 @@ fn main() {
         // stops building against the real feature set, which the tests above don't
         // exercise. Into target/, as CI does: the default would write fixture photos into
         // public/images.
+        //
+        // Cleared first, as CI and the recipe do. gen_fixtures writes over what is there
+        // but never removes anything, so a renamed fixture (`bird.jpg` became `bird.JPG`)
+        // would sit beside the old one and make two files of one photo.
+        println!("\n=> rm -rf {E2E_FIXTURES}");
+        match std::fs::remove_dir_all(E2E_FIXTURES) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("error: couldn't remove {E2E_FIXTURES}: {e}");
+                std::process::exit(1);
+            }
+        }
+        let fixture_images = format!("{E2E_FIXTURES}/images");
         run(
             "cargo",
             &[
@@ -119,7 +139,7 @@ fn main() {
                 "--features",
                 "ssr",
             ],
-            &[("FIXTURE_IMAGES_DIR", "target/e2e-fixtures/images")],
+            &[("FIXTURE_IMAGES_DIR", &fixture_images)],
         );
         // Exits 2 when the gzipped bundle is over scripts/perf/wasm-budget.txt.
         run("scripts/perf/wasm_size.sh", &[], &[]);

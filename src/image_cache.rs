@@ -14,7 +14,9 @@ use std::time::SystemTime;
 /// workers, and separately the compressed endpoint's requests, so twice this at worst.
 /// A transcode takes about 8 MB of memory per megapixel at its peak, about 2.2 GB for a
 /// 283-megapixel photo, and about 10–35 ms of CPU per megapixel, a few seconds for the
-/// largest.
+/// largest. That is for an 8-bit JPEG: a 16-bit RGBA PNG of that size peaked at 4.7 GB,
+/// and a JPEG XL takes several times its picture while it decodes (see
+/// `MAX_DECODED_BYTES` and `MAX_JXL_WORKING_BYTES`).
 pub fn transcode_limit() -> usize {
     std::thread::available_parallelism()
         .map_or(1, std::num::NonZeroUsize::get)
@@ -31,17 +33,28 @@ struct CacheEntry {
 }
 
 impl CacheEntry {
+    /// `image_path` is as for [`process_and_cache_image`].
     fn find(
         images_dir: &str,
         cache_dir: &str,
-        path_without_ext: &str,
+        image_path: &str,
         width: u32,
         quality: u8,
     ) -> Option<Self> {
-        let supported_extensions = ["jpg", "jpeg", "jxl", "avif", "webp", "png", "gif"];
+        // Cut at the last dot. The extension only matters when no file is spelled in
+        // lower or upper case (see `find_image_file`).
+        let (path_without_ext, requested_ext) = match image_path.rsplit_once('.') {
+            Some((path_without_ext, ext)) => (path_without_ext, Some(ext)),
+            None => (image_path, None),
+        };
 
         // Find the actual file with any supported extension
-        let source = find_image_file(images_dir, path_without_ext, &supported_extensions)?;
+        let source = find_image_file(
+            images_dir,
+            path_without_ext,
+            requested_ext,
+            &SOURCE_EXTENSIONS,
+        )?;
 
         // Cache filename without timestamp - makes cache persistent. The `_l1`
         // suffix is an encoder-version tag: it changed when we switched from
@@ -118,6 +131,9 @@ fn source_settled(before: Option<SystemTime>, after: Option<SystemTime>, now: Sy
 pub enum Lookup {
     /// There is no source image at that path.
     NoSource,
+    /// The source, as it is now, failed to decode before, or the decode limits refused
+    /// it, so no size can be made from it (see [`process_image`]).
+    Undecodable,
     /// A WebP made from the source as it is now.
     Cached(Vec<u8>),
     /// Nothing made from the source as it is now.
@@ -134,33 +150,52 @@ pub struct Webp {
 }
 
 /// What the cache holds for one size of an image. Only reads; never transcodes.
+///
+/// `image_path` is as for [`process_and_cache_image`], which finds the same source.
 pub fn cached_image(
     images_dir: &str,
     cache_dir: &str,
-    path_without_ext: &str,
+    image_path: &str,
     width: u32,
     quality: u8,
 ) -> Lookup {
-    let Some(entry) = CacheEntry::find(images_dir, cache_dir, path_without_ext, width, quality)
-    else {
+    let Some(entry) = CacheEntry::find(images_dir, cache_dir, image_path, width, quality) else {
         return Lookup::NoSource;
     };
     match try_use_cached_image(entry.source_modified, &entry.cache_path) {
         Some(data) => Lookup::Cached(data),
+        None if failed_before(&entry.source) => Lookup::Undecodable,
         None => Lookup::Missing,
     }
 }
 
+/// The formats the compressed endpoint makes its WebP files from, in order of
+/// preference: it serves a photo from the first of these it has a file in.
+///
+/// Only formats this build can decode. The gallery also lists AVIF files, but the
+/// `image` crate is built without an AVIF decoder (see its features in `Cargo.toml`),
+/// so an AVIF source could only fail. Left out, a photo's other formats serve instead,
+/// and one that exists only as AVIF has no compressed sizes. Enabling a decoder means
+/// adding its format here too.
+///
+/// A GIF gives the first frame of its animation: the `image` crate's decoder reads that
+/// frame and stops, so the work doesn't grow with the number of frames.
+const SOURCE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "jxl", "webp", "png", "gif"];
+
 /// Process and cache a single image with the given parameters
 /// Returns the WebP data or None if processing failed
+///
+/// `image_path` is the image's path under `images_dir`, extension included, as the
+/// request names it. The source is found by the path without the extension (see
+/// [`find_image_file`]), and the cache file is named after that too.
 pub fn process_and_cache_image(
     images_dir: &str,
     cache_dir: &str,
-    path_without_ext: &str,
+    image_path: &str,
     width: u32,
     quality: u8,
 ) -> Option<Webp> {
-    let entry = CacheEntry::find(images_dir, cache_dir, path_without_ext, width, quality)?;
+    let entry = CacheEntry::find(images_dir, cache_dir, image_path, width, quality)?;
 
     // Check if a cached version exists and was made from the source as it is now
     if let Some(data) = try_use_cached_image(entry.source_modified, &entry.cache_path) {
@@ -186,19 +221,120 @@ pub fn process_and_cache_image(
 /// Find an image file with any of the supported extensions, refusing any
 /// path that resolves outside `images_dir` (defends against `..`-style
 /// traversal in the URL path).
+///
+/// `extensions` are in lower case, in order of preference. A file's extension may be
+/// in any case, as cameras write `DSC_0001.JPG`. For each format this tries the
+/// lower-case spelling and then the upper-case one, a `stat` each. A mixed spelling
+/// such as `Jpg` has up to 16 forms, so rather than try them all it lists the folder,
+/// and only when nothing above exists and the request names an image file that is
+/// there (see [`lists_folder`]). A made-up name lists nothing. The site's addresses
+/// carry each photo's real main file, so they all resolve.
+///
+/// The folder is resolved and checked first ([`image_folder`]), so nothing is looked
+/// up in a folder outside `images_dir`. A file found is taken as it is when it is a
+/// regular file there; a link is followed and must lead inside `images_dir` too.
+///
+/// Which file this picks never depends on the request, only whether it finds one:
+/// lower case, then upper case, and a mixed spelling only if no format is spelled
+/// either way; between mixed spellings, by format and then by name in byte order
+/// (`x.JPg` before `x.Jpg`). `gallery::variant_order` puts a photo's files in the same
+/// order, so the gallery's main file is the one the sizes are made from.
 fn find_image_file(
     images_dir: &str,
     path_without_ext: &str,
+    requested_ext: Option<&str>,
     extensions: &[&str],
 ) -> Option<PathBuf> {
     let images_root = std::path::PathBuf::from(images_dir).canonicalize().ok()?;
-    extensions.iter().find_map(|ext| {
-        let candidate = images_root.join(format!("{path_without_ext}.{ext}"));
-        // canonicalize() requires the file to exist; that doubles as an
-        // existence check.
+    let (folder, stem) = image_folder(&images_root, path_without_ext)?;
+    let resolve = |name: &str| {
+        // One `lstat`. canonicalize() takes a system call for every component of the
+        // path, so it is only needed for a link.
+        let candidate = folder.join(name);
+        let metadata = std::fs::symlink_metadata(&candidate).ok()?;
+        if metadata.is_file() {
+            return Some(candidate);
+        }
+        if !metadata.is_symlink() {
+            return None;
+        }
         let resolved = candidate.canonicalize().ok()?;
-        resolved.starts_with(&images_root).then_some(resolved)
-    })
+        (resolved.starts_with(&images_root) && resolved.is_file()).then_some(resolved)
+    };
+    let found = extensions.iter().find_map(|ext| {
+        [ext.to_ascii_lowercase(), ext.to_ascii_uppercase()]
+            .into_iter()
+            .find_map(|spelling| resolve(&format!("{stem}.{spelling}")))
+    });
+    if found.is_some() {
+        return found;
+    }
+
+    if !lists_folder(&folder, stem, requested_ext, extensions) {
+        return None;
+    }
+    let mut names: Vec<(usize, String)> = std::fs::read_dir(&folder)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let ext = name.strip_prefix(stem)?.strip_prefix('.')?;
+            let format = extensions
+                .iter()
+                .position(|supported| supported.eq_ignore_ascii_case(ext))?;
+            Some((format, name))
+        })
+        .collect();
+    names.sort_unstable();
+    names.into_iter().find_map(|(_, name)| resolve(&name))
+}
+
+/// The folder `path_without_ext` is in, resolved, and the name within it; `None` when
+/// the folder isn't inside `images_root`, before anything in it is looked at. A
+/// request can't learn from the lookup whether a file exists outside the images root,
+/// though how long a folder takes to resolve may show whether that folder exists.
+fn image_folder<'a>(images_root: &Path, path_without_ext: &'a str) -> Option<(PathBuf, &'a str)> {
+    let (folder, stem) = path_without_ext
+        .rsplit_once('/')
+        .unwrap_or(("", path_without_ext));
+    let folder = images_root.join(folder).canonicalize().ok()?;
+    folder.starts_with(images_root).then_some((folder, stem))
+}
+
+/// Whether [`find_image_file`] lists `folder` for `stem`, when no file of that name is
+/// spelled in lower or upper case.
+///
+/// Only for a request that names an image file which is there: a mixed spelling such
+/// as `x.Jpg`, or an AVIF that the gallery made a photo's main file, whose other files
+/// may be spelled any way. "An image" means one of `extensions` or `avif`, in any
+/// case, so a folder (`home/.`), a `gallery.toml` or a made-up name lists nothing.
+fn lists_folder(
+    folder: &Path,
+    stem: &str,
+    requested_ext: Option<&str>,
+    extensions: &[&str],
+) -> bool {
+    let Some(requested) = requested_ext else {
+        return false;
+    };
+    let names_an_image = extensions
+        .iter()
+        .chain(&["avif"])
+        .any(|ext| ext.eq_ignore_ascii_case(requested));
+    names_an_image && folder.join(format!("{stem}.{requested}")).is_file()
+}
+
+/// How an extension is spelled: 0 for all lower case (`jpg`), 1 for all upper case
+/// (`JPG`), 2 for a mix (`Jpg`). Between files whose names differ only in the case
+/// of the extension, the lower rank wins, here and in the gallery.
+pub(crate) fn extension_spelling_rank(ext: &str) -> u8 {
+    if !ext.bytes().any(|b| b.is_ascii_uppercase()) {
+        0
+    } else if !ext.bytes().any(|b| b.is_ascii_lowercase()) {
+        1
+    } else {
+        2
+    }
 }
 
 /// The cached WebP at `cache_path`, if it was made from the source as it is now.
@@ -244,9 +380,16 @@ fn whole_seconds(time: SystemTime) -> Option<u64> {
 }
 
 /// Process an image: load, resize, and convert to WebP
-fn process_image(full_path: &PathBuf, width: u32, quality: u8) -> Option<Vec<u8>> {
-    // Load the image (handle JXL specially)
-    let img = if full_path.extension().and_then(|e| e.to_str()) == Some("jxl") {
+fn process_image(full_path: &Path, width: u32, quality: u8) -> Option<Vec<u8>> {
+    if failed_before(full_path) {
+        return None;
+    }
+
+    // Load the image (handle JXL specially, `.JXL` too)
+    let is_jxl = full_path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"));
+    let img = if is_jxl {
         load_jxl_image(full_path)?
     } else {
         load_standard_image(full_path)?
@@ -311,26 +454,199 @@ pub fn resize_for_width(img: &image::DynamicImage, width: u32) -> image::Dynamic
     rebuilt.unwrap_or_else(fallback)
 }
 
+// How large a picture the server decodes. The photos are big: the largest on the
+// production share is 13021 × 21718, about 283 MP, and the next few are about 240 MP.
+// A header can claim far more than its file holds, though: a GIF of 35 bytes can
+// declare a 65535 × 65535 canvas, 16 GiB decoded, and the decoder allocates the whole
+// canvas before it reads a pixel. One such file would crash the server at every
+// start, since the prewarm decodes everything. So every decode checks the header
+// against these first, and allocates nothing for a picture over them.
+
+/// Pixels a side: half what a GIF or PNG header can say, and half again the longest
+/// side of any photo (21,718).
+const MAX_SIDE: u32 = 32_768;
+
+/// Pixels in all: 400 MP, about 40% over the largest photo.
+const MAX_PIXELS: u64 = 400_000_000;
+
+/// Bytes for a decode, the picture and the decoder's own buffers together:
+/// [`MAX_PIXELS`] at eight bytes a pixel, 3.2 GB. That is 16-bit RGBA, the widest
+/// layout among the photos (there is a 16-bit RGBA PNG), so every format gets the same
+/// 400 MP. The largest photo takes 0.85 GB as an 8-bit RGB JPEG, and a GIF's canvas
+/// at most 1.6 GB, which leaves 1.6 GB for a frame that doesn't fill it. The resize
+/// that follows copies the picture once more, as 8-bit RGB or RGBA, outside this.
+const MAX_DECODED_BYTES: u64 = MAX_PIXELS * 8;
+
+/// Pixels in all for a JPEG XL: 100 MP. jxl-oxide works in 32-bit floats and needs
+/// 25–30 bytes a pixel beside the picture (a 48 MP JPEG XL needed between 1.15 and
+/// 1.2 GB; a flat 36 MP one of 6.9 KB peaked at 1.1 GB), so at 400 MP a file of a few
+/// KB could take 10–12 GB. There are no JPEG XL files on the share. 100 MP is about a
+/// 100-megapixel camera's frame, and keeps jxl-oxide's own memory within
+/// [`MAX_JXL_WORKING_BYTES`]. A larger photo needs a JPEG copy to get its sizes from:
+/// [`SOURCE_EXTENSIONS`] puts JPEG XL before WebP, PNG and GIF, and the pick never
+/// falls through to the next file, so that it stays a matter of file names.
+const MAX_JXL_PIXELS: u64 = 100_000_000;
+
+/// Bytes jxl-oxide may allocate while it decodes a JPEG XL, beside the picture:
+/// [`MAX_JXL_PIXELS`] at 32 bytes a pixel, 3.2 GB.
+const MAX_JXL_WORKING_BYTES: u64 = MAX_JXL_PIXELS * 32;
+
+/// The limits a decoder starts with: [`MAX_SIDE`], and all of [`MAX_DECODED_BYTES`].
+fn decode_limits() -> image::Limits {
+    let mut limits = image::Limits::no_limits();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
+    limits
+}
+
+/// Whether a picture of `width` × `height`, decoding to `bytes`, is within the limits,
+/// at most `max_pixels` in all.
+fn check_size(width: u32, height: u32, bytes: u64, max_pixels: u64) -> image::ImageResult<()> {
+    use image::error::{ImageError, LimitError, LimitErrorKind};
+
+    decode_limits().check_dimensions(width, height)?;
+    if u64::from(width) * u64::from(height) > max_pixels {
+        return Err(ImageError::Limits(LimitError::from_kind(
+            LimitErrorKind::DimensionError,
+        )));
+    }
+    decode_limits().reserve(bytes)
+}
+
+/// The limits for a decoder whose picture takes `picture` bytes: what the picture
+/// leaves of [`MAX_DECODED_BYTES`], so that the two together stay within it, as in
+/// `image`'s own `ImageReader::decode`.
+fn limits_beside(picture: u64) -> image::ImageResult<image::Limits> {
+    let mut limits = decode_limits();
+    limits.reserve(picture)?;
+    Ok(limits)
+}
+
 /// Load a JXL image using jxl-oxide
-fn load_jxl_image(path: &PathBuf) -> Option<image::DynamicImage> {
-    use image::DynamicImage;
+fn load_jxl_image(path: &Path) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
     use jxl_oxide::integration::JxlDecoder;
 
-    std::fs::File::open(path)
-        .ok()
-        .and_then(|file| JxlDecoder::new(file).ok())
-        .and_then(|decoder| DynamicImage::from_decoder(decoder).ok())
+    let stamp = file_stamp(path);
+    let decoded = (|| {
+        let mut decoder = JxlDecoder::new(std::fs::File::open(path)?)?;
+        let (width, height) = decoder.dimensions();
+        check_size(width, height, decoder.total_bytes(), MAX_JXL_PIXELS)?;
+        // `set_limits` checks the sides again, and gives jxl-oxide its own allowance.
+        let mut limits = decode_limits();
+        limits.max_alloc = Some(MAX_JXL_WORKING_BYTES);
+        decoder.set_limits(limits)?;
+        image::DynamicImage::from_decoder(decoder)
+    })();
+    settle(path, stamp, decoded)
 }
 
 /// Load a standard image format
-fn load_standard_image(path: &PathBuf) -> Option<image::DynamicImage> {
-    image::ImageReader::open(path)
-        .ok()
-        .map(|mut reader| {
-            reader.limits(image::Limits::no_limits());
-            reader.decode()
-        })
-        .and_then(std::result::Result::ok)
+fn load_standard_image(path: &Path) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
+
+    let stamp = file_stamp(path);
+    let decoded = (|| {
+        let mut reader = image::ImageReader::open(path)?;
+        reader.limits(decode_limits());
+        // `into_decoder` gives the decoder all of `MAX_DECODED_BYTES`, and neither it
+        // nor `from_decoder` counts the picture, so that is done here: the picture is
+        // checked against the limits, and the decoder keeps only what it leaves. The
+        // PNG decoder takes its allowance when it is made, as in `ImageReader::decode`;
+        // its own buffers are a few rows.
+        let mut decoder = reader.into_decoder()?;
+        let (width, height) = decoder.dimensions();
+        let picture = decoder.total_bytes();
+        check_size(width, height, picture, MAX_PIXELS)?;
+        decoder.set_limits(limits_beside(picture)?)?;
+        image::DynamicImage::from_decoder(decoder)
+    })();
+    settle(path, stamp, decoded)
+}
+
+/// A file's length and modification time, which change when it is replaced.
+type FileStamp = (u64, Option<std::time::SystemTime>);
+
+/// Files that couldn't be decoded, as they were then: refused by the limits, or failing
+/// to decode, once they had settled. Each is logged once, and refused again from a
+/// `stat` until it changes. Otherwise every request for its sizes, and every prewarm,
+/// would read it again to fail the same way: for a JPEG that means reading the whole
+/// file, for a PNG cut short decoding it up to the cut, and a JPEG XL can use up its
+/// allowance before it fails.
+static FAILED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, FileStamp>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()))
+}
+
+/// Whether `path`, as it is now, failed to decode before.
+fn failed_before(path: &Path) -> bool {
+    let Some(stamp) = file_stamp(path) else {
+        return false;
+    };
+    FAILED
+        .lock()
+        .is_ok_and(|failed| failed.get(path) == Some(&stamp))
+}
+
+/// Whether `err` is a failure to read the file that may pass, such as `EIO` from the NFS
+/// share, rather than something about what the file holds. That is any I/O error but an
+/// unexpected end of the file: a PNG or a WebP cut short fails that way, and so does a
+/// JPEG XL, which reports every error as a decoding error with the I/O error under it.
+/// `image`'s own I/O error doesn't give the I/O error as its source, so it is looked
+/// at first.
+fn read_failed(err: &image::ImageError) -> bool {
+    let passes = |io: &std::io::Error| io.kind() != std::io::ErrorKind::UnexpectedEof;
+    if let image::ImageError::IoError(io) = err {
+        return passes(io);
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(err) = cause {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            return passes(io);
+        }
+        cause = err.source();
+    }
+    false
+}
+
+/// The decoded picture, or `None`. A failure is remembered with `before`, the file's
+/// stamp before it was read (see [`FAILED`]), and logged once for each version of the
+/// file, but only once the file has settled: the same stamp after the attempt, and a
+/// time [`SETTLE_TIME`] old, the rule a WebP made from it is cached by. A file still
+/// being written can fail now and decode later at the same length and time, written by
+/// something that sets the length first, or with a stamp the NFS client kept. Nor is a
+/// failure to read the file remembered, as it may pass (see [`read_failed`]).
+fn settle(
+    path: &Path,
+    before: Option<FileStamp>,
+    decoded: image::ImageResult<image::DynamicImage>,
+) -> Option<image::DynamicImage> {
+    let err = match decoded {
+        Ok(picture) => return Some(picture),
+        Err(err) => err,
+    };
+    if read_failed(&err) {
+        return None;
+    }
+    let stamp = before.filter(|before| Some(*before) == file_stamp(path))?;
+    if !stamp
+        .1
+        .is_none_or(|modified| has_settled(modified, SystemTime::now()))
+    {
+        return None;
+    }
+    let first = FAILED
+        .lock()
+        .is_ok_and(|mut failed| failed.insert(path.to_owned(), stamp) != Some(stamp));
+    if first {
+        log!("Not making sizes from {}: {err}", path.display());
+    }
+    None
 }
 
 /// Convert an image to lossy WebP at the given quality (0-100). Uses
@@ -657,11 +973,14 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
 
     // Prewarm across a bounded worker pool. Each transcode is CPU- and
     // memory-heavy (see `transcode_limit`: about 2.2 GB at its peak for the largest
-    // photos), so cap parallelism at min(4, cores): fast startup on multi-core boxes
-    // without a memory spike on large galleries. Workers pull from a shared index, so uneven per-image
-    // cost stays balanced. Two images can share a cache file (`sunset.jpg` and
-    // `sunset.webp`), and requests can be making the same file meanwhile;
-    // `save_to_cache` renames each finished file into place, so that is safe.
+    // photos as 8-bit JPEGs, about 4.7 GB as a 16-bit RGBA PNG, and a JPEG XL takes
+    // several times its picture while it decodes; see `MAX_DECODED_BYTES` and
+    // `MAX_JXL_WORKING_BYTES`), so cap parallelism at min(4, cores): fast startup on
+    // multi-core boxes without a memory spike on large galleries. Workers pull from a
+    // shared index, so uneven per-image cost stays balanced. Two images can share a
+    // cache file (`sunset.jpg` and `sunset.webp`, or `sunset.JPG`), and requests can
+    // be making the same file meanwhile; `save_to_cache` renames each finished file
+    // into place, so that is safe.
     let workers = transcode_limit();
 
     let next = AtomicUsize::new(0);
@@ -676,19 +995,8 @@ pub fn prewarm_cache(images_dir: &str, cache_dir: &str) {
                     let Some(image_path) = image_paths.get(idx) else {
                         break;
                     };
-                    // Strip extension to get the base path.
-                    let path_without_ext = match image_path.rfind('.') {
-                        Some(dot) => &image_path[..dot],
-                        None => image_path.as_str(),
-                    };
-                    if process_and_cache_image(
-                        images_dir,
-                        cache_dir,
-                        path_without_ext,
-                        width,
-                        quality,
-                    )
-                    .is_some()
+                    if process_and_cache_image(images_dir, cache_dir, image_path, width, quality)
+                        .is_some()
                     {
                         processed.fetch_add(1, Ordering::Relaxed);
                     } else {
@@ -817,7 +1125,7 @@ mod tests {
         let images = dir.path();
         write_jpeg(&images.join("foo/bar.jpg"), STUB);
 
-        let found = find_image_file(images.to_str().unwrap(), "foo/bar", &["jpg", "png"]);
+        let found = find_image_file(images.to_str().unwrap(), "foo/bar", None, &["jpg", "png"]);
         assert!(found.is_some());
         let found = found.unwrap();
         assert!(found.ends_with("foo/bar.jpg"));
@@ -826,7 +1134,7 @@ mod tests {
     #[test]
     fn find_image_file_returns_none_for_nonexistent() {
         let dir = TempDir::new().unwrap();
-        let found = find_image_file(dir.path().to_str().unwrap(), "missing", &["jpg"]);
+        let found = find_image_file(dir.path().to_str().unwrap(), "missing", None, &["jpg"]);
         assert!(found.is_none());
     }
 
@@ -841,11 +1149,11 @@ mod tests {
         write_jpeg(&dir.path().join("outside.jpg"), STUB);
 
         // Sanity: legitimate path resolves.
-        assert!(find_image_file(inside.to_str().unwrap(), "inside", &["jpg"]).is_some());
+        assert!(find_image_file(inside.to_str().unwrap(), "inside", None, &["jpg"]).is_some());
 
         // Traversal: from `<root>/inside` try to reach `../outside` — would
         // resolve to `<root>/outside.jpg` which is OUTSIDE the images_dir.
-        let escape = find_image_file(inside.to_str().unwrap(), "../outside", &["jpg"]);
+        let escape = find_image_file(inside.to_str().unwrap(), "../outside", None, &["jpg"]);
         assert!(escape.is_none(), "traversal escape was not blocked");
     }
 
@@ -1359,5 +1667,730 @@ mod tests {
             Duration::from_hours(24),
             SystemTime::now()
         ));
+    }
+
+    /// Photos named the way cameras and other tools name them, in a gallery `g`.
+    const ANY_CASE: [&str; 5] = ["Upper.JPG", "Mixed.Jpg", "Shot.PNG", "Pic.WEBP", "Clip.GIF"];
+
+    /// A 4×3 JPEG XL, which the `image` crate can't write: `cjxl -d 0` of a flat PPM.
+    const TINY_JXL: &[u8] = &[
+        0xff, 0x0a, 0x10, 0x30, 0x10, 0x50, 0x5c, 0x08, 0x08, 0x00, 0x01, 0x00, 0x58, 0x00, 0x4b,
+        0x18, 0x8b, 0x15, 0xc2, 0x01, 0x63, 0x9b, 0x50, 0xf1, 0x07, 0xd8, 0x3b, 0x00, 0x00, 0xfb,
+        0x48, 0x05, 0x78, 0x20, 0x00, 0x00,
+    ];
+
+    /// A small image at `path`, in the format its extension names in whatever case.
+    /// Backdated past the settle time, so the sizes made from it are cached.
+    fn write_image(path: &std::path::Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbImage::new(16, 12).save(path).unwrap();
+        backdate(path);
+    }
+
+    /// Which file `find_image_file` picks for `g/<stem>` under `images`, asked for with
+    /// the extension `requested`, as a name.
+    fn picked(images: &std::path::Path, stem: &str, requested: Option<&str>) -> Option<String> {
+        let found = find_image_file(
+            images.to_str().unwrap(),
+            &format!("g/{stem}"),
+            requested,
+            &SOURCE_EXTENSIONS,
+        )?;
+        Some(found.file_name()?.to_str()?.to_owned())
+    }
+
+    #[test]
+    fn find_image_file_finds_the_extension_in_any_case() {
+        let dir = TempDir::new().unwrap();
+        for name in ANY_CASE {
+            write_jpeg(&dir.path().join("g").join(name), STUB);
+        }
+
+        for (stem, requested, expected) in [
+            ("Upper", Some("JPG"), "Upper.JPG"),
+            ("Mixed", Some("Jpg"), "Mixed.Jpg"),
+            ("Shot", Some("PNG"), "Shot.PNG"),
+            ("Pic", Some("WEBP"), "Pic.WEBP"),
+            // Lower and upper case are found whatever the request names, as any format
+            // already was.
+            ("Upper", Some("jpg"), "Upper.JPG"),
+            ("Upper", None, "Upper.JPG"),
+            ("Pic", Some("webp"), "Pic.WEBP"),
+        ] {
+            assert_eq!(
+                picked(dir.path(), stem, requested).as_deref(),
+                Some(expected),
+                "{stem} asked for as {requested:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_image_file_lists_a_folder_only_for_a_file_that_is_there() {
+        let dir = TempDir::new().unwrap();
+        write_jpeg(&dir.path().join("g/Mixed.Jpg"), STUB);
+        write_jpeg(&dir.path().join("g/Other.jPg"), STUB);
+        write_jpeg(&dir.path().join("g/Other.Webp"), STUB);
+
+        // Found through the file the request names.
+        assert_eq!(
+            picked(dir.path(), "Mixed", Some("Jpg")).as_deref(),
+            Some("Mixed.Jpg")
+        );
+        // Spellings that aren't there, made up or not, list nothing and find nothing.
+        for requested in [Some("jpg"), Some("JPG"), Some("jPg"), Some("Webp"), None] {
+            assert_eq!(
+                picked(dir.path(), "Mixed", requested),
+                None,
+                "{requested:?}"
+            );
+        }
+        assert_eq!(picked(dir.path(), "Gone", Some("Jpg")), None);
+        // A file that is there picks among the name's files by the usual rule, whichever
+        // one the request names: by format, so the jpg.
+        for requested in ["jPg", "Webp"] {
+            assert_eq!(
+                picked(dir.path(), "Other", Some(requested)).as_deref(),
+                Some("Other.jPg"),
+                "{requested}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_image_file_picks_between_case_variants_the_same_way_every_time() {
+        let dir = TempDir::new().unwrap();
+        for (folder, names, expected) in [
+            // Lower case first, then upper case, whatever the request names.
+            ("a", ["x.JPG", "x.jpg"], "x.jpg"),
+            ("b", ["x.Jpg", "x.JPG"], "x.JPG"),
+            // Mixed spellings in byte order: upper-case letters sort first.
+            ("c", ["x.jPg", "x.Jpg"], "x.Jpg"),
+            // Format first, as before, for spellings found with a `stat`...
+            ("d", ["x.webp", "x.JPG"], "x.JPG"),
+            // ...and a mixed spelling only when no format is spelled either way.
+            ("e", ["x.webp", "x.Jpg"], "x.webp"),
+        ] {
+            for name in names {
+                write_jpeg(&dir.path().join(folder).join(name), STUB);
+            }
+            let x = format!("{folder}/x");
+            for requested in [None, Some("jpg"), Some("JPG"), Some("Jpg"), Some("jPg")] {
+                let found = find_image_file(
+                    dir.path().to_str().unwrap(),
+                    &x,
+                    requested,
+                    &SOURCE_EXTENSIONS,
+                );
+                let found = found.as_deref().and_then(std::path::Path::file_name);
+                // A request that names a file that is there finds a mixed spelling; any
+                // other finds a file only when one is spelled in lower or upper case.
+                if folder == "c" && !matches!(requested, Some("Jpg" | "jPg")) {
+                    assert_eq!(found, None, "{folder}: {requested:?}");
+                } else {
+                    assert_eq!(
+                        found,
+                        Some(std::ffi::OsStr::new(expected)),
+                        "{folder}: {requested:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn find_image_file_keeps_a_mixed_spelling_inside_images_dir() {
+        // <root>/inside is the images dir; <root>/outside.Jpg must not be reachable,
+        // by a path or through a link.
+        let dir = TempDir::new().unwrap();
+        let inside = dir.path().join("inside");
+        write_jpeg(&inside.join("g/inside.Jpg"), STUB);
+        write_jpeg(&dir.path().join("outside.Jpg"), STUB);
+        std::os::unix::fs::symlink(dir.path().join("outside.Jpg"), inside.join("g/link.Jpg"))
+            .unwrap();
+        let supported = ["jpg", "png"];
+        let find =
+            |path: &str| find_image_file(inside.to_str().unwrap(), path, Some("Jpg"), &supported);
+
+        assert!(find("g/inside").is_some());
+        assert!(
+            find("../outside").is_none(),
+            "traversal escape was not blocked"
+        );
+        assert!(
+            find("g/../../outside").is_none(),
+            "traversal escape was not blocked"
+        );
+        assert!(find("g/link").is_none(), "a link out was followed");
+    }
+
+    #[test]
+    fn find_image_file_passes_over_avif_which_this_build_cannot_decode() {
+        let dir = TempDir::new().unwrap();
+        for name in [
+            "a.AVIF", "a.webp", "b.avif", "b.Webp", "c.avif", "c.GIF", "d.avif", "e.GIF", "e.png",
+        ] {
+            write_jpeg(&dir.path().join("g").join(name), STUB);
+        }
+
+        for (stem, requested, expected) in [
+            // An AVIF would only fail to decode, so the other format serves.
+            ("a", "AVIF", Some("a.webp")),
+            ("c", "avif", Some("c.GIF")),
+            // The AVIF the gallery names leads to a mixed spelling too.
+            ("b", "avif", Some("b.Webp")),
+            // Nothing to make the sizes from.
+            ("d", "avif", None),
+            // A GIF is a source now, last in the order.
+            ("e", "GIF", Some("e.png")),
+        ] {
+            assert_eq!(
+                picked(dir.path(), stem, Some(requested)).as_deref(),
+                expected,
+                "{stem}.{requested}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gallery_and_the_endpoint_pick_the_same_file() {
+        // Spellings of each format the endpoint can decode. Every pair and every triple
+        // of them is one photo, in a folder of its own.
+        const NAMES: [&str; 18] = [
+            "x.jpg", "x.JPG", "x.Jpg", "x.jPg", "x.jpeg", "x.JPEG", "x.Jpeg", "x.jxl", "x.JXL",
+            "x.webp", "x.WEBP", "x.Webp", "x.png", "x.PNG", "x.Png", "x.gif", "x.GIF", "x.Gif",
+        ];
+        let mut sets = Vec::new();
+        for (i, a) in NAMES.iter().enumerate() {
+            for (j, b) in NAMES.iter().enumerate().skip(i + 1) {
+                sets.push(vec![*a, *b]);
+                sets.extend(NAMES[j + 1..].iter().map(|c| vec![*a, *b, *c]));
+            }
+        }
+        assert_eq!(sets.len(), 153 + 816);
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_str().unwrap();
+        for (n, files) in sets.iter().enumerate() {
+            let folder = dir.path().join(format!("f{n}"));
+            for file in files {
+                write_jpeg(&folder.join(file), STUB);
+            }
+            let mut photos = Vec::new();
+            crate::gallery::find_images_for_gallery(&folder, dir.path(), &mut photos);
+            assert_eq!(photos.len(), 1, "{files:?}");
+            let main = photos[0].filename.as_str();
+
+            // The site asks for the main file. Asking for any of the others gives the
+            // same answer.
+            for file in files {
+                let requested = file.rsplit_once('.').map(|(_, ext)| ext);
+                let found =
+                    find_image_file(root, &format!("f{n}/x"), requested, &SOURCE_EXTENSIONS);
+                let found = found.as_deref().and_then(Path::file_name);
+                assert_eq!(
+                    found.and_then(std::ffi::OsStr::to_str),
+                    Some(main),
+                    "{files:?}, asked for {file}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn process_and_cache_image_transcodes_any_case_of_extension() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        for name in ANY_CASE {
+            write_image(&images.join("g").join(name));
+        }
+        fs::write(images.join("g/Art.JXL"), TINY_JXL).unwrap();
+        backdate(&images.join("g/Art.JXL"));
+
+        for name in ANY_CASE.into_iter().chain(["Art.JXL"]) {
+            let webp = process_and_cache_image(
+                images.to_str().unwrap(),
+                cache.to_str().unwrap(),
+                &format!("g/{name}"),
+                8,
+                80,
+            );
+            let webp = webp.unwrap_or_else(|| panic!("no WebP for {name}")).data;
+            assert_eq!(&webp[8..12], b"WEBP", "{name}");
+
+            // Cached under the name without the extension, in the case it has.
+            let stem = name.split_once('.').unwrap().0;
+            let cached = cache.join(format!("g_{stem}_w8_q80_l1.webp"));
+            assert_eq!(fs::read(&cached).ok(), Some(webp), "{name}");
+        }
+    }
+
+    #[test]
+    fn process_and_cache_image_serves_another_format_beside_avif() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        // Not real AVIF: this build can't decode it, so its bytes never matter.
+        write_jpeg(&images.join("g/x.AVIF"), STUB);
+        write_image(&images.join("g/x.webp"));
+        write_jpeg(&images.join("g/y.avif"), STUB);
+        let process = |path: &str| {
+            process_and_cache_image(
+                images.to_str().unwrap(),
+                cache.to_str().unwrap(),
+                path,
+                8,
+                80,
+            )
+            .map(|webp| webp.data)
+        };
+
+        let webp = process("g/x.AVIF").expect("the WebP beside the AVIF");
+        assert_eq!(&webp[8..12], b"WEBP");
+        assert_eq!(process("g/y.avif"), None);
+    }
+
+    /// A 40×30 animated GIF of `frames` frames, the first red and the rest blue.
+    fn animated_gif(frames: usize) -> Vec<u8> {
+        use image::codecs::gif::GifEncoder;
+        use image::{Delay, Frame, Rgba, RgbaImage};
+
+        let mut gif = Vec::new();
+        // The encoder writes the GIF's trailer when it is dropped, at the end of this block.
+        {
+            let mut encoder = GifEncoder::new_with_speed(&mut gif, 30);
+            for n in 0..frames {
+                let colour = if n == 0 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                };
+                let picture = RgbaImage::from_pixel(40, 30, Rgba(colour));
+                let delay = Delay::from_numer_denom_ms(100, 1);
+                encoder
+                    .encode_frame(Frame::from_parts(picture, 0, 0, delay))
+                    .unwrap();
+            }
+        }
+        gif
+    }
+
+    #[test]
+    fn process_and_cache_image_makes_a_gif_from_its_first_frame_alone() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(images.join("g")).unwrap();
+        let gif = animated_gif(300);
+        fs::write(images.join("g/Loop.GIF"), &gif).unwrap();
+        // The same animation cut off halfway, in the middle of a frame and with no
+        // trailer. It still transcodes, because nothing after the first frame is read.
+        fs::write(images.join("g/Cut.gif"), &gif[..gif.len() / 2]).unwrap();
+
+        for name in ["Loop.GIF", "Cut.gif"] {
+            let webp = process_and_cache_image(
+                images.to_str().unwrap(),
+                cache.to_str().unwrap(),
+                &format!("g/{name}"),
+                2400,
+                90,
+            )
+            .unwrap_or_else(|| panic!("no WebP for {name}"))
+            .data;
+            let picture = image::load_from_memory(&webp).unwrap().to_rgb8();
+            assert_eq!(picture.dimensions(), (40, 30), "{name}");
+            let [red, green, blue] = picture.get_pixel(20, 15).0;
+            assert!(
+                red > 200 && green < 50 && blue < 50,
+                "{name}: ({red}, {green}, {blue}) is not the first frame's red"
+            );
+        }
+    }
+
+    #[test]
+    #[serial] // prewarm reads IMAGE_PRESETS, shared with other env-driven tests
+    fn prewarm_cache_transcodes_any_case_of_extension() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        for name in ANY_CASE {
+            write_image(&images.join("g").join(name));
+        }
+
+        prewarm_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        let mut produced: Vec<String> = fs::read_dir(&cache)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        produced.sort();
+        let (width, quality) = crate::image_params::ImageParams::get_valid_presets()[0];
+        let mut expected: Vec<String> = ["Clip", "Mixed", "Pic", "Shot", "Upper"]
+            .iter()
+            .map(|stem| format!("g_{stem}_w{width}_q{quality}_l1.webp"))
+            .collect();
+        expected.sort();
+        assert_eq!(produced, expected);
+    }
+
+    #[test]
+    fn cleanup_cache_keeps_the_caches_of_any_case_of_extension() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let cache = dir.path().join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        for name in ANY_CASE {
+            write_jpeg(&images.join("g").join(name), STUB);
+        }
+        let kept = ["g_Upper", "g_Mixed", "g_Shot", "g_Pic", "g_Clip"];
+        // The name keeps its case, so a cache file for `upper` is not one for `Upper`.
+        let orphans = ["g_Gone", "g_upper"];
+        for prefix in kept.iter().chain(&orphans) {
+            fs::write(cache.join(format!("{prefix}_w2400_q90_l1.webp")), b"webp").unwrap();
+        }
+
+        cleanup_cache(images.to_str().unwrap(), cache.to_str().unwrap());
+
+        for prefix in kept {
+            let file = cache.join(format!("{prefix}_w2400_q90_l1.webp"));
+            assert!(file.exists(), "{prefix} was removed");
+        }
+        for prefix in orphans {
+            let file = cache.join(format!("{prefix}_w2400_q90_l1.webp"));
+            assert!(!file.exists(), "{prefix} was kept");
+        }
+    }
+
+    /// `image_path` cut as `process_and_cache_image` cuts it.
+    fn cut(image_path: &str) -> (&str, Option<&str>) {
+        match image_path.rsplit_once('.') {
+            Some((path_without_ext, ext)) => (path_without_ext, Some(ext)),
+            None => (image_path, None),
+        }
+    }
+
+    #[test]
+    fn a_folder_is_listed_only_for_an_image_named_inside_images_dir() {
+        let dir = TempDir::new().unwrap();
+        let images = dir.path().join("images");
+        let home = images.join("home");
+        for name in [
+            "x.Jpg",
+            "y.avif",
+            "gallery.Jpg",
+            ".Jpg",
+            "album.Webp",
+            "gallery.toml",
+        ] {
+            write_jpeg(&home.join(name), STUB);
+        }
+        // A folder named like an image.
+        fs::create_dir_all(home.join("album.Jpg")).unwrap();
+        write_jpeg(&dir.path().join("outside.Jpg"), STUB);
+        let root = images.canonicalize().unwrap();
+        // The folder `find_image_file` would list for `image_path`, if any.
+        let listed = |image_path: &str| {
+            let (path_without_ext, requested) = cut(image_path);
+            let (folder, stem) = image_folder(&root, path_without_ext)?;
+            lists_folder(&folder, stem, requested, &SOURCE_EXTENSIONS)
+                .then(|| (folder.clone(), stem.to_owned()))
+        };
+
+        // An image the request names that is there: a mixed spelling, or an AVIF.
+        assert_eq!(
+            listed("home/x.Jpg"),
+            Some((root.join("home"), "x".to_owned()))
+        );
+        assert_eq!(
+            listed("home/y.avif"),
+            Some((root.join("home"), "y".to_owned()))
+        );
+        // Nothing else lists: a folder, a TOML, no extension, a folder named like an
+        // image, a made-up name, or an image outside the images dir, whose folder isn't
+        // looked in at all.
+        for image_path in [
+            "home/.",
+            "home/gallery.toml",
+            "home",
+            "home/album.Jpg",
+            "home/zz.Jpg",
+            "../outside.Jpg",
+            "home/../../outside.Jpg",
+        ] {
+            assert_eq!(listed(image_path), None, "{image_path}");
+        }
+        for path_without_ext in ["../outside", "home/../../outside", "/etc/passwd"] {
+            assert_eq!(
+                image_folder(&root, path_without_ext),
+                None,
+                "{path_without_ext}"
+            );
+        }
+
+        // A folder is never taken for a file, here or in the `stat`s before a listing.
+        fs::create_dir_all(home.join("both.jpg")).unwrap();
+        write_jpeg(&home.join("both.webp"), STUB);
+        let found = find_image_file(
+            images.to_str().unwrap(),
+            "home/both",
+            Some("jpg"),
+            &SOURCE_EXTENSIONS,
+        );
+        assert_eq!(found, Some(root.join("home/both.webp")));
+
+        // So those find nothing, though a listing would find `gallery.Jpg`, `.Jpg` and
+        // `album.Webp`.
+        for image_path in ["home/gallery.toml", "home/.", "home/album.Jpg"] {
+            let (path_without_ext, requested) = cut(image_path);
+            let found = find_image_file(
+                images.to_str().unwrap(),
+                path_without_ext,
+                requested,
+                &SOURCE_EXTENSIONS,
+            );
+            assert_eq!(found, None, "{image_path}");
+        }
+    }
+
+    /// A GIF of one 1×1 frame whose header declares a `width` × `height` canvas, as a
+    /// file of a few dozen bytes can.
+    fn gif_declaring(width: u16, height: u16) -> Vec<u8> {
+        let mut gif = Vec::new();
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut gif), image::ImageFormat::Gif)
+            .unwrap();
+        // The logical screen descriptor follows the six-byte signature.
+        gif[6..8].copy_from_slice(&width.to_le_bytes());
+        gif[8..10].copy_from_slice(&height.to_le_bytes());
+        gif
+    }
+
+    #[test]
+    fn the_decode_limits_admit_the_largest_photos_and_refuse_huge_headers() {
+        let check = |width, height, bytes| check_size(width, height, bytes, MAX_PIXELS);
+        // The largest photo on the production share, even as 16-bit RGBA (8 bytes a
+        // pixel), and 400 MP that way.
+        assert!(check(13_021, 21_718, 13_021 * 21_718 * 8).is_ok());
+        assert!(check(20_000, 20_000, 20_000 * 20_000 * 8).is_ok());
+        // What a GIF or PNG header can claim: 65535 × 65535, 16 GiB as RGBA.
+        assert!(check(65_535, 65_535, 65_535 * 65_535 * 4).is_err());
+        // A side over 32,768.
+        assert!(check(32_769, 1, 32_769 * 4).is_err());
+        // Within the sides and the bytes, but over 400 MP.
+        assert!(check(20_000, 20_001, 20_000 * 20_001 * 4).is_err());
+        // Within the pixels, but over the bytes.
+        assert!(check(20_000, 20_000, 20_000 * 20_000 * 8 + 1).is_err());
+        // A JPEG XL: 100 MP, not 400.
+        assert!(check_size(10_000, 10_000, 10_000 * 10_000 * 16, MAX_JXL_PIXELS).is_ok());
+        assert!(check_size(10_000, 10_001, 10_000 * 10_001 * 3, MAX_JXL_PIXELS).is_err());
+    }
+
+    #[test]
+    fn a_decoder_gets_what_the_picture_leaves_of_the_allowance() {
+        // A canvas of 400 MP as RGBA, 1.6 GB, leaves 1.6 GB for a GIF's frame buffer.
+        let picture = 20_000 * 20_000 * 4;
+        let mut beside = limits_beside(picture).unwrap();
+        assert_eq!(beside.max_alloc, Some(MAX_DECODED_BYTES - picture));
+        assert!(beside.reserve(MAX_DECODED_BYTES - picture).is_ok());
+        assert!(
+            limits_beside(picture)
+                .unwrap()
+                .reserve(MAX_DECODED_BYTES - picture + 1)
+                .is_err()
+        );
+        // A picture that takes it all leaves nothing; one over it is refused.
+        assert_eq!(limits_beside(MAX_DECODED_BYTES).unwrap().max_alloc, Some(0));
+        assert!(limits_beside(MAX_DECODED_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn a_failed_file_is_refused_again_from_its_metadata_until_it_changes() {
+        use std::io::Write as _;
+
+        let dir = TempDir::new().unwrap();
+        // Refused by the limits, and not an image at all, both settled.
+        let canvas = dir.path().join("canvas.gif");
+        fs::write(&canvas, gif_declaring(32_769, 1)).unwrap();
+        backdate(&canvas);
+        let broken = dir.path().join("broken.png");
+        fs::write(&broken, b"\x89PNG\r\n\x1a\nnot really").unwrap();
+        backdate(&broken);
+        for path in [&canvas, &broken] {
+            assert!(!failed_before(path));
+            assert!(load_standard_image(path).is_none());
+            assert!(failed_before(path), "{} wasn't remembered", path.display());
+            assert_eq!(process_image(path, 2400, 90), None);
+        }
+
+        // Replaced by a picture within the limits, so its length changes.
+        fs::write(&canvas, gif_declaring(32_768, 1)).unwrap();
+        fs::File::options()
+            .append(true)
+            .open(&canvas)
+            .unwrap()
+            .write_all(b"\0")
+            .unwrap();
+        assert!(!failed_before(&canvas), "a changed file is still refused");
+        assert!(load_standard_image(&canvas).is_some());
+    }
+
+    #[test]
+    fn a_failure_to_read_a_file_is_not_remembered() {
+        // A folder opens, but reading it fails: an I/O error, which says nothing about
+        // what a file holds. Dated an hour back, so only that keeps it from the memo.
+        let dir = TempDir::new().unwrap();
+        let folder = dir.path().join("folder.png");
+        fs::create_dir(&folder).unwrap();
+        fs::File::open(&folder)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_hours(1))
+            .unwrap();
+
+        assert!(load_standard_image(&folder).is_none());
+        assert!(!failed_before(&folder));
+    }
+
+    #[test]
+    fn only_an_io_error_other_than_an_early_end_counts_as_a_failure_to_read() {
+        use image::error::{DecodingError, ImageError, ImageFormatHint};
+        use std::io::{Error, ErrorKind};
+
+        let eio = || Error::from_raw_os_error(5);
+        let eof = || Error::from(ErrorKind::UnexpectedEof);
+        // As `image` reports them, and as jxl-oxide does, under a decoding error.
+        let wrapped =
+            |io: Error| ImageError::Decoding(DecodingError::new(ImageFormatHint::Unknown, io));
+        assert!(read_failed(&ImageError::IoError(eio())));
+        assert!(read_failed(&wrapped(eio())));
+        // A file that ends too soon is cut off, which is a property of the file.
+        assert!(!read_failed(&ImageError::IoError(eof())));
+        assert!(!read_failed(&wrapped(eof())));
+        let not_io = ImageError::Decoding(DecodingError::new(ImageFormatHint::Unknown, "bad data"));
+        assert!(!read_failed(&not_io));
+    }
+
+    #[test]
+    fn a_failure_is_remembered_only_once_the_file_has_settled() {
+        let dir = TempDir::new().unwrap();
+        let broken = dir.path().join("broken.png");
+        fs::write(&broken, b"\x89PNG\r\n\x1a\nnot really").unwrap();
+
+        // Just written: it may be part of a file still being written.
+        assert!(load_standard_image(&broken).is_none());
+        assert!(
+            !failed_before(&broken),
+            "an unsettled failure was remembered"
+        );
+
+        backdate(&broken);
+        assert!(load_standard_image(&broken).is_none());
+        assert!(
+            failed_before(&broken),
+            "a settled failure wasn't remembered"
+        );
+    }
+
+    #[test]
+    fn a_file_cut_short_is_remembered_once_settled() {
+        let dir = TempDir::new().unwrap();
+        // Enough detail that the files aren't tiny.
+        let picture = image::RgbImage::from_fn(64, 48, |x, y| {
+            let (x, y) = (u8::try_from(x).unwrap(), u8::try_from(y).unwrap());
+            image::Rgb([
+                x.wrapping_mul(4),
+                y.wrapping_mul(5),
+                (x ^ y).wrapping_mul(3),
+            ])
+        });
+        let mut cuts = Vec::new();
+        for (name, format) in [
+            ("cut.png", image::ImageFormat::Png),
+            ("cut.webp", image::ImageFormat::WebP),
+        ] {
+            let mut whole = Vec::new();
+            picture
+                .write_to(&mut std::io::Cursor::new(&mut whole), format)
+                .unwrap();
+            // Early, in the header, and late, in the picture.
+            for (n, end) in [20, whole.len() * 9 / 10].into_iter().enumerate() {
+                let path = dir.path().join(format!("{n}-{name}"));
+                fs::write(&path, &whole[..end]).unwrap();
+                backdate(&path);
+                cuts.push(path);
+            }
+        }
+        let cut_jxl = dir.path().join("cut.jxl");
+        fs::write(&cut_jxl, &TINY_JXL[..6]).unwrap();
+        backdate(&cut_jxl);
+
+        for path in &cuts {
+            assert!(
+                load_standard_image(path).is_none(),
+                "{} decoded",
+                path.display()
+            );
+            assert!(failed_before(path), "{} wasn't remembered", path.display());
+        }
+        assert!(load_jxl_image(&cut_jxl).is_none());
+        assert!(failed_before(&cut_jxl), "the cut JPEG XL wasn't remembered");
+    }
+
+    /// A writer that sets a file's length first and fills it in after: caught partway,
+    /// with a tail of zeros, it fails to decode at the final length. Filled in, at the
+    /// same length and with the same time, it has to decode, not stay failed.
+    #[test]
+    fn a_preallocated_file_caught_partway_is_not_stuck() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("loop.gif");
+        let whole = animated_gif(3);
+        let mut partway = whole[..whole.len() / 3].to_vec();
+        partway.resize(whole.len(), 0);
+        fs::write(&path, &partway).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(
+            process_image(&path, 2400, 90),
+            None,
+            "the partway file decoded"
+        );
+
+        fs::write(&path, &whole).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert!(
+            process_image(&path, 2400, 90).is_some(),
+            "stuck on the partway file"
+        );
+    }
+
+    #[test]
+    fn a_gif_declaring_a_canvas_over_the_limits_is_refused_before_it_is_allocated() {
+        let dir = TempDir::new().unwrap();
+        // Sizes that would be harmless if the limits were lost, so this fails rather
+        // than taking the machine's memory: a side over 32,768, and 400 MP and a bit,
+        // 1.6 GB as RGBA. A 65535 × 65535 header is refused by the same checks (see
+        // `the_decode_limits_admit_the_largest_photos_and_refuse_huge_headers`).
+        for (width, height) in [(32_769, 1), (20_000, 20_001)] {
+            let path = dir.path().join(format!("{width}x{height}.gif"));
+            fs::write(&path, gif_declaring(width, height)).unwrap();
+            assert!(
+                load_standard_image(&path).is_none(),
+                "{width} × {height} was decoded"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gif_declaring_a_large_canvas_within_the_limits_decodes() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("canvas.gif");
+        fs::write(&path, gif_declaring(6_000, 6_000)).unwrap();
+
+        let picture = load_standard_image(&path).expect("a 6000 × 6000 canvas, 144 MB");
+        assert_eq!((picture.width(), picture.height()), (6_000, 6_000));
     }
 }

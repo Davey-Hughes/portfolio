@@ -107,7 +107,8 @@ cargo ci            # fmt + clippy + the same tests: CI's rust and hydrate jobs
 `cargo ci` is an alias (in `.cargo/config.toml`) for the small runner in
 `xtask/src/main.rs`. By default it skips CI's `release-checks` job, which needs a slow
 release build. `cargo ci --release` adds that job's release build, fixture generation and
-bundle-size budget. Only the job's Playwright suite is left out, since it needs a server;
+bundle-size budget. Like CI, it deletes `target/e2e-fixtures` before generating the
+fixtures there. Only the job's Playwright suite is left out, since it needs a server;
 see below.
 
 The two commands don't build the tests quite the same way. `cargo leptos test` compiles

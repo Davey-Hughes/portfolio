@@ -236,11 +236,7 @@ fn find_images_recursive_with_gallery(
     for (_base_path, variants) in image_groups {
         // Sort variants by priority (modern formats first for sources)
         let mut sorted_variants = variants.clone();
-        sorted_variants.sort_by(|a, b| {
-            let priority_a = format_priority(&a.1);
-            let priority_b = format_priority(&b.1);
-            priority_a.cmp(&priority_b)
-        });
+        sorted_variants.sort_by(|a, b| variant_order(&a.0, &a.1).cmp(&variant_order(&b.0, &b.1)));
 
         // Use the first variant as the primary image (fallback)
         let (primary_relative_path, primary_ext, _) = &sorted_variants[0];
@@ -252,15 +248,14 @@ fn find_images_recursive_with_gallery(
             .map_or_default(|f| f.to_string_lossy().to_string());
 
         // Create slug from filename (without extension), stripping leading numbers
-        let slug = strip_leading_number_and_dash(&filename_str)
-            .trim_end_matches(&format!(".{primary_ext}"))
+        let slug = trim_extension(&strip_leading_number_and_dash(&filename_str), primary_ext)
             .to_lowercase()
             .replace([' ', '_'], "-");
 
         // Strip leading numbers and dashes, then convert to title
-        let derived_title = strip_leading_number_and_dash(&filename_str)
-            .trim_end_matches(&format!(".{primary_ext}"))
-            .replace(['-', '_'], " ");
+        let derived_title =
+            trim_extension(&strip_leading_number_and_dash(&filename_str), primary_ext)
+                .replace(['-', '_'], " ");
 
         // Load per-photo config (focal point, title override) from sibling TOML
         let photo_config = load_photo_config(&primary_full_path);
@@ -403,9 +398,7 @@ fn collect_image_files(
                         .to_string();
 
                     // Create base path without extension
-                    let base_path = relative_path
-                        .trim_end_matches(&format!(".{ext}"))
-                        .to_string();
+                    let base_path = trim_extension(&relative_path, &ext).to_string();
 
                     groups.entry(base_path).or_default().push((
                         relative_path,
@@ -429,6 +422,51 @@ fn format_priority(ext: &str) -> u8 {
         "gif" => 5,          // Lowest priority
         _ => 99,
     }
+}
+
+/// Where a file goes among one photo's files, best first. `ext` is its extension in
+/// lower case.
+///
+/// This is the order in which the compressed endpoint picks its source
+/// (`image_cache::find_image_file`), so for a photo whose files it can all decode, the
+/// thumbnails, the original, the EXIF and the title come from the same file:
+/// - a mixed spelling (`x.Jpg`) after every file spelled all in lower or all in upper
+///   case, since the endpoint lists a folder for one only when nothing else is there;
+/// - then by [`format_priority`], with `jpg` before `jpeg`, as the endpoint has them;
+/// - then all lower case (`x.jpg`) before all upper case (`x.JPG`);
+/// - then by name in byte order (`x.JPg` before `x.Jpg`).
+///
+/// The endpoint can't decode AVIF. A photo with an AVIF and another format may have
+/// the AVIF as its main file here (it ranks second, after JPEG), with the sizes made
+/// from the other file.
+fn variant_order<'a>(relative_path: &'a str, ext: &str) -> (bool, u8, bool, u8, &'a str) {
+    let spelling = Path::new(relative_path)
+        .extension()
+        .and_then(|spelled| spelled.to_str())
+        .map_or(0, crate::image_cache::extension_spelling_rank);
+    (
+        spelling == 2,
+        format_priority(ext),
+        ext == "jpeg",
+        spelling,
+        relative_path,
+    )
+}
+
+/// `name` without its extension `ext` (in lower case), however the file spells it:
+/// `DSC_0001.JPG` and `DSC_0001.jpg` both give `DSC_0001`. Like the
+/// `trim_end_matches` it replaces, it takes off a repeated extension too
+/// (`x.jpg.jpg` gives `x`).
+fn trim_extension<'a>(name: &'a str, ext: &str) -> &'a str {
+    let mut rest = name;
+    while let Some(start) = rest.len().checked_sub(ext.len() + 1)
+        && let Some(tail) = rest.get(start..)
+        && let Some(spelled) = tail.strip_prefix('.')
+        && spelled.eq_ignore_ascii_case(ext)
+    {
+        rest = &rest[..start];
+    }
+    rest
 }
 
 /// Find images for a specific gallery (with different base path handling)
@@ -2357,5 +2395,171 @@ mod tests {
             candidates.profile_lens.as_deref(),
             Some("Nikon AF-S VR Micro-Nikkor 105mm f/2.8G IF-ED"),
         );
+    }
+
+    /// An `IMAGES_DIR` holding one gallery, `cams`, with a small image for each of
+    /// `files`, in the format its extension names in whatever case.
+    fn images_dir_with_cams(files: &[&str]) -> tempfile::TempDir {
+        let root = tempfile::TempDir::new().unwrap();
+        let cams = root.path().join("cams");
+        fs::create_dir_all(&cams).unwrap();
+        for file in files {
+            image::RgbImage::new(4, 3).save(cams.join(file)).unwrap();
+        }
+        root
+    }
+
+    /// The photos of the `cams` gallery under `root`, in the gallery's order.
+    fn cams_photos(root: &tempfile::TempDir) -> Vec<PhotoInfo> {
+        unsafe { std::env::remove_var("IMAGE_PRESETS") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+        load_gallery_photos("cams").expect("a cams gallery")
+    }
+
+    #[test]
+    #[serial]
+    fn a_photo_is_found_whatever_the_case_of_its_extension() {
+        let root = images_dir_with_cams(&["DSC_0001.JPG", "Mixed.Jpg", "Shot.PNG", "Pic.WEBP"]);
+        // A per-photo TOML is found by the name without the extension, as for `.jpg`.
+        fs::write(
+            root.path().join("cams/DSC_0001.toml"),
+            "title = \"Harbour\"\n",
+        )
+        .unwrap();
+
+        let photos = cams_photos(&root);
+
+        let found: Vec<(&str, &str, &str)> = photos
+            .iter()
+            .map(|p| (p.filename.as_str(), p.slug.as_str(), p.title.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("DSC_0001.JPG", "dsc-0001", "Harbour"),
+                ("Mixed.Jpg", "mixed", "Mixed"),
+                ("Pic.WEBP", "pic", "Pic"),
+                ("Shot.PNG", "shot", "Shot"),
+            ]
+        );
+        // Every address keeps the file's real name: the file server under `/images`
+        // matches names exactly.
+        for photo in &photos {
+            let name = &photo.filename;
+            let compressed = format!("/images/compressed/cams/{name}");
+            assert_eq!(
+                without_version(&photo.original_url),
+                format!("/images/cams/{name}")
+            );
+            assert_eq!(
+                without_version(&photo.url),
+                format!("{compressed}?width=2400&quality=90")
+            );
+            assert_eq!(
+                without_version(&photo.detail_url),
+                format!("{compressed}?width=4000&quality=90")
+            );
+            let (srcset_url, srcset_width) = photo.srcset.split_once(' ').unwrap();
+            assert_eq!(
+                (without_version(srcset_url), srcset_width),
+                (
+                    format!("{compressed}?width=2400&quality=90").as_str(),
+                    "2400w"
+                )
+            );
+            assert!(photo.sources.is_empty() && photo.original_sources.is_empty());
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn formats_of_one_photo_are_grouped_whatever_the_case_of_their_extensions() {
+        let root = images_dir_with_cams(&["x.JPG", "x.webp", "y.jpg", "y.WEBP"]);
+
+        let photos = cams_photos(&root);
+
+        assert_eq!(photos.len(), 2, "{photos:?}");
+        for (photo, (slug, main, other)) in photos
+            .iter()
+            .zip([("x", "x.JPG", "x.webp"), ("y", "y.jpg", "y.WEBP")])
+        {
+            assert_eq!(photo.slug, slug);
+            assert_eq!(
+                without_version(&photo.original_url),
+                format!("/images/cams/{main}")
+            );
+            let others: Vec<(&str, &str)> = photo
+                .original_sources
+                .iter()
+                .map(|s| (without_version(&s.url), s.mime_type.as_str()))
+                .collect();
+            let other = format!("/images/cams/{other}");
+            assert_eq!(others, [(other.as_str(), "image/webp")]);
+        }
+        let compressed: Vec<&str> = photos[0]
+            .sources
+            .iter()
+            .map(|s| without_version(&s.url))
+            .collect();
+        assert_eq!(
+            compressed,
+            ["/images/compressed/cams/x.webp?width=2400&quality=90"]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn files_that_differ_only_in_the_case_of_the_extension_are_one_photo() {
+        // Lower case first, then upper case, then mixed spellings in byte order, as the
+        // compressed endpoint picks between them.
+        for (files, primary, other) in [
+            (["x.JPG", "x.jpg"], "x.jpg", "x.JPG"),
+            (["x.Jpg", "x.JPG"], "x.JPG", "x.Jpg"),
+            (["x.jPg", "x.Jpg"], "x.Jpg", "x.jPg"),
+        ] {
+            let root = images_dir_with_cams(&files);
+
+            let photos = cams_photos(&root);
+
+            assert_eq!(photos.len(), 1, "{files:?}: {photos:?}");
+            assert_eq!(photos[0].slug, "x");
+            assert_eq!(photos[0].filename, primary);
+            let others: Vec<&str> = photos[0]
+                .original_sources
+                .iter()
+                .map(|s| without_version(&s.url))
+                .collect();
+            assert_eq!(others, [format!("/images/cams/{other}")], "{files:?}");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn exif_and_xmp_are_read_from_a_photo_with_an_upper_case_extension() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cams = root.path().join("cams");
+        fs::create_dir_all(&cams).unwrap();
+        let tiff = build_tiff_make_model("ACME", "X100");
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:aux="y">
+            <rdf:Description aux:Lens="Acme 35mm f/2 Macro"/>
+            </x:xmpmeta>"#;
+        fs::write(
+            cams.join("DSC_0002.JPG"),
+            build_synth_jpeg(Some(&tiff), Some(xmp)),
+        )
+        .unwrap();
+
+        let photos = cams_photos(&root);
+
+        assert_eq!(photos.len(), 1, "{photos:?}");
+        let photo = &photos[0];
+        assert!(
+            photo
+                .camera_make
+                .as_deref()
+                .unwrap_or_default()
+                .contains("ACME")
+        );
+        assert_eq!(photo.lens_model.as_deref(), Some("Acme 35mm f/2 Macro"));
     }
 }
