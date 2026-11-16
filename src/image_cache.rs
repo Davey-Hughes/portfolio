@@ -847,17 +847,16 @@ pub fn cleanup_cache(images_dir: &str, cache_dir: &str) {
             continue;
         }
 
-        if is_cache_file_old(&cache_file, max_age, now) {
-            match fs::remove_file(&cache_file) {
-                Ok(()) => {
-                    let age_days = get_file_age_days(&cache_file, now);
-                    log!("Removed old cache file ({}d old): {}", age_days, filename);
-                    old_count += 1;
-                }
-                Err(e) => {
-                    log!("Failed to remove old cache file {}: {}", filename, e);
-                    error_count += 1;
-                }
+        match remove_if_unread_for(&cache_file, max_age, now) {
+            Ok(Some(age)) => {
+                let age_days = age.as_secs() / 86_400;
+                log!("Removed old cache file ({}d old): {}", age_days, filename);
+                old_count += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log!("Failed to remove old cache file {}: {}", filename, e);
+                error_count += 1;
             }
         }
     }
@@ -969,29 +968,28 @@ fn collect_valid_prefixes_recursive(
     Ok(())
 }
 
-/// Check if a cache file is older than the maximum age
-fn is_cache_file_old(
+/// Removes `cache_file` when it was last read more than `max_age` before `now`, and
+/// returns how long before. The age is read before the file goes, since afterwards
+/// there's nothing to ask. `Ok(None)` when the file stays: it was read within
+/// `max_age`, or its age can't be told (it is gone, or was read after `now`). `Err`
+/// only when the delete fails.
+fn remove_if_unread_for(
     cache_file: &Path,
     max_age: std::time::Duration,
     now: std::time::SystemTime,
-) -> bool {
-    if let Ok(metadata) = cache_file.metadata()
-        && let Ok(accessed) = metadata.accessed()
-        && let Ok(age) = now.duration_since(accessed)
-    {
-        return age > max_age;
-    }
-    false
-}
-
-/// Get the age of a file in days
-fn get_file_age_days(cache_file: &Path, now: std::time::SystemTime) -> u64 {
-    cache_file
+) -> std::io::Result<Option<std::time::Duration>> {
+    let age = cache_file
         .metadata()
+        .and_then(|metadata| metadata.accessed())
         .ok()
-        .and_then(|m| m.accessed().ok())
-        .and_then(|accessed| now.duration_since(accessed).ok())
-        .map_or(0, |age| age.as_secs() / 86400)
+        .and_then(|accessed| now.duration_since(accessed).ok());
+    match age {
+        Some(age) if age > max_age => {
+            std::fs::remove_file(cache_file)?;
+            Ok(Some(age))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Pre-generate cache images for all existing photos
@@ -1832,22 +1830,37 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn is_cache_file_old_compares_against_max_age() {
+    fn remove_if_unread_for_returns_the_age_of_the_file_it_removed() {
         let dir = TempDir::new().unwrap();
-        let f = dir.path().join("x.webp");
-        fs::write(&f, b"x").unwrap();
-        // File was just created — 1ns "max age" should mark it old.
-        assert!(is_cache_file_old(
-            &f,
-            Duration::from_nanos(1),
-            SystemTime::now() + Duration::from_secs(1)
-        ));
-        // 1-day max age should not.
-        assert!(!is_cache_file_old(
-            &f,
-            Duration::from_hours(24),
-            SystemTime::now()
-        ));
+        let (_, old) = leftover_and_old_file(dir.path());
+        let fresh = dir.path().join("fresh.webp");
+        fs::write(&fresh, b"webp").unwrap();
+        let now = SystemTime::now();
+        let month = Duration::from_hours(720);
+
+        let removed = remove_if_unread_for(&old, month, now).unwrap();
+        assert_eq!(
+            removed.map(|age| age.as_secs() / 86_400),
+            Some(31),
+            "last read 31 days ago"
+        );
+        assert!(!old.exists(), "a file unused for 30 days is removed");
+
+        assert_eq!(remove_if_unread_for(&fresh, month, now).unwrap(), None);
+        assert!(fresh.exists(), "a file read just now stays");
+
+        let hour_ago = now - Duration::from_hours(1);
+        assert_eq!(
+            remove_if_unread_for(&fresh, Duration::ZERO, hour_ago).unwrap(),
+            None
+        );
+        assert!(fresh.exists(), "a file read after `now` stays");
+
+        assert_eq!(
+            remove_if_unread_for(&old, Duration::ZERO, now).unwrap(),
+            None,
+            "a file that is gone is no error"
+        );
     }
 
     /// Photos named the way cameras and other tools name them, in a gallery `g`.
