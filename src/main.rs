@@ -517,11 +517,64 @@ pub fn main() {
 
 #[cfg(all(test, feature = "ssr"))]
 mod tests {
-    use super::{compression_layer, image_routes, immutable_files};
+    use super::{
+        build_html_cache, cache_middleware, compression_layer, image_routes, immutable_files,
+    };
     use axum::body::Body;
     use axum::http::{HeaderValue, Method, Request, Response, StatusCode, header};
     use std::convert::Infallible;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tower::{Layer, Service, ServiceExt, service_fn};
+
+    /// The HTML cache keeps a page only when it answered 2xx. A 503 from an outage
+    /// kept for its 15 seconds would still be served after the share is back.
+    #[tokio::test]
+    async fn the_html_cache_keeps_only_successful_pages() {
+        let renders = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get({
+                    let renders = Arc::clone(&renders);
+                    // The first render is during the outage, the rest after it.
+                    move || async move {
+                        let status = if renders.fetch_add(1, Ordering::SeqCst) == 0 {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        } else {
+                            StatusCode::OK
+                        };
+                        (
+                            status,
+                            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                            "<p>a page</p>",
+                        )
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                build_html_cache(),
+                cache_middleware::html_cache_middleware,
+            ));
+        let get = || {
+            app.clone()
+                .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        };
+
+        assert_eq!(
+            get().await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            get().await.unwrap().status(),
+            StatusCode::OK,
+            "503 not kept"
+        );
+        assert_eq!(get().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(renders.load(Ordering::SeqCst), 2, "the 200 was kept");
+    }
 
     /// Comfortably above the default predicate's 32-byte floor.
     const LARGE: &[u8] = &[b'a'; 1024];

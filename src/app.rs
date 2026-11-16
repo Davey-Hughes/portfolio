@@ -136,12 +136,14 @@ pub fn App() -> impl IntoView {
             // one is ready. Screen readers are told the main area is busy meanwhile.
             <main class="main-content" aria-busy=move || loading().then_some("true")>
                 <Routes fallback=|| view! { <NotFound /> }>
-                    <Route path=StaticSegment("") view=HomePage />
-                    // These three pages can turn out not to exist, and leptos_axum sends
-                    // the status with the first chunk of HTML. Streamed, that chunk leaves
-                    // before the data shows the page is missing, so they render whole
-                    // first (Async) and NotFound's 404 goes out. PartiallyBlocked would
-                    // not help: leptos_axum 0.8.10 streams it exactly like OutOfOrder.
+                    // Four pages can answer other than 200. The home, gallery and photo
+                    // pages answer 503 while the images share is down; the gallery, photo
+                    // and open-source pages answer 404 when there is no such page.
+                    // leptos_axum sends the status with the first chunk of HTML, and
+                    // streamed, that chunk can leave before the data has decided the
+                    // status, so these render whole first (Async). PartiallyBlocked would
+                    // not help: leptos_axum 0.8.10 streams it like OutOfOrder.
+                    <Route path=StaticSegment("") view=HomePage ssr=SsrMode::Async />
                     <Route
                         path=(StaticSegment("gallery"), ParamSegment("name"))
                         view=GalleryPage
@@ -675,20 +677,22 @@ fn PhotoGridLoader() -> impl IntoView {
         }>
             {move || {
                 let gallery_config = home_config.get().and_then(std::result::Result::ok).flatten();
-                match gallery_data.get().and_then(std::result::Result::ok) {
-                    Some(data) => {
-                        let data = std::sync::Arc::unwrap_or_clone(data);
-                        view! {
-                            <PhotoGridRenderer
-                                photos=data.photos
-                                config=gallery_config
-                                mosaic_layout=data.mosaic_layout
-                            />
-                        }
-                            .into_any()
+                let Some(data) = gallery_data.get().and_then(std::result::Result::ok) else {
+                    #[cfg(feature = "ssr")]
+                    if load_failed(gallery_data.get_untracked().as_ref()) {
+                        mark_unavailable();
                     }
-                    None => view! { <div class="error">"Failed to load photos"</div> }.into_any(),
+                    return view! { <div class="error">"Failed to load photos"</div> }.into_any();
+                };
+                let data = std::sync::Arc::unwrap_or_clone(data);
+                view! {
+                    <PhotoGridRenderer
+                        photos=data.photos
+                        config=gallery_config
+                        mosaic_layout=data.mosaic_layout
+                    />
                 }
+                    .into_any()
             }}
         </Suspense>
     }
@@ -843,6 +847,8 @@ fn GalleryPage() -> impl IntoView {
                     }
                     // A failed request, not a missing gallery.
                     Err(_) => {
+                        #[cfg(feature = "ssr")]
+                        mark_unavailable();
                         view! { <div class="error">"Failed to load gallery"</div> }.into_any()
                     }
                 };
@@ -1010,6 +1016,33 @@ fn CopyrightFooter() -> impl IntoView {
 /// True only when both dimensions are known and the photo is taller than wide.
 fn is_portrait(width: Option<u32>, height: Option<u32>) -> bool {
     matches!((width, height), (Some(w), Some(h)) if h > w)
+}
+
+/// Marks the server's response 503 Service Unavailable, for a page whose data
+/// could not be loaded, as when the images share is down. A 200 would let search
+/// engines index the error message in the page's place; a 503 tells them the
+/// page is still there and to come back later.
+///
+/// The status goes out with the first chunk of HTML, so like `NotFound`'s 404 it
+/// relies on the route rendering whole first (`SsrMode::Async`). A visit within
+/// the app has no status to set.
+#[cfg(feature = "ssr")]
+fn mark_unavailable() {
+    use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
+
+    if let Some(response) = use_context::<leptos_axum::ResponseOptions>() {
+        response.set_status(StatusCode::SERVICE_UNAVAILABLE);
+        // Five minutes, about a NAS reboot or remount; the failure isn't cached.
+        response.insert_header(RETRY_AFTER, HeaderValue::from_static("300"));
+    }
+}
+
+/// Whether a resource's value is a failed load, the only case that marks a page
+/// unavailable. A Suspense also renders a page's error branch while the data is
+/// still loading (`None`), and that is no outage.
+#[cfg(feature = "ssr")]
+fn load_failed<T, E>(value: Option<&Result<T, E>>) -> bool {
+    matches!(value, Some(Err(_)))
 }
 
 /// The one page for every not-found case: an unknown address, a missing gallery
@@ -1814,6 +1847,10 @@ fn PhotoDetailPage() -> impl IntoView {
                     return view! { <NotFound /> }.into_any();
                 };
                 let Some(photo_list) = photos.get().and_then(std::result::Result::ok) else {
+                    #[cfg(feature = "ssr")]
+                    if load_failed(photos.get_untracked().as_ref()) {
+                        mark_unavailable();
+                    }
                     return view! {
                         <div class="photo-detail-page">
                             <div class="error">"Failed to load photo"</div>
@@ -2549,6 +2586,13 @@ mod tests {
         assert_eq!(srcset_url("/a\tb"), "/a%09b");
     }
 
+    #[test]
+    fn only_a_failed_load_marks_a_page_unavailable() {
+        assert!(load_failed(Some(&Err::<(), _>("the share is down"))));
+        assert!(!load_failed(Some(&Ok::<_, &str>(()))));
+        assert!(!load_failed(None::<&Result<(), &str>>), "still loading");
+    }
+
     // The server renders a page on one tokio worker and can drop it on another, so
     // nothing the viewer creates while rendering may be tied to its thread. A
     // thread-bound value aborted the server mid-request.
@@ -2674,11 +2718,15 @@ mod ssr_tests {
     use crate::trailing_slash::{self, PageRoutes};
     use axum::{
         body::Body,
-        http::{Method, Request, StatusCode, header},
+        http::{
+            HeaderMap, Method, Request, StatusCode,
+            header::{self, RETRY_AFTER},
+        },
         response::Response,
     };
     use leptos::prelude::LeptosOptions;
     use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_router::SsrMode;
     use serial_test::serial;
     use tower::ServiceExt;
 
@@ -2711,15 +2759,40 @@ mod ssr_tests {
         /// a missing one counts as missing (`get_gallery_data_by_name`).
         fn with_home_photo() -> Self {
             let site = Self::new();
-            let nature = site.dir.path().join("images/nature");
-            std::fs::create_dir_all(&nature).unwrap();
-            for path in [
-                site.dir.path().join("images/home/photo.jpg"),
-                nature.join("photo.jpg"),
-            ] {
-                image::RgbImage::new(4, 3).save(path).unwrap();
-            }
+            site.share_comes_back();
             site
+        }
+
+        /// As `new`, plus a `nature` gallery with one photo: the share is mounted,
+        /// and the home gallery really is empty.
+        fn with_empty_home() -> Self {
+            let site = Self::new();
+            site.add_photo("nature");
+            site
+        }
+
+        /// The photos `with_home_photo` has, added to a running site, as when the
+        /// share comes back after `during_outage`.
+        fn share_comes_back(&self) {
+            self.add_photo("home");
+            self.add_photo("nature");
+        }
+
+        /// One small JPEG at `images/<gallery>/photo.jpg`.
+        fn add_photo(&self, gallery: &str) {
+            let dir = self.dir.path().join("images").join(gallery);
+            std::fs::create_dir_all(&dir).unwrap();
+            image::RgbImage::new(4, 3)
+                .save(dir.join("photo.jpg"))
+                .unwrap();
+        }
+
+        /// The site while its images share is down: the mountpoint is there but
+        /// empty, apart from the `home` the server makes for itself. That is `new`'s
+        /// layout, and the server reads it as an outage rather than as a site with
+        /// no galleries (`images_root_looks_unmounted`).
+        fn during_outage() -> Self {
+            Self::new()
         }
 
         fn write_open_source(&self, toml: &str) {
@@ -2792,14 +2865,21 @@ mod ssr_tests {
         answer(Method::GET, path).await
     }
 
-    /// The status and the body of the answer to a GET for `path`.
-    async fn get(path: &str) -> (StatusCode, String) {
+    /// The status, the headers and the body of the answer to a GET for `path`.
+    async fn get_with_headers(path: &str) -> (StatusCode, HeaderMap, String) {
         let res = request(Method::GET, path).await;
         let status = res.status();
+        let headers = res.headers().clone();
         let body = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
             .unwrap();
-        (status, String::from_utf8(body.to_vec()).unwrap())
+        (status, headers, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    /// The status and the body of the answer to a GET for `path`.
+    async fn get(path: &str) -> (StatusCode, String) {
+        let (status, _, body) = get_with_headers(path).await;
+        (status, body)
     }
 
     #[tokio::test]
@@ -3035,10 +3115,102 @@ mod ssr_tests {
     async fn existing_gallery_and_photo_answer_200() {
         let _site = Site::with_home_photo();
         for path in ["/gallery/home", "/gallery/home/photo"] {
-            let (status, body) = get(path).await;
+            let (status, headers, body) = get_with_headers(path).await;
             assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(headers.get(RETRY_AFTER).is_none(), "{path}");
             assert!(!body.contains("not-found-page"), "{path}: {body}");
         }
+    }
+
+    /// A status set while a page renders goes out with the first chunk of HTML.
+    /// The status tests in this module can't tell whether that chunk is the whole
+    /// page: the server functions behind these routes never yield, so even
+    /// streamed, the page is one chunk today. Once one really waits, a streamed
+    /// page sends its fallback first and its 404 or 503 is lost, so these routes
+    /// render whole first. (A tokio test only because the route list needs an
+    /// executor. Serial because building it suppresses resource loads process-wide
+    /// while it runs, which stalls a page another test is rendering.)
+    #[tokio::test]
+    #[serial]
+    async fn routes_that_set_a_status_render_whole_first() {
+        let routes = generate_route_list(App);
+        for path in [
+            "/",
+            "/gallery/{name}",
+            "/gallery/{gallery}/{photo}",
+            "/open-source",
+        ] {
+            let route = routes
+                .iter()
+                .find(|r| r.path() == path)
+                .unwrap_or_else(|| panic!("no route {path} in {routes:?}"));
+            assert_eq!(*route.mode(), SsrMode::Async, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn gallery_and_photo_during_an_outage_answer_503_with_retry_after() {
+        let _site = Site::during_outage();
+        for (path, message) in [
+            ("/gallery/nature", "Failed to load gallery"),
+            ("/gallery/nature/photo", "Failed to load photo"),
+        ] {
+            let (status, headers, body) = get_with_headers(path).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(
+                headers.get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+                Some("300"),
+                "{path}"
+            );
+            assert!(body.contains(message), "{path}: {body}");
+            assert!(!body.contains("not-found-page"), "{path}: {body}");
+        }
+    }
+
+    /// Guards the photo page's `load_failed` check: only a failed load marks the
+    /// page unavailable, not the pass its Suspense makes while the photo list is
+    /// still loading. The page tests never see that pass, since the list resolves on
+    /// its first poll. Here `SuppressResourceLoad` holds the resources pending, and
+    /// the Suspense walks its children once on the server before they resolve, so
+    /// the error branch is built while the data is still loading. An unconditional
+    /// `mark_unavailable()` there makes the status `Some(503)`. The router is there
+    /// only for the page's params.
+    #[tokio::test]
+    #[serial]
+    async fn a_loading_photo_page_marks_nothing() {
+        use leptos::prelude::{Owner, RenderHtml, provide_context, view};
+        use leptos_router::{
+            ParamSegment, StaticSegment,
+            components::{Route, Router, Routes},
+            location::RequestUrl,
+        };
+
+        let _site = Site::with_home_photo();
+        // Sets up leptos's executor.
+        let _ = generate_route_list(App);
+        let response = leptos_axum::ResponseOptions::default();
+        Owner::new().with(|| {
+            provide_context(response.clone());
+            provide_context(RequestUrl::new("http://leptos.dev/gallery/home/photo"));
+            let _pending = leptos::server::SuppressResourceLoad::new();
+            let _stream = view! {
+                <Router>
+                    <Routes fallback=|| ()>
+                        <Route
+                            path=(
+                                StaticSegment("gallery"),
+                                ParamSegment("gallery"),
+                                ParamSegment("photo"),
+                            )
+                            view=super::PhotoDetailPage
+                        />
+                    </Routes>
+                </Router>
+            }
+            .to_html_stream_in_order();
+        });
+        assert_eq!(response.0.read().unwrap().status, None);
     }
 
     // Before the redirect, each of these answered 404. With one trailing slash the
@@ -3155,5 +3327,115 @@ mod ssr_tests {
                 "{path}: {body}"
             );
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn home_answers_200_with_its_photos() {
+        let _site = Site::with_home_photo();
+        let (status, headers, body) = get_with_headers("/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.get(RETRY_AFTER).is_none());
+        assert!(body.contains(r#"href="/gallery/home/photo""#), "{body}");
+    }
+
+    /// During an outage the home gallery is the empty directory the server made for
+    /// itself. Shown as an empty gallery, both pages would answer 200 with "No
+    /// photos found".
+    #[tokio::test]
+    #[serial]
+    async fn home_and_home_gallery_during_an_outage_answer_503_with_retry_after() {
+        let _site = Site::during_outage();
+        for (path, message) in [
+            ("/", "Failed to load photos"),
+            ("/gallery/home", "Failed to load gallery"),
+        ] {
+            let (status, headers, body) = get_with_headers(path).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(
+                headers.get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+                Some("300"),
+                "{path}"
+            );
+            assert!(body.contains(message), "{path}: {body}");
+            assert!(!body.contains("No photos found"), "{path}: {body}");
+        }
+    }
+
+    /// Nothing keeps the outage: the first visit after the share is back gets the
+    /// photos, with no wait for a cache to expire.
+    #[tokio::test]
+    #[serial]
+    async fn home_and_home_gallery_recover_as_soon_as_the_share_is_back() {
+        let site = Site::during_outage();
+        for path in ["/", "/gallery/home"] {
+            let (status, _) = get(path).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        }
+        site.share_comes_back();
+        for path in ["/", "/gallery/home"] {
+            let (status, headers, body) = get_with_headers(path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(headers.get(RETRY_AFTER).is_none(), "{path}");
+            assert!(
+                body.contains(r#"href="/gallery/home/photo""#),
+                "{path}: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn an_empty_home_gallery_on_a_mounted_share_answers_200() {
+        let _site = Site::with_empty_home();
+        for (path, message) in [
+            ("/", "No photos found."),
+            ("/gallery/home", "No photos found in this gallery."),
+        ] {
+            let (status, headers, body) = get_with_headers(path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(headers.get(RETRY_AFTER).is_none(), "{path}");
+            assert!(body.contains(message), "{path}: {body}");
+        }
+    }
+
+    /// Guards the home grid's `load_failed` check, as `a_loading_photo_page_marks_nothing`
+    /// does the photo page's. With `SuppressResourceLoad` holding the photos pending,
+    /// the Suspense's first walk over its children on the server builds the grid's
+    /// error branch, and that pass must not mark the page 503. The page tests never
+    /// see it, since the home loader resolves on its first poll.
+    #[tokio::test]
+    #[serial]
+    async fn a_loading_home_grid_marks_nothing() {
+        use leptos::prelude::{Owner, RenderHtml, provide_context, view};
+
+        let _site = Site::with_home_photo();
+        // Sets up leptos's executor.
+        let _ = generate_route_list(App);
+        let response = leptos_axum::ResponseOptions::default();
+        Owner::new().with(|| {
+            provide_context(response.clone());
+            let _pending = leptos::server::SuppressResourceLoad::new();
+            let _stream = view! { <super::PhotoGridLoader /> }.to_html_stream_in_order();
+        });
+        assert_eq!(response.0.read().unwrap().status, None);
+    }
+
+    /// The not-found page's photo comes from the home gallery, which fails to load
+    /// during an outage. The page is still a 404, with no photo, and the missing
+    /// photos aren't remembered once the share is back.
+    #[tokio::test]
+    #[serial]
+    async fn not_found_during_an_outage_answers_404_without_a_photo() {
+        let site = Site::during_outage();
+        let (status, body) = get("/no-such-page").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"class="not-found-page""#), "{body}");
+        assert!(!body.contains("not-found-photo"), "{body}");
+
+        site.share_comes_back();
+        let (status, body) = get("/no-such-page").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"href="/gallery/home/photo""#), "{body}");
     }
 }

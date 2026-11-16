@@ -264,7 +264,10 @@ fn build_gallery_data(
     (data, NON_MOSAIC_TTL)
 }
 
-/// Server function to get home gallery data with pre-computed mosaic layout
+/// Server function to get home gallery data with pre-computed mosaic layout.
+///
+/// `Err` while the home gallery is empty and the images root looks unmounted:
+/// that is an outage, not an empty site.
 #[server(GetHomeGalleryData, "/api")]
 pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> {
     #[cfg(feature = "ssr")]
@@ -283,6 +286,12 @@ pub async fn get_home_gallery_data() -> Result<Arc<GalleryData>, ServerFnError> 
         }
 
         let photos = crate::gallery::load_home_photos();
+        // While the root looks unmounted, an empty home gallery is the directory
+        // the server made for itself: fail the load, and don't cache it, so the page
+        // has its photos back as soon as the share does.
+        if photos.is_empty() && images_root_looks_unmounted() {
+            return Err(ServerFnError::new("the images root holds no galleries"));
+        }
         let home_path = crate::paths::home_gallery_dir();
         let config = crate::gallery::load_gallery_config(&home_path);
 
@@ -320,6 +329,19 @@ fn images_root_looks_unmounted() -> bool {
         .any(|dir| canonical(std::path::Path::new(dir)) != home)
 }
 
+/// Every gallery's photos (an expensive walk), or `None` when there are none and
+/// the images root looks unmounted. That is an outage, not an empty site, and the
+/// empty list must not be cached.
+#[cfg(feature = "ssr")]
+fn load_all_photos_unless_unmounted() -> Option<Arc<Vec<PhotoInfo>>> {
+    let photos = crate::gallery::load_all_gallery_photos();
+    if photos.is_empty() && images_root_looks_unmounted() {
+        None
+    } else {
+        Some(Arc::new(photos))
+    }
+}
+
 /// Server function to get photos from ALL galleries (for photo detail page)
 #[server(GetAllGalleryPhotos, "/api")]
 pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnError> {
@@ -336,15 +358,11 @@ pub async fn get_all_gallery_photos() -> Result<Arc<Vec<PhotoInfo>>, ServerFnErr
             Err(_) => log!("ALL_PHOTOS_CACHE lock poisoned (read); regenerating"),
         }
 
-        // Load all photos (expensive operation)
-        let photos = Arc::new(crate::gallery::load_all_gallery_photos());
-
-        // A photo page that can't find its photo here is a 404. No photos at all
-        // while the root looks unmounted is an outage, not an empty site: fail
-        // the lookup, and don't cache it past the outage.
-        if photos.is_empty() && images_root_looks_unmounted() {
+        // A photo page that can't find its photo here is a 404, so during an
+        // outage fail the lookup instead, and don't cache it past the outage.
+        let Some(photos) = load_all_photos_unless_unmounted() else {
             return Err(ServerFnError::new("the images root holds no galleries"));
-        }
+        };
 
         // Cache the result for 10 minutes (600 seconds)
         match ALL_PHOTOS_CACHE.lock() {
@@ -382,7 +400,8 @@ pub async fn get_gallery_photos_by_name(
 /// `Ok(None)` means there is no gallery of that name, so the page can show the
 /// not-found page; an empty gallery directory is `Ok(Some(_))` with no photos.
 /// `Err` means the lookup itself failed, including when the images root can't be
-/// read or holds no galleries but `home`, as it does while its mount is down.
+/// read or holds no galleries but `home`, as it does while its mount is down;
+/// then `home` itself, empty, is an error too.
 #[server(GetGalleryDataByName, "/api")]
 pub async fn get_gallery_data_by_name(
     gallery_name: String,
@@ -410,6 +429,11 @@ pub async fn get_gallery_data_by_name(
             }
             return Ok(None);
         };
+        // Found but empty while the root looks unmounted: that can only be the home
+        // gallery's directory, which the server made for itself. Fail, as above.
+        if photos.is_empty() && images_root_looks_unmounted() {
+            return Err(ServerFnError::new("the images root holds no galleries"));
+        }
 
         let gallery_path = crate::paths::images_root().join(&gallery_name);
         let config = crate::gallery::load_gallery_config(&gallery_path);
@@ -433,10 +457,11 @@ pub async fn get_gallery_data_by_name(
 
 /// One photo picked at random from the home gallery, for the not-found page.
 ///
-/// `Ok(None)` when the home gallery has no photos. It reuses the home page's
-/// cached gallery data instead of calling `load_home_photos` itself. 404s skip
-/// the HTML cache, so calling it directly would reread every home photo's EXIF on
-/// each one; through the cache, only the first lookup after a change does.
+/// `Ok(None)` when the home gallery has no photos, and an error during an outage
+/// (see [`get_home_gallery_data`]). It reuses the home page's cached gallery data
+/// instead of calling `load_home_photos` itself. 404s skip the HTML cache, so
+/// calling it directly would reread every home photo's EXIF on each one; through
+/// the cache, only the first lookup after a change does.
 #[server(RandomHomePhoto, "/api")]
 pub async fn random_home_photo() -> Result<Option<PhotoInfo>, ServerFnError> {
     #[cfg(feature = "ssr")]
@@ -513,7 +538,10 @@ pub fn prewarm_all_photos_cache() {
 
     log!("Pre-warming all-photos cache...");
 
-    let photos = Arc::new(crate::gallery::load_all_gallery_photos());
+    let Some(photos) = load_all_photos_unless_unmounted() else {
+        log!("All-photos cache not pre-warmed: the images root holds no galleries");
+        return;
+    };
 
     match ALL_PHOTOS_CACHE.lock() {
         Ok(mut cache) => {
@@ -1126,6 +1154,25 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn prewarming_during_an_outage_caches_nothing() {
+        // A server that starts while the share is down, as after a power cut when
+        // the server is up before the NAS, prewarms an empty list. Cached, it would
+        // make every photo page a 404 instead of a failed lookup until it expired.
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("home")).unwrap();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        prewarm_all_photos_cache();
+        let after = block_on(get_all_gallery_photos());
+        invalidate_caches();
+
+        assert!(after.is_err(), "{after:?}");
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn random_home_photo_picks_a_home_photo() {
         let root = images_dir_with_gallery("home", "use_mosaic = false\n");
         unsafe { std::env::remove_var("GALLERY_PATH") };
@@ -1147,8 +1194,43 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn random_home_photo_is_none_without_home_photos() {
+    fn home_gallery_data_is_an_error_while_the_images_root_holds_no_galleries() {
+        // During an outage the home gallery is the empty directory the server made
+        // for itself. Cached as an empty gallery, it would outlast the outage by the
+        // cache's five minutes, on the home page and on /gallery/home alike.
         let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("home")).unwrap();
+        unsafe { std::env::remove_var("GALLERY_PATH") };
+        let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
+
+        invalidate_caches();
+        let home = block_on(get_home_gallery_data());
+        let gallery = block_on(get_gallery_data_by_name("home".to_string()));
+        for dir in ["home", "nature"] {
+            let dir = root.path().join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            image::RgbImage::new(4, 3)
+                .save(dir.join("photo.jpg"))
+                .unwrap();
+        }
+        let home_after = block_on(get_home_gallery_data());
+        let gallery_after = block_on(get_gallery_data_by_name("home".to_string()));
+        invalidate_caches();
+
+        assert!(home.is_err(), "{home:?}");
+        assert!(gallery.is_err(), "{gallery:?}");
+        assert_eq!(home_after.unwrap().photos.len(), 1, "not cached");
+        let gallery_after = gallery_after.unwrap().expect("the home gallery exists");
+        assert_eq!(gallery_after.photos.len(), 1, "not cached");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn random_home_photo_is_none_without_home_photos() {
+        // Another gallery, so the share counts as mounted and the empty home gallery
+        // as really empty.
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("nature")).unwrap();
         unsafe { std::env::remove_var("GALLERY_PATH") };
         let _images_dir = EnvVarGuard::set("IMAGES_DIR", root.path());
 
