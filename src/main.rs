@@ -93,25 +93,85 @@ fn compression_layer()
         .compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/")))
 }
 
+/// Sets Cache-Control on a response from the `/images` and `/content` file servers or
+/// from the compressed-image endpoint, going by its status.
+///
+/// A file at one of these addresses is treated as never changing under the same name,
+/// so a success is cached for a year: any 2xx, including the 206 a video player gets for
+/// a range. So is a 304, because a cache copies a 304's headers onto the copy it already
+/// holds, so the 304 has to carry the same Cache-Control as the 200. A photo replaced in
+/// place under its old name won't reach a browser that already holds it.
+///
+/// Everything else gets `no-store`: a 404, a redirect, a 405 or 416, the endpoint's 400
+/// for bad parameters, a 5xx. A missing file may appear later, when a photo is added or
+/// the images share comes back after an outage, so nobody should remember its absence.
+/// Nor should anyone keep a redirect or an error, which may answer differently next time.
+#[cfg(feature = "ssr")]
+fn file_cache_control<B>(mut response: axum::http::Response<B>) -> axum::http::Response<B> {
+    use axum::http::{HeaderValue, StatusCode, header};
+
+    let status = response.status();
+    let value = if status.is_success() || status == StatusCode::NOT_MODIFIED {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+    response
+}
+
+/// What the `/images` and `/content` file servers answer with.
+#[cfg(feature = "ssr")]
+type FileResponse = axum::http::Response<tower_http::services::fs::ServeFileSystemResponseBody>;
+
 /// The file server for the `/images` and `/content` mounts: the files in `dir`, with
-/// a year-long `immutable` cache lifetime unless a response already carries one.
+/// Cache-Control set by [`file_cache_control`].
 #[cfg(feature = "ssr")]
 fn immutable_files(
     dir: &str,
-) -> tower_http::set_header::SetResponseHeader<
-    tower_http::services::ServeDir,
-    axum::http::HeaderValue,
-> {
-    use axum::http::{HeaderValue, header};
-    use tower::ServiceBuilder;
-    use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+) -> tower::util::MapResponse<tower_http::services::ServeDir, fn(FileResponse) -> FileResponse> {
+    use tower::{ServiceBuilder, util::MapResponseLayer};
+    use tower_http::services::ServeDir;
 
     ServiceBuilder::new()
-        .layer(SetResponseHeaderLayer::if_not_present(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        .layer(MapResponseLayer::new(
+            file_cache_control as fn(FileResponse) -> FileResponse,
         ))
         .service(ServeDir::new(dir))
+}
+
+/// The `/images` routes: the original files in `images_dir`, and the transcoding
+/// endpoint at `/images/compressed/<path>`, which keeps the WebP files it makes in
+/// `cache_dir`.
+#[cfg(feature = "ssr")]
+fn image_routes<S>(images_dir: &str, cache_dir: &str) -> axum::Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    use axum::extract::{Path, Query};
+    use portfolio::image_params::ImageParams;
+    use std::sync::Arc;
+    use tower::util::MapResponseLayer;
+
+    // The closure holds the directories, so a request clones two pointers rather than
+    // resolving the paths again.
+    let images: Arc<str> = Arc::from(images_dir);
+    let cache: Arc<str> = Arc::from(cache_dir);
+    let compressed = move |Path(image_path): Path<String>, Query(params): Query<ImageParams>| {
+        serve_compressed_image(Arc::clone(&images), Arc::clone(&cache), image_path, params)
+    };
+
+    axum::Router::new()
+        // The cache policy wraps the whole route, not just the handler, so it also
+        // covers the 400 the query extractor gives a width that isn't a number, and the
+        // 405 for a method other than GET or HEAD.
+        .route(
+            "/images/compressed/{*image_path}",
+            axum::routing::get(compressed).layer(MapResponseLayer::new(file_cache_control)),
+        )
+        .nest_service("/images", immutable_files(images_dir))
 }
 
 /// The `/readme` mount: screenshots and clips for the READMEs of the owner's repos,
@@ -184,7 +244,8 @@ fn build_html_cache() -> cache_middleware::HtmlCache {
 /// Transcode-on-demand image endpoint.
 ///
 /// Image processing is CPU/IO heavy, so the work goes to the blocking pool rather
-/// than tying up a tokio worker thread.
+/// than tying up a tokio worker thread. Cache-Control is left to the
+/// [`file_cache_control`] layer that [`image_routes`] puts around the route.
 #[cfg(feature = "ssr")]
 async fn serve_compressed_image(
     images_dir: std::sync::Arc<str>,
@@ -222,10 +283,7 @@ async fn serve_compressed_image(
             log!("Serving image: {}", image_path);
             (
                 StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, "image/webp"),
-                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                ],
+                [(header::CONTENT_TYPE, "image/webp")],
                 webp_data,
             )
                 .into_response()
@@ -248,19 +306,13 @@ async fn serve_compressed_image(
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
-    use axum::{
-        Router,
-        extract::{Path, Query},
-        http::StatusCode,
-    };
+    use axum::{Router, http::StatusCode};
     use leptos::logging::log;
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::{App, shell};
     use portfolio::image_cache::{cleanup_cache, prewarm_cache};
-    use portfolio::image_params::ImageParams;
     use portfolio::paths::{images_root, resolve_dir};
-    use std::sync::Arc;
 
     // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
     // content-hashed pkg filenames). Never present in the Docker image
@@ -284,25 +336,6 @@ async fn main() {
     log!("Serving images from: {}", images_dir);
     log!("Serving content from: {}", content_dir);
     log!("Serving README assets from: {}", readme_dir);
-
-    // Closure captures the Arc'd dirs so the handler doesn't re-resolve them
-    // on every request. Image processing is CPU/IO heavy; offload to the
-    // blocking pool so it doesn't tie up tokio worker threads.
-    let images_dir_arc: Arc<str> = Arc::from(images_dir.as_str());
-    let cache_dir_arc: Arc<str> = Arc::from(cache_dir.as_str());
-
-    let image_handler = {
-        let images_dir = Arc::clone(&images_dir_arc);
-        let cache_dir = Arc::clone(&cache_dir_arc);
-        move |Path(image_path): Path<String>, Query(params): Query<ImageParams>| {
-            serve_compressed_image(
-                Arc::clone(&images_dir),
-                Arc::clone(&cache_dir),
-                image_path,
-                params,
-            )
-        }
-    };
 
     // Clean up orphaned cache files and pre-generate cache in background (async, non-blocking)
     let images_dir_clone = images_dir.clone();
@@ -343,12 +376,7 @@ async fn main() {
             "/os",
             axum::routing::get(|| async { axum::response::Redirect::permanent("/open-source") }),
         )
-        // Compressed image endpoint
-        .route(
-            "/images/compressed/{*image_path}",
-            axum::routing::get(image_handler),
-        )
-        .nest_service("/images", immutable_files(&images_dir))
+        .merge(image_routes(&images_dir, &cache_dir))
         .nest_service("/content", immutable_files(&content_dir))
         .merge(readme_routes(&readme_dir))
         .fallback(leptos_axum::file_and_error_handler(shell))
@@ -448,5 +476,274 @@ mod tests {
     #[tokio::test]
     async fn leaves_small_bodies_uncompressed() {
         assert!(!is_compressed("text/html; charset=utf-8", SMALL).await);
+    }
+
+    /// Cache-Control on the `/images` and `/content` file servers and on the
+    /// compressed-image endpoint.
+    mod cache_policy {
+        use crate::{file_cache_control, image_routes, immutable_files};
+        use axum::body::Body;
+        use axum::http::{HeaderValue, Request, Response, StatusCode, header};
+        use std::convert::Infallible;
+        use tempfile::TempDir;
+        use tower::{Layer, ServiceExt, service_fn, util::MapResponseLayer};
+
+        const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+        const NO_STORE: &str = "no-store";
+        /// Size of `clip.mp4` in [`files`].
+        const CLIP_LEN: usize = 1024;
+
+        /// A directory holding `clip.mp4`, [`CLIP_LEN`] bytes long.
+        fn files() -> TempDir {
+            let dir = TempDir::new().expect("a temp dir");
+            std::fs::write(dir.path().join("clip.mp4"), [b'v'; CLIP_LEN]).expect("a file");
+            dir
+        }
+
+        fn get(uri: &str) -> Request<Body> {
+            Request::get(uri)
+                .body(Body::empty())
+                .expect("a valid request")
+        }
+
+        fn cache_control<B>(response: &Response<B>) -> Option<&str> {
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .map(|value| value.to_str().expect("an ASCII header"))
+        }
+
+        /// Send `request` to the file server that `main` mounts at `/images`, over `dir`.
+        async fn serve_file(dir: &TempDir, request: Request<Body>) -> crate::FileResponse {
+            let dir = dir.path().to_str().expect("a UTF-8 temp path");
+            immutable_files(dir)
+                .oneshot(request)
+                .await
+                .expect("the file server is infallible")
+        }
+
+        /// The Cache-Control that a response with `status` gets, from a stand-in for the
+        /// file server wrapped in the same policy.
+        async fn policy_for(status: StatusCode) -> Option<String> {
+            let inner = service_fn(move |_req: Request<Body>| async move {
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .status(status)
+                        .header(header::LOCATION, "/home/")
+                        .body(Body::empty())
+                        .expect("a valid response"),
+                )
+            });
+            let response = MapResponseLayer::new(file_cache_control)
+                .layer(inner)
+                .oneshot(get("/home"))
+                .await
+                .expect("the stand-in is infallible");
+            assert_eq!(response.status(), status);
+            cache_control(&response).map(str::to_owned)
+        }
+
+        #[tokio::test]
+        async fn a_file_is_cached_for_a_year() {
+            let dir = files();
+            let response = serve_file(&dir, get("/clip.mp4")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+        }
+
+        #[tokio::test]
+        async fn a_304_carries_the_header_of_its_200() {
+            let dir = files();
+            let first = serve_file(&dir, get("/clip.mp4")).await;
+            let last_modified = first
+                .headers()
+                .get(header::LAST_MODIFIED)
+                .expect("ServeDir sends Last-Modified")
+                .clone();
+
+            let mut request = get("/clip.mp4");
+            request
+                .headers_mut()
+                .insert(header::IF_MODIFIED_SINCE, last_modified);
+            let response = serve_file(&dir, request).await;
+            assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+        }
+
+        #[tokio::test]
+        async fn a_range_request_answers_206_and_is_cached_for_a_year() {
+            let dir = files();
+            let mut request = get("/clip.mp4");
+            request
+                .headers_mut()
+                .insert(header::RANGE, HeaderValue::from_static("bytes=0-99"));
+            let response = serve_file(&dir, request).await;
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+            assert_eq!(
+                response.headers()[header::CONTENT_RANGE],
+                format!("bytes 0-99/{CLIP_LEN}").as_str()
+            );
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+        }
+
+        #[tokio::test]
+        async fn a_missing_file_is_not_stored() {
+            let dir = files();
+            let response = serve_file(&dir, get("/gone.jpg")).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
+
+        #[tokio::test]
+        async fn a_redirect_is_not_stored() {
+            for status in [
+                StatusCode::MOVED_PERMANENTLY,
+                StatusCode::FOUND,
+                StatusCode::TEMPORARY_REDIRECT,
+                StatusCode::PERMANENT_REDIRECT,
+            ] {
+                assert_eq!(
+                    policy_for(status).await.as_deref(),
+                    Some(NO_STORE),
+                    "{status}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn an_error_is_not_stored() {
+            for status in [
+                StatusCode::BAD_REQUEST,
+                StatusCode::NOT_FOUND,
+                StatusCode::METHOD_NOT_ALLOWED,
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ] {
+                assert_eq!(
+                    policy_for(status).await.as_deref(),
+                    Some(NO_STORE),
+                    "{status}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn a_success_or_304_is_cached_for_a_year() {
+            for status in [
+                StatusCode::OK,
+                StatusCode::NO_CONTENT,
+                StatusCode::PARTIAL_CONTENT,
+                StatusCode::NOT_MODIFIED,
+            ] {
+                assert_eq!(
+                    policy_for(status).await.as_deref(),
+                    Some(IMMUTABLE),
+                    "{status}"
+                );
+            }
+        }
+
+        /// The status alone decides: a Cache-Control set further in is replaced, so a
+        /// 404 can't keep a year-long header that something behind the policy added.
+        #[tokio::test]
+        async fn a_cache_control_from_further_in_is_replaced() {
+            for (status, set, expected) in [
+                (StatusCode::NOT_FOUND, IMMUTABLE, NO_STORE),
+                (StatusCode::OK, NO_STORE, IMMUTABLE),
+            ] {
+                let inner = service_fn(move |_req: Request<Body>| async move {
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(status)
+                            .header(header::CACHE_CONTROL, set)
+                            .body(Body::empty())
+                            .expect("a valid response"),
+                    )
+                });
+                let response = MapResponseLayer::new(file_cache_control)
+                    .layer(inner)
+                    .oneshot(get("/photo.jpg"))
+                    .await
+                    .expect("the stand-in is infallible");
+                assert_eq!(cache_control(&response), Some(expected), "{status}");
+            }
+        }
+
+        /// The `/images` routes as `main` wires them, over a gallery holding one small
+        /// PNG, `home/dot.png`, and an empty cache directory.
+        struct Images {
+            images: TempDir,
+            cache: TempDir,
+        }
+
+        impl Images {
+            fn new() -> Self {
+                let images = TempDir::new().expect("a temp dir");
+                std::fs::create_dir(images.path().join("home")).expect("a gallery dir");
+                image::RgbImage::new(4, 4)
+                    .save(images.path().join("home/dot.png"))
+                    .expect("a PNG");
+                let cache = TempDir::new().expect("a temp dir");
+                Self { images, cache }
+            }
+
+            async fn send(&self, request: Request<Body>) -> Response<Body> {
+                let images = self.images.path().to_str().expect("a UTF-8 temp path");
+                let cache = self.cache.path().to_str().expect("a UTF-8 temp path");
+                image_routes::<()>(images, cache)
+                    .oneshot(request)
+                    .await
+                    .expect("the router is infallible")
+            }
+        }
+
+        #[tokio::test]
+        async fn a_compressed_image_is_cached_for_a_year() {
+            let images = Images::new();
+            let response = images.send(get("/images/compressed/home/dot.png")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "image/webp");
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+        }
+
+        #[tokio::test]
+        async fn a_missing_compressed_image_is_not_stored() {
+            let images = Images::new();
+            let response = images.send(get("/images/compressed/home/gone.jpg")).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
+
+        #[tokio::test]
+        async fn a_rejected_compressed_image_request_is_not_stored() {
+            let images = Images::new();
+            // A width that is no preset, which the handler rejects, and one that isn't a
+            // number, which the query extractor rejects before the handler runs.
+            for query in ["width=1", "width=abc"] {
+                let uri = format!("/images/compressed/home/dot.png?{query}");
+                let response = images.send(get(&uri)).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+                assert_eq!(cache_control(&response), Some(NO_STORE), "{query}");
+            }
+
+            let post = Request::post("/images/compressed/home/dot.png")
+                .body(Body::empty())
+                .expect("a valid request");
+            let response = images.send(post).await;
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
+
+        #[tokio::test]
+        async fn an_original_image_goes_through_the_file_server() {
+            let images = Images::new();
+            let response = images.send(get("/images/home/dot.png")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+            let response = images.send(get("/images/home/gone.png")).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
+        }
     }
 }

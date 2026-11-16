@@ -177,3 +177,63 @@ test.describe("Image Parameter Environment Variables", () => {
     expect(response.headers()["content-type"]).toBe("image/webp");
   });
 });
+
+// A photo never changes under the same name, so a found one is cached for a year. A
+// missing one may turn up later (a new upload, or the images share coming back after an
+// outage), so its 404 must not be kept at all, and neither must a rejected request.
+test.describe("Image Cache-Control", () => {
+  const IMMUTABLE = "public, max-age=31536000, immutable";
+
+  test("an original photo is cached for a year", async ({ request }) => {
+    const response = await request.get("/images/home/contrail.jpg");
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toBe(IMMUTABLE);
+  });
+
+  test("a range of an original photo answers 206 and is cached for a year", async ({ request }) => {
+    // What a video player asks for when it seeks; the fixtures have no video under
+    // /images, but the file server treats every file the same.
+    const response = await request.get("/images/home/contrail.jpg", {
+      headers: { Range: "bytes=0-99" },
+    });
+
+    expect(response.status()).toBe(206);
+    expect(response.headers()["content-range"]).toMatch(/^bytes 0-99\/\d+$/);
+    expect(response.headers()["cache-control"]).toBe(IMMUTABLE);
+  });
+
+  test("a missing original photo is not stored", async ({ request }) => {
+    const response = await request.get("/images/home/no-such-photo.jpg");
+
+    expect(response.status()).toBe(404);
+    expect(response.headers()["cache-control"]).toBe("no-store");
+  });
+
+  test("a compressed photo is cached for a year", async ({ request }) => {
+    const response = await request.get(`${FIXTURE_IMAGE}?width=2400&quality=90`);
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toBe(IMMUTABLE);
+  });
+
+  test("a missing compressed photo is not stored", async ({ request }) => {
+    const response = await request.get(
+      "/images/compressed/home/no-such-photo.jpg?width=2400&quality=90"
+    );
+
+    expect(response.status()).toBe(404);
+    expect(response.headers()["cache-control"]).toBe("no-store");
+  });
+
+  test("a rejected compressed request is not stored", async ({ request }) => {
+    // 1500 is no preset, which the handler rejects; "abc" isn't a number, which the
+    // query extractor rejects before the handler runs. Both answer 400.
+    for (const width of ["1500", "abc"]) {
+      const response = await request.get(`${FIXTURE_IMAGE}?width=${width}`);
+
+      expect(response.status(), width).toBe(400);
+      expect(response.headers()["cache-control"], width).toBe("no-store");
+    }
+  });
+});
