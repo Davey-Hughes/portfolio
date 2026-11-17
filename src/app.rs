@@ -291,17 +291,16 @@ fn Footer() -> impl IntoView {
 
     view! {
         <footer class="footer" hidden=hidden>
+            // Without a usable config, the copyright line comes from SiteConfig::default(),
+            // as PageTitle's title does, so it still carries the current year.
             <Suspense fallback=|| {
-                view! { <p>"© 2025 Your Photography. All rights reserved."</p> }
+                view! { <p>{SiteConfig::default().copyright()}</p> }
             }>
                 {move || {
                     let cfg = config.get().and_then(std::result::Result::ok);
                     let copyright = cfg
                         .as_ref()
-                        .map_or_else(
-                            || { "© 2025 Your Photography. All rights reserved.".to_string() },
-                            SiteConfig::copyright,
-                        );
+                        .map_or_else(|| SiteConfig::default().copyright(), SiteConfig::copyright);
                     let license_link = cfg
                         .as_ref()
                         .and_then(|c| c.license_footer_text().map(str::to_string));
@@ -991,17 +990,16 @@ fn CopyrightFooter() -> impl IntoView {
     let config = site_config();
 
     view! {
+        // Falls back to SiteConfig::default(), as Footer does, for the current year.
         <Suspense fallback=|| {
-            view! { <p>"© 2025 All rights reserved."</p> }
+            view! { <p>{SiteConfig::default().copyright()}</p> }
         }>
             {move || {
                 let copyright = config
                     .get()
                     .and_then(std::result::Result::ok)
-                    .map_or_else(
-                        || "© 2025 All rights reserved.".to_string(),
-                        |cfg| cfg.copyright(),
-                    );
+                    .unwrap_or_default()
+                    .copyright();
                 view! { <p>{copyright}</p> }
             }}
         </Suspense>

@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[cfg(feature = "ssr")]
-use chrono::Datelike;
-
-/// Get the current year for copyright notice
-/// Uses JavaScript Date API on client, chrono on server
+/// The current year, for the generated copyright line.
+///
+/// The browser's clock on the client; the system clock, read as UTC, everywhere else.
 fn get_current_year() -> i32 {
     // Gated on the target, not just the feature: js-sys' imports only exist on wasm, so
     // calling Date::new_0() from a host binary panics with "cannot call wasm-bindgen
@@ -18,33 +16,36 @@ fn get_current_year() -> i32 {
         js_sys::Date::new_0().get_full_year() as i32
     }
 
-    #[cfg(feature = "ssr")]
-    {
-        chrono::Local::now().year()
-    }
-
-    // Reached by host-target builds with neither feature — in practice the `hydrate`
-    // test run (see above). Derived from the clock rather than hardcoded: this used to
-    // return a literal `2025`, which was silently wrong the moment the year turned.
-    // chrono is an ssr-only dependency and js-sys needs wasm, so neither is available
-    // here; walking the epoch by hand is exact and costs nothing at this call rate.
-    #[cfg(not(any(all(feature = "hydrate", target_arch = "wasm32"), feature = "ssr")))]
+    // The server, and every host-target build (the `hydrate` test run included).
+    #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
     {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let mut days = i64::try_from(secs / 86_400).unwrap_or(0);
-        let mut year: i32 = 1970;
-        loop {
-            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-            let year_len = if leap { 366 } else { 365 };
-            if days < year_len {
-                break;
-            }
-            days -= year_len;
-            year += 1;
+        year_from_unix_secs(secs)
+    }
+}
+
+/// The UTC calendar year containing `secs` seconds after the Unix epoch.
+///
+/// UTC rather than the server's local zone: reading a local zone takes a time zone
+/// database, and the release image (plain Alpine, no tzdata) ships none, so a
+/// local-time library there reads UTC anyway. The difference only shows for the few
+/// hours around New Year when UTC and the deployer's zone disagree on the year.
+///
+/// Walking the epoch a year at a time is exact and costs nothing at this call rate.
+#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
+fn year_from_unix_secs(secs: u64) -> i32 {
+    let mut days = secs / 86_400;
+    let mut year: i32 = 1970;
+    loop {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let year_len = if leap { 366 } else { 365 };
+        if days < year_len {
+            return year;
         }
-        year
+        days -= year_len;
+        year += 1;
     }
 }
 
@@ -352,6 +353,31 @@ mod tests {
         let current_year = get_current_year();
 
         assert!(config.copyright().contains(&current_year.to_string()));
+    }
+
+    #[test]
+    fn test_year_from_unix_secs_turns_over_at_utc_midnight() {
+        // Each pair straddles a New Year, one second either side. 2000 is a leap year
+        // under the 400 rule and 2100 is not under the 100 rule; a slip in either moves
+        // every later turnover by a day. The turnover into 2000 catches a leap day
+        // counted in the year before it.
+        let cases = [
+            (0, 1970),
+            (31_535_999, 1970),    // 1970-12-31T23:59:59Z
+            (31_536_000, 1971),    // 1971-01-01T00:00:00Z
+            (946_684_799, 1999),   // 1999-12-31T23:59:59Z
+            (946_684_800, 2000),   // 2000-01-01T00:00:00Z
+            (951_825_600, 2000),   // 2000-02-29T12:00:00Z
+            (978_307_199, 2000),   // 2000-12-31T23:59:59Z
+            (978_307_200, 2001),   // 2001-01-01T00:00:00Z
+            (1_798_761_599, 2026), // 2026-12-31T23:59:59Z
+            (1_798_761_600, 2027), // 2027-01-01T00:00:00Z
+            (4_133_980_799, 2100), // 2100-12-31T23:59:59Z
+            (4_133_980_800, 2101), // 2101-01-01T00:00:00Z
+        ];
+        for (secs, year) in cases {
+            assert_eq!(year_from_unix_secs(secs), year, "at {secs} s");
+        }
     }
 
     #[test]
