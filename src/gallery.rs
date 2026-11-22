@@ -24,15 +24,16 @@ fn url_encode_path(path: &str) -> String {
 /// the file. Whole seconds keep the address short and are plenty to tell one export
 /// of a photo from the next. The time comes from a `stat` that the caller has
 /// usually made anyway, so it costs nothing extra on the NFS share.
-fn file_version(metadata: &fs::Metadata) -> Option<u64> {
+pub(crate) fn file_version(metadata: &fs::Metadata) -> Option<u64> {
     let modified = metadata.modified().ok()?;
     let since_1970 = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(since_1970.as_secs())
 }
 
 /// `url` with `v=<version>` added to its query, or `url` as it is without a version.
-/// The server ignores `v`; it is only there to change the address.
-fn with_version(url: String, version: Option<u64>) -> String {
+/// No file server reads the version, which is only there to change the address; the
+/// `/readme` mount only looks at whether there is one.
+pub(crate) fn with_version(url: String, version: Option<u64>) -> String {
     match version {
         Some(version) => {
             let separator = if url.contains('?') { '&' } else { '?' };

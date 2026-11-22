@@ -93,8 +93,9 @@ fn compression_layer()
         .compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/")))
 }
 
-/// Sets Cache-Control on a response from the `/images` and `/content` file servers or
-/// from the compressed-image endpoint, going by its status.
+/// Sets Cache-Control on a response from the `/images` and `/content` file servers,
+/// from the compressed-image endpoint, or from the `/readme` mount for an address with
+/// a version (see [`readme_routes`]), going by its status.
 ///
 /// A file at one of these addresses is treated as never changing under the same address,
 /// so a success is cached for a year: any 2xx, including the 206 a video player gets for
@@ -231,9 +232,14 @@ where
 /// The `/readme` mount: screenshots and clips for the READMEs of the owner's repos,
 /// served from `dir` as `/readme/<repo>/<file>`.
 ///
-/// `no-cache`, not the year-long `immutable` of `/images` and `/content`: README files
-/// are replaced in place under the same name, and `Last-Modified` turns each
-/// revalidation into a 304 while nothing has changed.
+/// A bare address gets `no-cache`, not the year-long `immutable` of `/images` and
+/// `/content`: README files are replaced in place under the same name, and
+/// `Last-Modified` turns each revalidation into a 304 while nothing has changed.
+///
+/// An address with a `v` in its query gets [`file_cache_control`], as `/images` does.
+/// The open-source page adds its files' versions to the screenshots it shows from here
+/// (`OpenSourceContent::with_readme_versions`), so a reload draws them from the cache
+/// with the text, not a round trip after it.
 #[cfg(feature = "ssr")]
 fn readme_routes<S>(dir: &str) -> axum::Router<S>
 where
@@ -246,10 +252,7 @@ where
     axum::Router::new().nest_service(
         "/readme",
         ServiceBuilder::new()
-            .layer(SetResponseHeaderLayer::overriding(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-cache"),
-            ))
+            .layer(axum::middleware::from_fn(readme_cache_control))
             .layer(SetResponseHeaderLayer::overriding(
                 header::X_CONTENT_TYPE_OPTIONS,
                 HeaderValue::from_static("nosniff"),
@@ -257,6 +260,30 @@ where
             .layer(axum::middleware::from_fn(readme_filter))
             .service(ServeDir::new(dir).append_index_html_on_directories(false)),
     )
+}
+
+/// Cache-Control for the `/readme` mount, by whether the address has a version; see
+/// [`readme_routes`].
+#[cfg(feature = "ssr")]
+async fn readme_cache_control(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{HeaderValue, header};
+
+    let versioned = req.uri().query().is_some_and(|query| {
+        query
+            .split('&')
+            .any(|pair| pair.split('=').next() == Some("v"))
+    });
+    let mut response = next.run(req).await;
+    if versioned {
+        return file_cache_control(response);
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response
 }
 
 /// Gate in front of the `/readme` file server: anything but an allowed media file is a
@@ -422,7 +449,7 @@ async fn main() {
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
     use portfolio::app::{App, shell};
-    use portfolio::paths::{images_root, resolve_dir};
+    use portfolio::paths::{images_root, readme_assets_dir, resolve_dir};
 
     // Load `.env` (used locally to set LEPTOS_HASH_FILES=false so dev builds skip
     // content-hashed pkg filenames). Never present in the Docker image
@@ -441,7 +468,7 @@ async fn main() {
     let images_dir = images_root().to_string_lossy().into_owned();
     let content_dir = resolve_dir("ABOUT_CONTENT_PATH", &["public/content", "./content"]);
     let cache_dir = resolve_dir("IMAGE_CACHE_DIR", &["public/cache", "./cache"]);
-    let readme_dir = resolve_dir("README_ASSETS_DIR", &["public/readme", "./readme"]);
+    let readme_dir = readme_assets_dir().to_string_lossy().into_owned();
 
     log!("Serving images from: {}", images_dir);
     log!("Serving content from: {}", content_dir);
@@ -726,10 +753,10 @@ mod tests {
         }
     }
 
-    /// Cache-Control on the `/images` and `/content` file servers and on the
-    /// compressed-image endpoint.
+    /// Cache-Control on the `/images` and `/content` file servers, on the
+    /// compressed-image endpoint, and on the `/readme` mount.
     mod cache_policy {
-        use crate::{file_cache_control, image_routes, immutable_files};
+        use crate::{file_cache_control, image_routes, immutable_files, readme_routes};
         use axum::body::Body;
         use axum::http::{HeaderValue, Request, Response, StatusCode, header};
         use std::convert::Infallible;
@@ -935,6 +962,63 @@ mod tests {
                     .expect("the stand-in is infallible");
                 assert_eq!(cache_control(&response), Some(expected), "{status}");
             }
+        }
+
+        /// Send `request` to the `/readme` mount as `main` wires it, over `dir`.
+        async fn send_readme(dir: &TempDir, request: Request<Body>) -> Response<Body> {
+            let dir = dir.path().to_str().expect("a UTF-8 temp path");
+            readme_routes::<()>(dir)
+                .oneshot(request)
+                .await
+                .expect("the router is infallible")
+        }
+
+        /// The open-source page gives its screenshots a versioned address, so a reload
+        /// draws them from the browser's cache along with the text.
+        #[tokio::test]
+        async fn a_versioned_readme_file_is_cached_for_a_year() {
+            let dir = files();
+            let response = send_readme(&dir, get("/readme/clip.mp4?v=1731652400")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(IMMUTABLE));
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+        }
+
+        /// READMEs embed the bare address, and a file replaced in place under it has
+        /// to reach them.
+        #[tokio::test]
+        async fn a_bare_readme_address_is_revalidated_on_every_load() {
+            let dir = files();
+            for uri in ["/readme/clip.mp4", "/readme/clip.mp4?version=1"] {
+                let response = send_readme(&dir, get(uri)).await;
+                assert_eq!(response.status(), StatusCode::OK, "{uri}");
+                assert_eq!(cache_control(&response), Some("no-cache"), "{uri}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_versioned_readme_address_that_fails_is_not_stored() {
+            let dir = files();
+            std::fs::write(dir.path().join("notes.toml"), "x").expect("a file");
+            // Missing, and refused by the mount's allowlist.
+            for uri in ["/readme/gone.webp?v=1", "/readme/notes.toml?v=1"] {
+                let response = send_readme(&dir, get(uri)).await;
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+                assert_eq!(cache_control(&response), Some(NO_STORE), "{uri}");
+            }
+        }
+
+        /// A file written moments ago may still be growing under its new version.
+        #[tokio::test]
+        async fn a_versioned_readme_file_still_being_written_is_not_stored() {
+            let dir = files();
+            set_modified(&dir.path().join("clip.mp4"), std::time::SystemTime::now());
+            let response = send_readme(&dir, get("/readme/clip.mp4?v=1")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(cache_control(&response), Some(NO_STORE));
         }
 
         /// The `/images` routes as `main` wires them, over a gallery holding one small

@@ -199,12 +199,15 @@ Cards appear in file order. Unknown keys are rejected, so a typo such as
 data. The server logs the parse error.
 
 `image` puts a screenshot on a card, and takes any URL or site path. A good home
-for one is the `/readme/<repo>/` folder (files under `README_ASSETS_DIR/<repo>/`, see
-[README images](#readme-images)): browsers revalidate it on every load, so you can
-replace a screenshot in place. `/content/` works too, but browsers cache it for a
-year. Blank values count as unset. The screenshot sits right of the card's text at
-340×212 (16:10), cropped from the top left. On phones it runs full width at 16:10
-under the text. A click opens it in the gallery's full-screen viewer.
+for one is the `/readme/<repo>/` folder (files under `README_ASSETS_DIR/<repo>/`,
+see [README images](#readme-images)). Written as a site path, `/readme/…`, it gets the
+file's modification time added to its address (`?v=…`), so browsers keep the
+screenshot, and one you replace in place still shows up. A full `https://` address
+is left as it is. `/content/` works too, but browsers keep the old file for up to a
+year after you replace it. Blank values count as unset. The screenshot sits right of
+the card's text at 340×212 (16:10), cropped from the top left, and centered on text
+that runs taller than it. On phones it runs full width at 16:10 under the text. A
+click opens it in the gallery's full-screen viewer.
 
 `image_invert = true` is for an image that is white line art on a transparent
 background, such as a terminal animation. The card draws it inverted, so the art
@@ -271,7 +274,8 @@ instead of in git. A file at `<README_ASSETS_DIR>/<repo>/<file>` (default
 for example, is `/readme/portfolio/home.webp`. Only webp, png, jpg, jpeg, gif, avif,
 mp4 and webm files are served, and anything else, SVG and directory paths included, is
 a 404. Responses carry `Cache-Control: no-cache`, so you can replace a file in place
-under the same name.
+under the same name. An address with a `v` in its query, as the open-source page
+gives its screenshots, is cached for a year instead.
 
 The server picks `README_ASSETS_DIR` once, at startup. When running without Docker,
 create `public/readme` before starting the server, or set the variable. If

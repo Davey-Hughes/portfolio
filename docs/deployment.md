@@ -152,8 +152,10 @@ then cache `/pkg/*` as immutable without ever serving stale JS next to freshly
 deployed WASM. That `wasm-bindgen` mismatch would otherwise break hydration after a
 deploy, and with hashed names there's no cache to purge either.
 
-Files under `/images` and `/content` are cached for a year too. The site's addresses
-for them end in `?v=` and the file's modification time, so a replaced file gets a new
+Files under `/images` and `/content` are cached for a year too, and so are `/readme`
+files at the addresses the open-source page gives its screenshots. A bare `/readme`
+address, as a README embeds it, stays `no-cache`. The site's addresses for these files
+end in `?v=` and the file's modification time, so a replaced file gets a new
 address. That only works while the CDN keeps the query string in its cache key, as
 Cloudflare's default (Standard) caching level does.
 

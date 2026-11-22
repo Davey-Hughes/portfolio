@@ -10,9 +10,10 @@
 # Cards render in the order they appear in this file.
 #
 # A card can show a screenshot (`image`, any URL or site path). A good home for
-# one is the /readme/<repo>/ folder: files under README_ASSETS_DIR/<repo>/, which
-# browsers revalidate on every load, so a screenshot can be replaced in place.
-# /content/ works too, but browsers cache it for a year.
+# one is the /readme/<repo>/ folder: files under README_ASSETS_DIR/<repo>/. The page
+# adds the file's modification time to its address, so browsers keep the screenshot,
+# and one replaced in place still shows up. /content/ works too, but browsers keep
+# the old file for up to a year after you replace it.
 #
 # Set `image_invert = true` when the image is white line art on a transparent
 # background, such as a terminal animation. The card then draws it inverted, black

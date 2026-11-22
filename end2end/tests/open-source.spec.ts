@@ -121,6 +121,8 @@ test.describe("Open Source Page screenshots", () => {
   const SHOT = "/readme/fixture/shot.webp";
   const ALT = "The Fixture Project home page";
   const VIEW = "View the Fixture Project screenshot full screen";
+  // A screenshot's address on the page: its path, then its file's version.
+  const versioned = (path: string) => new RegExp(`^${path.replace(/\./g, "\\.")}\\?v=\\d+$`);
 
   const card = (page: Page) => page.locator(".oss-card", { hasText: "Fixture Project" });
   const plain = (page: Page) =>
@@ -135,7 +137,7 @@ test.describe("Open Source Page screenshots", () => {
     await page.goto("/open-source", { waitUntil: "networkidle" });
 
     const img = card(page).locator(".oss-image img");
-    await expect(img).toHaveAttribute("src", SHOT);
+    await expect(img).toHaveAttribute("src", versioned(SHOT));
     await expect(img).toHaveAttribute("alt", ALT);
     await expect(img).toHaveAttribute("loading", "lazy");
     await expect(img).toHaveAttribute("decoding", "async");
@@ -148,6 +150,32 @@ test.describe("Open Source Page screenshots", () => {
     // Fixture Project and the inverted Fixture Upstream.
     await expect(page.locator(".oss-image")).toHaveCount(2);
     await expect(plain(page).locator("img, .oss-card-text")).toHaveCount(0);
+  });
+
+  test("takes a reload's screenshot from the browser's cache", async ({
+    page,
+    browserName,
+  }) => {
+    // Firefox's image cache answers the reload without a Resource Timing entry, so
+    // there is nothing to read there.
+    test.skip(browserName === "firefox", "no timing entry for a cached image");
+    // Checked with the server on every load, a screenshot showed up a round trip
+    // after the text it sits beside.
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    const img = card(page).locator(".oss-image img");
+    const width = () => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth);
+    await expect.poll(width).toBe(8);
+
+    await page.reload({ waitUntil: "networkidle" });
+    await expect.poll(width).toBe(8);
+    // Bytes that came over the network for it: none from the cache, a 304's headers
+    // from a check with the server.
+    const transferred = await img.evaluate((el: HTMLImageElement) =>
+      performance
+        .getEntriesByName(el.currentSrc)
+        .map((entry) => (entry as PerformanceResourceTiming).transferSize),
+    );
+    expect(transferred).toEqual([0]);
   });
 
   test("inverts an image_invert screenshot on its card only", async ({ page }) => {
@@ -213,11 +241,14 @@ test.describe("Open Source Page screenshots", () => {
     const full = page.locator(".fullscreen-image");
 
     await art.scrollIntoViewIfNeeded();
+    await expect(
+      page.locator(".oss-card", { hasText: "Fixture Upstream" }).locator("source"),
+    ).toHaveAttribute("srcset", versioned("/readme/fixture/art-card.webp"));
     await expect.poll(() => shown(art)).toBe("/readme/fixture/art-card.webp");
     await page
       .getByRole("button", { name: "View the Fixture Upstream screenshot full screen" })
       .click();
-    await expect(full).toHaveAttribute("src", "/readme/fixture/art.webp");
+    await expect(full).toHaveAttribute("src", versioned("/readme/fixture/art.webp"));
     await page.keyboard.press("Escape");
     await expect(page.locator(".fullscreen-overlay")).toHaveCount(0);
 
@@ -226,7 +257,7 @@ test.describe("Open Source Page screenshots", () => {
     await expect.poll(() => shown(shot)).toBe(SHOT);
     await expect(card(page).locator("source")).toHaveCount(0);
     await button(page).click();
-    await expect(full).toHaveAttribute("src", SHOT);
+    await expect(full).toHaveAttribute("src", versioned(SHOT));
   });
 
   test("shows image on the full-width card at phone width", async ({ page }) => {
@@ -254,10 +285,23 @@ test.describe("Open Source Page screenshots", () => {
     expect(img.width).toBeCloseTo(340, 0);
     expect(img.height).toBeCloseTo(212, 0);
     expect(img.x - (text.x + text.width)).toBeCloseTo(28, 0);
+    // This card's text is shorter than its screenshot, so both start at the top.
     expect(img.y).toBeCloseTo(box.y + 20, 0);
     expect(text.y).toBeCloseTo(box.y + 20, 0);
     // The text keeps the left edge of cards without an image.
     expect(text.x).toBeCloseTo(plainHead.x, 0);
+  });
+
+  test("centers the screenshot on text taller than it", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+    const upstream = page.locator(".oss-card", { hasText: "Fixture Upstream" });
+
+    const img = (await upstream.locator(".oss-image img").boundingBox())!;
+    const text = (await upstream.locator(".oss-card-text").boundingBox())!;
+    // The fixture's summary is long enough to run past the screenshot.
+    expect(text.height).toBeGreaterThan(img.height + 40);
+    expect(img.y + img.height / 2).toBeCloseTo(text.y + text.height / 2, 0);
   });
 
   test("stacks the screenshot under the tags at phone width", async ({ page }) => {
@@ -287,7 +331,7 @@ test.describe("Open Source Page screenshots", () => {
     const overlay = page.locator(".fullscreen-overlay");
     await expect(overlay).toBeVisible();
     const image = page.locator(".fullscreen-image");
-    await expect(image).toHaveAttribute("src", SHOT);
+    await expect(image).toHaveAttribute("src", versioned(SHOT));
     await expect(image).toHaveAttribute("alt", ALT);
     // No size is known for a screenshot, so it gets the default 10× zoom.
     await expect(page.locator(".zoom-label").last()).toHaveText("10×");

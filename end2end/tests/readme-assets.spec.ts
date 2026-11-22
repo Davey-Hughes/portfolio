@@ -21,6 +21,13 @@ test.describe("README assets", () => {
     expect(headers["last-modified"]).toBeTruthy();
   });
 
+  test("caches a versioned address for a year", async ({ request }) => {
+    // The open-source page gives its screenshots their file's version, ?v=<mtime>.
+    const response = await request.get(`${SHOT}?v=1`);
+    expect(response.status()).toBe(200);
+    expect(response.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
+  });
+
   test("answers 304 when the file is unchanged", async ({ request }) => {
     const first = await request.get(SHOT);
     expect(first.status()).toBe(200);

@@ -93,6 +93,63 @@ impl OpenSourceContent {
     pub fn intro_text(&self) -> Option<&str> {
         self.intro.as_deref().and_then(non_blank)
     }
+
+    /// The content with every screenshot address under `/readme/` given its file's
+    /// version (`?v=<modification time>`), the file looked up in `readme_dir`.
+    ///
+    /// The `/readme` mount has browsers check a bare address on every load, so that a
+    /// file replaced in place reaches the READMEs that embed it. On this page that
+    /// meant a reload drew the text a round trip before the screenshots. A versioned
+    /// address is kept for a year instead (`readme_routes` in main.rs), and changes
+    /// with the file.
+    ///
+    /// An address outside `/readme/`, one that leads out of the folder, one the mount
+    /// wouldn't serve, and one that names no file in it, such as one with a query of
+    /// its own, stay as written.
+    #[cfg(feature = "ssr")]
+    #[must_use]
+    pub fn with_readme_versions(mut self, readme_dir: &std::path::Path) -> Self {
+        for entry in self.projects.iter_mut().chain(&mut self.contributions) {
+            for address in [&mut entry.image, &mut entry.image_card]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(versioned) = readme_versioned(address, readme_dir) {
+                    *address = versioned;
+                }
+            }
+        }
+        self
+    }
+}
+
+/// `address` with its file's version, when it is the `/readme/` address of a file in
+/// `readme_dir`. See [`OpenSourceContent::with_readme_versions`].
+#[cfg(feature = "ssr")]
+fn readme_versioned(address: &str, readme_dir: &std::path::Path) -> Option<String> {
+    let address = address.trim();
+    let rel = address.strip_prefix("/readme/")?;
+    if !crate::readme_assets::is_servable(rel) {
+        return None;
+    }
+    // Decoded and joined the way the file server does it, which refuses `..`.
+    let rel = urlencoding::decode(rel).ok()?;
+    let mut path = readme_dir.to_path_buf();
+    for segment in rel.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => return None,
+            segment => path.push(segment),
+        }
+    }
+    let metadata = std::fs::metadata(path)
+        .ok()
+        .filter(std::fs::Metadata::is_file)?;
+    let version = crate::gallery::file_version(&metadata)?;
+    Some(crate::gallery::with_version(
+        address.to_string(),
+        Some(version),
+    ))
 }
 
 impl OpenSourceEntry {
@@ -537,6 +594,108 @@ image = "/readme/upstream/card.webp"
         // silently dropping the data the deployer meant to publish.
         let typo = "[[projects]]\nname = \"x\"\nsummary = \"y\"\nhighlight = []\n";
         assert!(parse_open_source(typo).is_err());
+    }
+
+    /// 2024-11-15 06:33:20 UTC, a modification time to give a file.
+    #[cfg(feature = "ssr")]
+    const MTIME: u64 = 1_731_652_400;
+
+    /// A file at `dir/rel`, its folders made on the way, last modified at [`MTIME`].
+    #[cfg(feature = "ssr")]
+    fn file_at(dir: &std::path::Path, rel: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"webp").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(MTIME))
+            .unwrap();
+    }
+
+    #[cfg(feature = "ssr")]
+    fn with_images(image: Option<&str>, image_card: Option<&str>) -> OpenSourceEntry {
+        OpenSourceEntry {
+            image_card: image_card.map(str::to_string),
+            ..with_image(image, None)
+        }
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn readme_images_carry_their_files_version() {
+        let readme = tempfile::tempdir().unwrap();
+        file_at(readme.path(), "x/full.webp");
+        file_at(readme.path(), "x/card.webp");
+        file_at(readme.path(), "my project/shot.webp");
+        let content = OpenSourceContent {
+            intro: None,
+            projects: vec![with_images(
+                Some("/readme/x/full.webp"),
+                Some(" /readme/x/card.webp "),
+            )],
+            contributions: vec![with_images(Some("/readme/my%20project/shot.webp"), None)],
+        }
+        .with_readme_versions(readme.path());
+
+        let images = |e: &OpenSourceEntry| (e.image.clone(), e.image_card.clone());
+        assert_eq!(
+            images(&content.projects[0]),
+            (
+                Some("/readme/x/full.webp?v=1731652400".to_string()),
+                Some("/readme/x/card.webp?v=1731652400".to_string())
+            )
+        );
+        // The file is found by the decoded address, as the file server finds it.
+        assert_eq!(
+            images(&content.contributions[0]),
+            (
+                Some("/readme/my%20project/shot.webp?v=1731652400".to_string()),
+                None
+            )
+        );
+    }
+
+    /// Only a file the `/readme` mount would serve gets a version. Any other address
+    /// stays as written.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn other_images_keep_their_address() {
+        let root = tempfile::tempdir().unwrap();
+        let readme = root.path().join("readme");
+        file_at(&readme, "x/shot.webp");
+        // There, but not a type the mount serves.
+        file_at(&readme, "x/notes.toml");
+        // Two folders up from x/: outside the mount, which refuses `..`.
+        file_at(root.path(), "outside.webp");
+        let kept = [
+            "https://example.com/readme/x/shot.webp",
+            "/content/x/shot.webp",
+            "readme/x/shot.webp",
+            "/readme/x/gone.webp",
+            "/readme/x/notes.toml",
+            "/readme/x",
+            "/readme/x/shot.webp?w=1",
+            "/readme/x/shot.webp#top",
+            "/readme/x/../../outside.webp",
+            "/readme/x/..%2F..%2Foutside.webp",
+            "  ",
+        ];
+        let content = OpenSourceContent {
+            intro: None,
+            projects: kept
+                .iter()
+                .map(|&address| with_images(Some(address), Some(address)))
+                .collect(),
+            contributions: Vec::new(),
+        }
+        .with_readme_versions(&readme);
+
+        for (entry, address) in content.projects.iter().zip(kept) {
+            assert_eq!(entry.image.as_deref(), Some(address));
+            assert_eq!(entry.image_card.as_deref(), Some(address));
+        }
     }
 
     #[cfg(feature = "ssr")]

@@ -1381,7 +1381,10 @@ img {
 }
 
 // The screenshot's button. A button doesn't fill its grid column on its own.
+// Centered on text that runs taller than it, rather than leaving a gap under it; the
+// text keeps the top of the card either way.
 .oss-image {
+  align-self: center;
   width: 100%;
   padding: 0;
   border: 0;

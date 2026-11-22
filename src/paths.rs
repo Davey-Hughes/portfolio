@@ -32,6 +32,17 @@ pub fn images_root() -> PathBuf {
     PathBuf::from(resolve_dir("IMAGES_DIR", &["public/images", "./images"]))
 }
 
+/// Folder of the `/readme` mount, which the open-source page also reads for its
+/// screenshots' versions.
+///
+/// `README_ASSETS_DIR` when set, else `public/readme` when it exists, else `./readme`.
+pub fn readme_assets_dir() -> PathBuf {
+    PathBuf::from(resolve_dir(
+        "README_ASSETS_DIR",
+        &["public/readme", "./readme"],
+    ))
+}
+
 /// The homepage's gallery: `GALLERY_PATH` when set, else `home` under [`images_root`].
 pub fn home_gallery_dir() -> PathBuf {
     home_gallery_dir_in(&images_root())

@@ -3150,6 +3150,35 @@ mod ssr_tests {
         assert!(!body.contains("noreferrer"), "{body}");
     }
 
+    /// A screenshot under `/readme/` carries its file's version, so the browser keeps
+    /// it and a reload draws it with the text instead of a round trip later.
+    #[tokio::test]
+    #[serial]
+    async fn open_source_screenshots_carry_their_files_version() {
+        let site = Site::new();
+        let readme = site.dir.path().join("readme");
+        std::fs::create_dir_all(readme.join("p")).unwrap();
+        let shot = readme.join("p/shot.webp");
+        std::fs::write(&shot, b"webp").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&shot)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_731_652_400))
+            .unwrap();
+        let _readme_dir = EnvVarGuard::set("README_ASSETS_DIR", &readme);
+        site.write_open_source(
+            "[[projects]]\nname = \"P\"\nsummary = \"S\"\nimage = \"/readme/p/shot.webp\"\n",
+        );
+
+        let (status, body) = get("/open-source").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.contains(r#"<img src="/readme/p/shot.webp?v=1731652400""#),
+            "{body}"
+        );
+    }
+
     /// The `<footer>` start tag in a page's HTML.
     fn footer_tag(body: &str) -> &str {
         let start = body.find("<footer").expect("no <footer>");
