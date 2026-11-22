@@ -254,6 +254,10 @@ name = "Unlinked Upstream"
 summary = "An entry with no url."
 
 [[contributions]]
+name = "Markdown Upstream"
+summary = "A summary with [a link](https://example.com/markdown-link),\na line break, and a list:\n\n- First point\n- Second point"
+
+[[contributions]]
 name = "LongUnbrokenTokenLongUnbrokenTokenLongUnbrokenTokenLongUnbrokenTokenLongUnbrokenTokenLongUnbrokenTokenLongUnbrokenToken"
 url = "https://example.com/long"
 summary = "An entry whose name, tag and highlight are one unbroken token."

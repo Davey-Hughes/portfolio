@@ -41,6 +41,8 @@ pub struct OpenSourceEntry {
     /// card can link both its source (`url`) and where it runs.
     #[serde(default)]
     pub website: Option<String>,
+    /// Markdown as written in the file; HTML once `get_open_source` has rendered it
+    /// with [`OpenSourceContent::with_summaries_as_html`], which is what the card shows.
     pub summary: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -118,6 +120,17 @@ impl OpenSourceContent {
                     *address = versioned;
                 }
             }
+        }
+        self
+    }
+
+    /// The content with every card's `summary` turned from Markdown into the HTML the
+    /// card shows (see [`crate::markdown::summary_html`]).
+    #[cfg(feature = "ssr")]
+    #[must_use]
+    pub fn with_summaries_as_html(mut self) -> Self {
+        for entry in self.projects.iter_mut().chain(&mut self.contributions) {
+            entry.summary = crate::markdown::summary_html(&entry.summary);
         }
         self
     }
@@ -696,6 +709,36 @@ image = "/readme/upstream/card.webp"
             assert_eq!(entry.image.as_deref(), Some(address));
             assert_eq!(entry.image_card.as_deref(), Some(address));
         }
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn summaries_become_html() {
+        let content = OpenSourceContent {
+            intro: None,
+            projects: vec![OpenSourceEntry {
+                summary: "A [b](https://e.example)".to_string(),
+                ..entry(None)
+            }],
+            contributions: vec![OpenSourceEntry {
+                summary: "- x".to_string(),
+                ..entry(None)
+            }],
+        }
+        .with_summaries_as_html();
+
+        assert!(
+            content.projects[0]
+                .summary
+                .contains(r#"<a href="https://e.example" target="_blank" rel="noopener">b</a>"#),
+            "{}",
+            content.projects[0].summary
+        );
+        assert!(
+            content.contributions[0].summary.contains("<li>x</li>"),
+            "{}",
+            content.contributions[0].summary
+        );
     }
 
     #[cfg(feature = "ssr")]

@@ -67,10 +67,12 @@ portfolio/
 │   ├── paths.rs              # where files live: IMAGES_DIR, GALLERY_PATH, env dir lookup
 │   ├── image_cache.rs        # on-disk WebP cache: process / prewarm / cleanup
 │   ├── image_params.rs       # width/quality preset validation for the image endpoint
+│   ├── markdown.rs           # Markdown in open-source card summaries, to HTML
 │   ├── mosaic.rs             # mosaic gallery layout generation
 │   ├── readme_assets.rs      # file types the /readme mount serves (allowlist)
 │   ├── server.rs             # server functions, in-memory caches, watcher plumbing
 │   ├── test_support.rs       # unit-test helpers (EnvVarGuard for env vars)
+│   ├── trailing_slash.rs     # redirects a page address with a trailing slash
 │   └── types.rs              # shared types (PhotoInfo, GalleryConfig, PhotoConfig, …)
 ├── style/main.scss           # all site styles (compiled to app.css by cargo-leptos)
 ├── public/                   # runtime content (GITIGNORED except examples/READMEs)

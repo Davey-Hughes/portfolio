@@ -177,7 +177,7 @@ intro = "Things I've built, and projects I've contributed to."   # optional
 name    = "portfolio"              # required
 url     = "https://github.com/you/portfolio"   # optional; the name links here
 website = "https://you.example"    # optional; shown beside the name as its domain
-summary = "This site."             # required
+summary = "This site."             # required; Markdown, see below
 tags    = ["Rust", "Leptos"]       # optional
 image   = "/readme/portfolio/card.webp"  # optional; a screenshot on the card
 image_alt = "The portfolio home page"    # optional; defaults to "<name> screenshot"
@@ -197,6 +197,25 @@ url   = "https://github.com/org/some-upstream/pull/123"
 Cards appear in file order. Unknown keys are rejected, so a typo such as
 `highlight` for `highlights` hides the page instead of quietly dropping that
 data. The server logs the parse error.
+
+`summary` takes Markdown, as a README does: `[text](https://…)` for a link, lines
+starting with `- ` for bullet points (or `1. ` for numbered ones), and a blank line
+between paragraphs. A single newline starts a new line. Links open in a new tab.
+Bold, italics and `code` work too; headings, images and HTML show as plain text.
+Inside a quoted TOML string a newline is written `\n`, so for more than a line or
+two a multi-line string between `"""` is easier. Its lines can be indented to line
+up with the file; only a line indented four or more spaces past the rest shows as
+plain text. Markdown's backslash escapes, such as `\*`, don't work in `"` or `"""`
+strings: TOML reads the backslash first and rejects the file, which hides the page.
+Use a `'''` string for a summary that needs one.
+
+```toml
+summary = """
+A plain-text sports schedule, inspired by [plaintextsports.com](https://plaintextsports.com).
+- Live scores, spoiler-free by default
+- Works on desktop and phones
+"""
+```
 
 `image` puts a screenshot on a card, and takes any URL or site path. A good home
 for one is the `/readme/<repo>/` folder (files under `README_ASSETS_DIR/<repo>/`,

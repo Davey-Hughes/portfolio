@@ -63,6 +63,38 @@ test.describe("Open Source Page", () => {
     );
   });
 
+  test("renders a summary's Markdown", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/open-source", { waitUntil: "networkidle" });
+
+    const summary = page
+      .locator(".oss-card", { hasText: "Markdown Upstream" })
+      .locator(".oss-summary");
+    const link = summary.locator("a");
+    await expect(link).toHaveAttribute("href", "https://example.com/markdown-link");
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener");
+    await expect(summary.locator("br")).toHaveCount(1);
+    await expect(summary.locator("li")).toHaveText(["First point", "Second point"]);
+
+    // Bullets that show, inside the text column, with space between the list and
+    // the line above it. The cards' own list turns bullets off for what is in it.
+    const list = summary.locator("ul");
+    expect(await list.evaluate((el) => getComputedStyle(el).listStyleType)).toBe("disc");
+    const box = (await summary.boundingBox())!;
+    const above = (await summary.locator("p").boundingBox())!;
+    const item = (await summary.locator("li").first().boundingBox())!;
+    const listBox = (await list.boundingBox())!;
+    expect(item.x - box.x).toBeGreaterThan(10);
+    expect(listBox.y - (above.y + above.height)).toBeGreaterThan(4);
+    // The server's HTML hydrates as it is.
+    expect(errors).toEqual([]);
+  });
+
   test("/os permanently redirects to the page", async ({ page, request }) => {
     // The short link must be a real HTTP redirect, not a second copy of the page,
     // so the page keeps one canonical URL.

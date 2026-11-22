@@ -2264,7 +2264,8 @@ fn OssCard(entry: OpenSourceEntry) -> impl IntoView {
             {website}
         </div>
     };
-    let summary = view! { <p class="oss-summary">{entry.summary.clone()}</p> };
+    // HTML the server rendered from the file's Markdown (`get_open_source`).
+    let summary = view! { <div class="oss-summary" inner_html=entry.summary.clone()></div> };
 
     match entry.image() {
         None => view! {
@@ -3177,6 +3178,27 @@ mod ssr_tests {
             body.contains(r#"<img src="/readme/p/shot.webp?v=1731652400""#),
             "{body}"
         );
+    }
+
+    /// A summary's Markdown reaches the page as HTML: a link out, and a list.
+    #[tokio::test]
+    #[serial]
+    async fn open_source_summaries_render_markdown() {
+        let site = Site::new();
+        site.write_open_source(
+            "[[projects]]\nname = \"P\"\n\
+             summary = \"See [P](https://p.example/)\\n\\n- one\\n- two\"\n",
+        );
+
+        let (status, body) = get("/open-source").await;
+        assert_eq!(status, StatusCode::OK);
+        let body = without_markers(&body);
+        assert!(
+            body.contains(r#"<a href="https://p.example/" target="_blank" rel="noopener">P</a>"#),
+            "{body}"
+        );
+        assert!(body.contains("<li>one</li>"), "{body}");
+        assert!(!body.contains("[P]("), "{body}");
     }
 
     /// The `<footer>` start tag in a page's HTML.

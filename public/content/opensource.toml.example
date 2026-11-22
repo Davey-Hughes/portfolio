@@ -9,6 +9,14 @@
 #
 # Cards render in the order they appear in this file.
 #
+# `summary` takes Markdown: [text](url) for a link, lines starting with "- " for
+# bullet points (or "1. " for numbered ones), and a blank line between paragraphs.
+# A single newline starts a new line. Bold, italics and `code` work; headings,
+# images and HTML show as plain text. For more than one line, write \n inside the
+# quotes, or use a """ string as "Some Upstream" below does. A Markdown backslash
+# escape such as \* needs a ''' string instead: in " or """ TOML rejects it, and
+# the page goes away.
+#
 # A card can show a screenshot (`image`, any URL or site path). A good home for
 # one is the /readme/<repo>/ folder: files under README_ASSETS_DIR/<repo>/. The page
 # adds the file's modification time to its address, so browsers keep the screenshot,
@@ -52,7 +60,11 @@ summary = "A card with no url renders its name as plain text."
 [[contributions]]
 name = "Some Upstream"
 url = "https://example.com/upstream/some-upstream"
-summary = "What you worked on there, in a sentence or two."
+summary = """
+What you worked on there, with [a link](https://example.com/upstream/some-upstream/issues/1) where it helps.
+- One thing you added
+- One thing you fixed
+"""
 tags = ["C", "Vulkan"]
 
 # Optional: links to notable pieces of work, shown under the card.

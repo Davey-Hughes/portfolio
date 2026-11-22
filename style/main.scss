@@ -1327,6 +1327,30 @@ img {
   line-height: 1.6;
   color: #444;
   font-weight: 300;
+
+  // The summary's Markdown (src/markdown.rs): paragraphs and lists, spaced apart.
+  // The reset leaves them no margin, and a list inside the cards' own list would
+  // otherwise get the browser's nested-list circle.
+  & > * + * {
+    margin-top: 0.5em;
+  }
+
+  ul,
+  ol {
+    padding-left: 1.3em;
+  }
+
+  ul {
+    list-style: disc;
+  }
+
+  ol {
+    list-style: decimal;
+  }
+
+  code {
+    font-size: 0.9em;
+  }
 }
 
 .oss-tags {

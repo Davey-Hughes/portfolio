@@ -556,13 +556,17 @@ pub async fn get_about_content() -> Result<AboutContent, ServerFnError> {
 
 /// Server function to load the `/open-source` page's content. `None` when there is
 /// no page to show (see [`crate::open_source::load_open_source_from`]). Screenshots
-/// under `/readme/` come with their files' versions.
+/// under `/readme/` come with their files' versions, and summaries as HTML rendered
+/// from their Markdown.
 #[server(GetOpenSource, "/api")]
 pub async fn get_open_source() -> Result<Option<OpenSourceContent>, ServerFnError> {
     #[cfg(feature = "ssr")]
     {
-        Ok(crate::open_source::load_open_source()
-            .map(|content| content.with_readme_versions(&crate::paths::readme_assets_dir())))
+        Ok(crate::open_source::load_open_source().map(|content| {
+            content
+                .with_readme_versions(&crate::paths::readme_assets_dir())
+                .with_summaries_as_html()
+        }))
     }
     #[cfg(not(feature = "ssr"))]
     {
